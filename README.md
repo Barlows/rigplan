@@ -73,42 +73,70 @@ the electrical design, and you are told when that happens.
 
 ***REMOVED******REMOVED*** Board numbering
 
-Every board carries a reference derived from its place in the supply hierarchy:
+The four board tiers carry a reference derived from their place in the supply
+hierarchy. Control panels do not:
 
 ```
 TX7                        transformer
  └ PDB7                    main LV board on that transformer
     └ PDP7-1               distribution board 1 off it
-       └ DB7-1-1           control panel 1 off that board
-       └ DB7-1-2           control panel 2 off the same board
+       └ DB7-1-1           sub-distribution board 1 — a 125 A Acti9, say
+          ├ MCC-01         control panel fed from that board
+          └ AHU-02         another circuit on the same board
+       └ DB7-1-2           sub-distribution board 2 off the same PDP
     └ PDP7-2               distribution board 2 → DB7-2-1, DB7-2-2 …
 ```
 
-**The reference is derived, never typed.** A transformer is numbered from 1
-upwards; set its number explicitly if you need to match an existing drawing (say
-`7` for an extension supply), and everything below it follows. Adding a main board,
-deleting one, moving a circuit between boards, or re-assigning a load all renumber
-the affected chain and say what changed.
+**A control panel is a load, not a board.** It keeps whatever reference the
+drawing team already uses — `MCC-01`, `AHU-02`, `PLT-01` — which is the name on the
+drawing, the label on the enclosure and the row on the schedule. The schedules
+show which board each one is fed from, so the hierarchy is still readable without
+inventing a number that means nothing on site. `DB7-1-1` is reserved for the
+sub-distribution board.
+
+**The four board references are derived, never typed.** A transformer is numbered
+from 1 upwards; set its number explicitly if you need to match an existing
+drawing (say `7` for an extension supply), and everything below it follows. Adding
+a board, deleting one, moving a circuit, or setting a transformer number all
+renumber the affected chain and say what changed.
 
 Two cases the pattern does not cover on its own, handled explicitly:
 
 - **A transformer with more than one main board** continues the sequence —
   `PDB7-1`, `PDB7-2` — and the levels below follow that path, so references stay
   unique and readable (`PDP7-1-1`, `DB7-1-1-1`).
-- **An item whose supply chain does not resolve** — no parent, or a parent id
+- **A board whose supply chain does not resolve** — no parent, or a parent id
   left behind by a merged file — cannot follow the scheme, so it is marked
   `DB?-3`, `PDP?` and so on rather than given a number that would collide. The
   audit reports those separately as unassigned or orphaned.
 
 **Names and descriptions are untouched.** Those carry the engineering meaning —
 "Conveyor line 1 panel", "CV-01 / CV-02 / CV-03 drives". The reference is the part
-that appears on drawings, schedules and the print report. Where you already have
-your own panel or MCC number, keep it in the **Equipment ref** field and the
-schedules show both.
+that appears on drawings, schedules and the print report. Where a board already
+has a number on your existing drawing set, keep it in the **Equipment ref** field
+and the schedules show both.
 
 **Opening an older project migrates it.** A project saved before the convention
-existed is renumbered on load, and the references it carried are moved into the
-Equipment ref field rather than being overwritten, so nothing is lost.
+existed is renumbered on load, and the references its boards carried are moved into
+the Equipment ref field rather than being overwritten, so nothing is lost.
+
+***REMOVED******REMOVED******REMOVED*** Sub-distribution boards
+
+A sub-distribution board is the small board at the end of the chain — an Acti9,
+Acti9P or similar, fed from a PDP and carrying final circuits. It has its own
+incomer, its own outgoing ways and its own feeder cable, and the audit checks all
+three: overload, circuits against ways, and cable capacity.
+
+Auto-assignment **always lands a circuit on the PDP**, never on a sub-board — a
+125 A board is a deliberate placement decision, not something the tool should pick
+because a board had 30 A of headroom. Once placed you can move a circuit onto a
+sub-board in its properties, and the sub-board list only offers boards on that
+circuit's own PDP so the two cannot contradict each other.
+
+A circuit on a sub-board moves **with** it. Auto-balance never separates a circuit
+from the board it sits on: it either moves the whole sub-board or leaves it alone.
+Deleting a sub-board returns its circuits to feeding from the PDP, which is where
+they came from.
 
 Transformers are numbered 1-based and must be unique; pinning one to a number that
 is already taken moves it to the lowest free number rather than producing two
@@ -120,10 +148,12 @@ identical references.
 
 1. **Set out the supply.** Pick a place mode in the toolbar — `TX`, `PDB` or `PDP` —
    and click the plan. Or add boards from the left-hand hierarchy with the
-   `+TX` / `+PDB` / `+PDP` buttons and the inline `+` buttons on each row.
+   `+TX` / `+PDB` / `+PDP` buttons and the inline `+` buttons on each row. `+DB` on
+   a PDP adds a sub-distribution board.
 2. **Enter the loads.** Switch to `▣ Panel` and click a grid reference. A dialog asks
-   for the tag, description, type and kW. The moment you enter that reference, the
-   panel is **assigned to a PDP automatically** — you never have to pick the board.
+   for the reference, description, type and kW. The moment you enter that reference,
+   the panel is **assigned to a PDP automatically** — you never have to pick the board.
+   Leave the sub-board field on "fed from the PDP" unless you mean to place it on one.
 3. **If a board runs out of headroom**, a new PDP is created beside its parent at the
    **next practical grid reference**, and the circuit goes on the new board.
 4. **Check it.** The **Audit** tab lists overloaded boards, undersized feeders,
@@ -173,8 +203,10 @@ changes the supply topology and should be a deliberate act.
 
 - **Load** — design kVA = connected kW ÷ power factor × demand factor. Current from
   kVA at the board voltage; single-phase circuits use the phase-to-neutral voltage.
-- **Board loading** — aggregated up through PDP → PDB → transformer, with utilisation,
-  headroom, spare ways, per-phase kVA and current, and phase deviation.
+- **Board loading** — aggregated up through sub-board → PDP → PDB → transformer, with
+  utilisation, headroom, spare ways, per-phase kVA and current, and phase deviation.
+  A sub-board reports only the circuits sitting on it; everything rolls up through
+  its PDP, so the chain stays additive and no load is counted twice.
 - **Cable ampacity** — base values per the IEC 60364-5-52 reference methods
   (A1, A2, B1, C, E, F for PVC and XLPE equivalents), derated for ambient
   temperature, grouping/bunching and 4-core construction, with up to four parallel runs.
@@ -224,7 +256,7 @@ js/underlay.js      file loading (image / DXF), DWG detection, placement
 js/plan.js          canvas plan: underlay, rendering, hit-testing, drag, zoom
 js/ui.js            shell: properties, schedules, site map, export, import, print
 test/parser-test.html     35 checks against a synthetic DXF with known geometry
-test/numbering-test.html  49 checks on the board numbering scheme
+test/numbering-test.html  58 checks on the board numbering scheme
 test/underlay-test.html   image/DXF/DWG loading and scale handling
 ```
 
