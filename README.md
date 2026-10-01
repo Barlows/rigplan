@@ -127,11 +127,33 @@ Acti9P or similar, fed from a PDP and carrying final circuits. It has its own
 incomer, its own outgoing ways and its own feeder cable, and the audit checks all
 three: overload, circuits against ways, and cable capacity.
 
+**One per distribution board, 63 A and below.** That is the design the tool
+enforces:
+
+- `+DB` is only offered on a PDP that does not already have a sub-board. Asking
+  for a second selects the existing one and says why.
+- A sub-board above 63 A is flagged: a board that size is a second distribution
+  board and should be modelled as a PDP.
+- Two sub-boards on one PDP is an error in the audit.
+- A PDP with no sub-board is noted — the design expects one.
+- The `Carries` field ("lighting, small power") records what the board is for, and
+  appears on the schedules.
+
+**Main panels connect directly to the distribution board.** An MCC, a chiller, a
+compressor or a boiler has no place on a 63 A lighting board, and the sample keeps
+them on the PDP where they belong.
+
 Auto-assignment **always lands a circuit on the PDP**, never on a sub-board — a
-125 A board is a deliberate placement decision, not something the tool should pick
-because a board had 30 A of headroom. Once placed you can move a circuit onto a
-sub-board in its properties, and the sub-board list only offers boards on that
-circuit's own PDP so the two cannot contradict each other.
+63 A lighting board is a deliberate placement decision, not something the tool
+should pick because a board had 30 A of headroom. Once placed you can move a
+circuit onto a sub-board in its properties, and the sub-board list only offers
+boards on that circuit's own PDP so the two cannot contradict each other.
+
+Because the main panels sit on the distribution board directly, a distribution
+board's spare ways are counted against the circuits that land on it directly —
+not the ones its sub-board carries. A board whose lighting board is well used is
+not "full" for auto-assignment purposes, because those circuits cannot be moved to
+another board without taking the sub-board with them.
 
 A circuit on a sub-board moves **with** it. Auto-balance never separates a circuit
 from the board it sits on: it either moves the whole sub-board or leaves it alone.
@@ -230,7 +252,7 @@ changes the supply topology and should be a deliberate act.
 | **Left** | Supply hierarchy with per-board utilisation bars and inline add buttons |
 | **Centre** | The site plan — grid references, drag to move, zoom, phase vectors, cable colouring by status |
 | **Right** | Properties of whatever is selected, with live checks |
-| **Bottom** | Load schedule · cable and volt drop schedule · board schedule · audit · design criteria · site map |
+| **Bottom** | Load schedule · cable and volt drop schedule · board schedule · single line diagram · audit · design criteria · site map |
 
 **Plan controls** — drag to pan, wheel to zoom, double-click to select, `1`–`4` to
 switch place mode, `F` to fit, `Esc` to cancel. `Site…` sets the site extent, the
@@ -254,15 +276,40 @@ js/dxf.js           ASCII DXF reader — group-code parser, entity flattening,
                     arc tessellation, block expansion, layer discovery
 js/underlay.js      file loading (image / DXF), DWG detection, placement
 js/plan.js          canvas plan: underlay, rendering, hit-testing, drag, zoom
+js/sld.js           single line diagram: tree layout and IEC 60617 symbols
 js/ui.js            shell: properties, schedules, site map, export, import, print
 test/parser-test.html     35 checks against a synthetic DXF with known geometry
 test/numbering-test.html  58 checks on the board numbering scheme
+test/sld-test.html        24 checks on the single line diagram layout and symbols
 test/underlay-test.html   image/DXF/DWG loading and scale handling
 ```
 
 Open a `test/*.html` page in a browser after changing the matching module — each
 prints a pass/fail list. If you edit the JavaScript while testing over HTTP and the
 browser serves a cached copy, bump the `?v=` query string in `index.html`.
+
+***REMOVED******REMOVED*** Single line diagram
+
+The **Single line diagram** tab draws the whole supply as a schematic, using IEC
+60617 symbols: two overlapping circles for a transformer, a filled square for the
+incomer protective device, a rectangle with a line through it for a final-circuit
+fuse, three decreasing bars for earth, and a plain rectangle for a board. The
+**Legend** button shows the key — an SLD without a symbol key is just shapes.
+
+The vertical order is the supply order — utility → transformer → main board →
+distribution board → sub-board → control panel — and every branch is labelled with
+its protective device, rating and feeder size. A board over 100% of its incomer is
+outlined in red, over 85% in amber. Click any item to select it.
+
+Layout is one block per transformer, stacked down the sheet, so the drawing's depth
+tracks the number of transformers rather than the number of circuits and stays on a
+page. Within a block, circuits fan out sideways and wrap when the row gets too wide.
+**Fit** scales the whole drawing to the pane; **+**/**−** zoom in on a branch.
+
+It goes into the print report as its own section, scaled to the page width.
+
+Unassigned circuits are not drawn — they have nothing to hang from. They appear in
+the audit as "not assigned to a PDP".
 
 ---
 
