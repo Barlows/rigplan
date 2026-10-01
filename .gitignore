@@ -9,3 +9,6 @@ Thumbs.db
 scratch/
 *.bak
 *~
+
+***REMOVED*** test scaffolding not worth keeping
+test/*.dxf

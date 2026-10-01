@@ -16,6 +16,61 @@ in the browser's local storage, and can be exported/imported as JSON.
 
 ---
 
+***REMOVED******REMOVED*** Designing over a real site map
+
+Press **Load…** in the toolbar, or drop a file straight onto the plan.
+
+**Raster images** — PNG, JPEG, WebP, GIF, BMP, AVIF. A scanned site plan or a
+georeferenced screenshot works. There is no unit scale in a photo, so set one with
+**Set scale by measuring…**: measure a distance you know (a building length, a grid
+bay, a car park bay), type its real length, and the drawing is rescaled to agree.
+
+**DXF** — an ASCII DXF is read directly in the browser. Supported entities:
+
+| | |
+|---|---|
+| Lines | `LINE`, `LWPOLYLINE` (including bulge arcs), `POLYLINE` + `VERTEX`, `SPLINE` |
+| Curves | `ARC`, `CIRCLE`, `ELLIPSE` |
+| Fills | `SOLID`, `3DFACE` |
+| Annotation | `TEXT`, `MTEXT` (formatting codes stripped) |
+| Blocks | `INSERT` with scale, rotation and nested inserts |
+| Points | `POINT` |
+
+Anything else — `HATCH`, `DIMENSION`, `MLINE`, splines' full NURBS evaluation — is
+counted and listed in the map tab rather than silently dropped. Arcs and ellipses are
+tessellated from their sagitta, so a drawing with thousands of curves still pans
+smoothly.
+
+The unit scale is read from `$INSUNITS`. A millimetre drawing gets 0.001 m per unit
+automatically. If the file has no units, set it manually in the map tab.
+
+**DWG is not supported.** It is a closed binary format with no browser-side decoder.
+Export a DXF instead — AutoCAD `SAVEAS` → *AutoCAD DXF*, or use ODA File Converter,
+QCAD or LibreDWG — and drop that in. Dropping a DWG tells you this rather than
+failing quietly.
+
+**Placing the drawing.** It is fitted to the site, keeping its aspect ratio, with a
+4% margin. Then:
+
+- **Scale** — metres per drawing unit. This is the number that makes a grid
+  reference mean the same thing in both systems.
+- **Offset E / N** — shifts the drawing against the site grid.
+- **Fit to site** — re-fits and re-centres.
+- **Opacity** — drop it back so the boards stay legible on top.
+- **Layers** — every layer is listed with a checkbox. Dimension, hatch, frame and
+  annotation layers are hidden on load, so a drawing usually arrives readable.
+
+**Checking the alignment.** The map tab shows the site extent expressed in drawing
+units, and the coordinate read-out under the plan shows *both* systems at once —
+`E 22.00 N 14.00 · millimetres 560.0, 498.5`. Hover a board and you get its position
+in the CAD file as well as on the plan.
+
+The map travels with the project: it is saved locally and included in the JSON
+export. A large embedded photo is dropped from the saved copy rather than risking
+the electrical design, and you are told when that happens.
+
+---
+
 ***REMOVED******REMOVED*** The workflow
 
 1. **Set out the supply.** Pick a place mode in the toolbar — `TX`, `PDB` or `PDP` —
@@ -98,11 +153,13 @@ changes the supply topology and should be a deliberate act.
 | **Left** | Supply hierarchy with per-board utilisation bars and inline add buttons |
 | **Centre** | The site plan — grid references, drag to move, zoom, phase vectors, cable colouring by status |
 | **Right** | Properties of whatever is selected, with live checks |
-| **Bottom** | Load schedule · cable and volt drop schedule · board schedule · audit · design criteria |
+| **Bottom** | Load schedule · cable and volt drop schedule · board schedule · audit · design criteria · site map |
 
 **Plan controls** — drag to pan, wheel to zoom, double-click to select, `1`–`4` to
 switch place mode, `F` to fit, `Esc` to cancel. `Site…` sets the site extent, the
-snap step, the new-board offset and the minimum clearance.
+snap step, the new-board offset and the minimum clearance. `…` next to View toggles
+grid references, imbalance outlines and drawing text. Drag the top edge of the bottom
+panel to trade schedule space for plan area; double-click it to collapse.
 
 ---
 
@@ -114,13 +171,20 @@ css/styles.css      theme and print styles
 js/data.js          reference data (ampacity tables, correction factors,
                     standard sizes), project model, the worked example
 js/calc.js          engineering engine: loading, cable sizing, volt drop,
-                    audit, auto-assignment, grid-reference placement
-js/plan.js          canvas plan: rendering, hit-testing, drag, zoom
-js/ui.js            shell: properties, schedules, export, import, print
+                    audit, auto-assignment, grid-reference placement,
+                    underlay coordinate transforms
+js/dxf.js           ASCII DXF reader — group-code parser, entity flattening,
+                    arc tessellation, block expansion, layer discovery
+js/underlay.js      file loading (image / DXF), DWG detection, placement
+js/plan.js          canvas plan: underlay, rendering, hit-testing, drag, zoom
+js/ui.js            shell: properties, schedules, site map, export, import, print
+test/parser-test.html    35 checks against a synthetic DXF with known geometry
+test/underlay-test.html  image/DXF/DWG loading and scale handling
 ```
 
-If you edit the JavaScript while testing over HTTP and the browser serves a cached
-copy, bump the `?v=` query string in `index.html`.
+Open `test/parser-test.html` in a browser after changing `js/dxf.js` — it prints a
+pass/fail list. If you edit the JavaScript while testing over HTTP and the browser
+serves a cached copy, bump the `?v=` query string in `index.html`.
 
 ---
 
@@ -131,6 +195,16 @@ This builds and checks a schedule. It is **not** a design certification tool.
 - Ampacity and correction-factor values are **indicative**. Confirm them against the
   current edition of BS 7671 / IEC 60364-5-52, the manufacturer's data, and the
   rules that apply locally, before issuing anything.
+- The DXF reader is a site-plan underlay, not a CAD system. It flattens the entity
+  types listed above and ignores everything else (counted and listed). It does not
+  resolve external references (XREFs), OCS/extrusion direction, paperspace, or full
+  NURBS curve evaluation. **Coordinates are read one-to-one with the file** — the
+  site-to-drawing mapping is a single scale and offset, so the drawing's own
+  coordinate system is what the grid references are expressed in. If your site plan is
+  georeferenced, convert it to local grid first, or check the alignment with the
+  dual-unit read-out before you rely on it.
+- A raster image has no scale of its own, so the plan is only as accurate as the
+  measurement you use to set it.
 - Volt drop uses an indicative cable impedance, not a full impedance and temperature
   calculation.
 - **No** protection coordination, discrimination/selectivity, cable thermal withstand
