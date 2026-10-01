@@ -95,15 +95,20 @@ Two cases the pattern does not cover on its own, handled explicitly:
 - **A transformer with more than one main board** continues the sequence —
   `PDB7-1`, `PDB7-2` — and the levels below follow that path, so references stay
   unique and readable (`PDP7-1-1`, `DB7-1-1-1`).
-- **An item with no supply connection** cannot follow the scheme, so it is marked
-  `DB?`, `PDP?` and so on rather than being given a number that would collide.
-  The audit reports those separately as unassigned or orphaned.
+- **An item whose supply chain does not resolve** — no parent, or a parent id
+  left behind by a merged file — cannot follow the scheme, so it is marked
+  `DB?-3`, `PDP?` and so on rather than given a number that would collide. The
+  audit reports those separately as unassigned or orphaned.
 
 **Names and descriptions are untouched.** Those carry the engineering meaning —
 "Conveyor line 1 panel", "CV-01 / CV-02 / CV-03 drives". The reference is the part
 that appears on drawings, schedules and the print report. Where you already have
-your own panel or MCC number, keep it in the **Equipment ref** field on the
-control panel, and the load schedule shows both.
+your own panel or MCC number, keep it in the **Equipment ref** field and the
+schedules show both.
+
+**Opening an older project migrates it.** A project saved before the convention
+existed is renumbered on load, and the references it carried are moved into the
+Equipment ref field rather than being overwritten, so nothing is lost.
 
 Transformers are numbered 1-based and must be unique; pinning one to a number that
 is already taken moves it to the lowest free number rather than producing two
@@ -219,7 +224,7 @@ js/underlay.js      file loading (image / DXF), DWG detection, placement
 js/plan.js          canvas plan: underlay, rendering, hit-testing, drag, zoom
 js/ui.js            shell: properties, schedules, site map, export, import, print
 test/parser-test.html     35 checks against a synthetic DXF with known geometry
-test/numbering-test.html  36 checks on the board numbering scheme
+test/numbering-test.html  49 checks on the board numbering scheme
 test/underlay-test.html   image/DXF/DWG loading and scale handling
 ```
 
