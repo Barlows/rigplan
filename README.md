@@ -71,6 +71,46 @@ the electrical design, and you are told when that happens.
 
 ---
 
+***REMOVED******REMOVED*** Board numbering
+
+Every board carries a reference derived from its place in the supply hierarchy:
+
+```
+TX7                        transformer
+ └ PDB7                    main LV board on that transformer
+    └ PDP7-1               distribution board 1 off it
+       └ DB7-1-1           control panel 1 off that board
+       └ DB7-1-2           control panel 2 off the same board
+    └ PDP7-2               distribution board 2 → DB7-2-1, DB7-2-2 …
+```
+
+**The reference is derived, never typed.** A transformer is numbered from 1
+upwards; set its number explicitly if you need to match an existing drawing (say
+`7` for an extension supply), and everything below it follows. Adding a main board,
+deleting one, moving a circuit between boards, or re-assigning a load all renumber
+the affected chain and say what changed.
+
+Two cases the pattern does not cover on its own, handled explicitly:
+
+- **A transformer with more than one main board** continues the sequence —
+  `PDB7-1`, `PDB7-2` — and the levels below follow that path, so references stay
+  unique and readable (`PDP7-1-1`, `DB7-1-1-1`).
+- **An item with no supply connection** cannot follow the scheme, so it is marked
+  `DB?`, `PDP?` and so on rather than being given a number that would collide.
+  The audit reports those separately as unassigned or orphaned.
+
+**Names and descriptions are untouched.** Those carry the engineering meaning —
+"Conveyor line 1 panel", "CV-01 / CV-02 / CV-03 drives". The reference is the part
+that appears on drawings, schedules and the print report. Where you already have
+your own panel or MCC number, keep it in the **Equipment ref** field on the
+control panel, and the load schedule shows both.
+
+Transformers are numbered 1-based and must be unique; pinning one to a number that
+is already taken moves it to the lowest free number rather than producing two
+identical references.
+
+---
+
 ***REMOVED******REMOVED*** The workflow
 
 1. **Set out the supply.** Pick a place mode in the toolbar — `TX`, `PDB` or `PDP` —
@@ -178,13 +218,14 @@ js/dxf.js           ASCII DXF reader — group-code parser, entity flattening,
 js/underlay.js      file loading (image / DXF), DWG detection, placement
 js/plan.js          canvas plan: underlay, rendering, hit-testing, drag, zoom
 js/ui.js            shell: properties, schedules, site map, export, import, print
-test/parser-test.html    35 checks against a synthetic DXF with known geometry
-test/underlay-test.html  image/DXF/DWG loading and scale handling
+test/parser-test.html     35 checks against a synthetic DXF with known geometry
+test/numbering-test.html  36 checks on the board numbering scheme
+test/underlay-test.html   image/DXF/DWG loading and scale handling
 ```
 
-Open `test/parser-test.html` in a browser after changing `js/dxf.js` — it prints a
-pass/fail list. If you edit the JavaScript while testing over HTTP and the browser
-serves a cached copy, bump the `?v=` query string in `index.html`.
+Open a `test/*.html` page in a browser after changing the matching module — each
+prints a pass/fail list. If you edit the JavaScript while testing over HTTP and the
+browser serves a cached copy, bump the `?v=` query string in `index.html`.
 
 ---
 
