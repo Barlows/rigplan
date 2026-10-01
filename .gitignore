@@ -1,0 +1,11 @@
+***REMOVED*** Nothing to build — this is a zero-dependency static app.
+***REMOVED*** These are here so an exported project or a stray export never lands in the repo.
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+***REMOVED*** local scratch
+scratch/
+*.bak
+*~
