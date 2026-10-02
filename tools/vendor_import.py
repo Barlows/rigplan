@@ -1,39 +1,55 @@
 ***REMOVED***!/usr/bin/env python3
-"""Convert 'schedule.xlsx' into a project file for the load-schedule workbench.
+"""Convert a vendor's load schedule into a project file for the workbench.
 
-Reads the vendor's schedule and writes JSON in exactly the shape the app's
-Import button expects, so the file can be dropped straight in.
+Reads the schedule and writes JSON in exactly the shape the app's Import button
+expects, so the file can be dropped straight in.
 
-Decisions taken with the engineer (2026-10-02), each marked with a NOTE below
-so the reasoning travels with the code:
+The column numbers below are specific to the sheet this was written against —
+a two-row group header, then a table header row, then the loads. Retarget it by
+editing the C_* constants and the row numbers; everything else is generic.
 
-  1. Two transformers, one per main board, 3,150 kVA each.
-  2. DIST-1 / DIST-2 / DIST-3 are fed from MAIN-A. The sheet has a handful of
-     rows on those boards whose "LV Board" cell says MAIN-B, which would give one
-     distribution board two parents. Those cells are typos and are corrected.
-  3. The nine DF-* feeder panels are collapsed. Each carries exactly one load,
-     so the load is placed straight on the main board as a single way and the
-     DF-* name is kept as the circuit's reference.
+Decisions that had to be made by hand on that schedule, each marked with a
+comment so the reasoning travels with the code:
+
+  1. Two transformers, one per main board. The sheet listed none, so the rating
+     came from the engineer.
+  2. Three distribution boards had a few rows whose main-board cell named the
+     wrong parent, which would have given one board two. Corrected.
+  3. Nine single-load feeder panels were collapsed. Each carries exactly one
+     load, so the load is placed straight on the main board as a single way and
+     the feeder-panel name is kept as the circuit's reference.
   4. Rated kW is imported as the connected load; the sheet's own load factor and
      diversity factor are combined into the app's demand factor. The app's own
-     engine then reproduces the vendor's consumption figure independently.
+     engine then reproduces the vendor's consumption figure independently —
+     worth checking, because agreement to a fraction of a percent is the evidence
+     the mapping is right.
   5. Board ratings are inferred from the sum of outgoing frame sizes and marked
      as estimates, because the sheet gives no board ratings at all.
 
 Only the standard library is used — no openpyxl — so this runs anywhere python3
 does. xlsx_read.py holds the minimal spreadsheet reader.
+
+    python3 vendor_import.py "schedule.xlsx" project.json
 """
 
+import datetime
 import json
-import re
 import math
+import re
 import sys
 from collections import defaultdict
 
 from xlsx_read import read, letter
 
-SRC = sys.argv[1] if len(sys.argv) > 1 else "/Users/sean/Downloads/schedule.xlsx"
-OUT = sys.argv[2] if len(sys.argv) > 2 else "client-line5.json"
+***REMOVED*** --------------------------------------------------------------------------
+***REMOVED*** Everything below is sheet-specific. Adjust to suit a different schedule.
+SRC = sys.argv[1] if len(sys.argv) > 1 else "load-schedule.xlsx"
+OUT = sys.argv[2] if len(sys.argv) > 2 else "project.json"
+
+***REMOVED*** Project metadata written into the file. Replace with your own.
+PROJECT_NAME = "Imported load schedule"
+CLIENT = ""
+PROJECT_REF = ""
 
 ***REMOVED*** --------------------------------------------------------------------------
 ***REMOVED*** Column numbers in the sheet, from its own header row (row 10).
@@ -52,12 +68,23 @@ C_UTIL, C_CHK, C_COMMENT = 30, 31, 38
 HEADER_ROW = 10
 FIRST, LAST = 11, 107                    ***REMOVED*** row 108 is the sheet's own total row
 
-TX_KVA = 3150                            ***REMOVED*** decision 1
-MV_REF = "MV board"
+***REMOVED*** --- assumptions the schedule does not supply. Set these to suit the job. ---
+TX_KVA = 1000                  ***REMOVED*** transformer rating, kVA — decision 1
+TX_ZPCT = 6                    ***REMOVED*** transformer impedance, percent
+MV_KV = 11                     ***REMOVED*** medium voltage feeding the transformers
+MV_REF = "MV board"            ***REMOVED*** a name for it in the notes
+FEEDER_PREFIX = "DF-"          ***REMOVED*** boards matching this are single-load panels
 
-***REMOVED*** Boards whose "LV Board" cell is a typo. The engineer confirmed the correct
-***REMOVED*** parent.                                                           ***REMOVED*** decision 2
-LV_FIX = {"DIST-1": "MAIN-A", "DIST-2": "MAIN-A", "DIST-3": "MAIN-A", "DIST-4": "MAIN-A"}
+***REMOVED*** A short tag stamped onto every generated id, so two projects made by this
+***REMOVED*** script cannot collide. Change it if you run it more than once.
+ID_PREFIX = "imp"
+
+***REMOVED*** Corrections to the sheet, keyed by board. On the schedule this was written
+***REMOVED*** against, a few rows on three distribution boards named the wrong main board
+***REMOVED*** in the "LV Board" column, which would have given one board two parents. List
+***REMOVED*** the corrections here; leave it empty if the sheet is consistent. ***REMOVED*** decision 2
+PARENT_FIX = {}
+***REMOVED*** e.g. PARENT_FIX = {"DIST-1": "MAIN-A", "DIST-2": "MAIN-A"}
 
 ***REMOVED*** Standard incomer sizes for the inferred board ratings.            ***REMOVED*** decision 5
 SIZES = [630, 800, 1000, 1250, 1600, 2000, 2500, 3200, 4000, 5000, 6300]
@@ -122,7 +149,7 @@ def infer_rating(sum_frame):
 
 
 def uid(prefix, n):
-    return "%s_client_%03d" % (prefix, n)
+    return "%s_%s_%03d" % (prefix, ID_PREFIX, n)
 
 
 def main():
@@ -132,9 +159,9 @@ def main():
 
     for r in rows:
         ***REMOVED*** decision 2 — correct the mistyped main board
-        r["lv"] = LV_FIX.get(r["db"], r["lv"])
+        r["lv"] = PARENT_FIX.get(r["db"], r["lv"])
         ***REMOVED*** decision 3 — collapse the dedicated feeder panels onto the main board
-        if r["db"].startswith("DF-"):
+        if r["db"].startswith(FEEDER_PREFIX):
             r["feederPanel"] = r["db"]
             r["db"] = ""
         else:
@@ -144,25 +171,88 @@ def main():
     boards = sorted({r["db"] for r in rows if r["db"]})
     print("main boards      :", ", ".join(mains))
     print("distribution bds :", ", ".join(boards))
-    print("direct-on-MSB    :", sum(1 for r in rows if r["feederPanel"]))
+    print("direct-on-main   :", sum(1 for r in rows if r["feederPanel"]))
 
     ***REMOVED*** ---------------------------------------------------------------- layout
-    ***REMOVED*** A site big enough that 97 circuits do not pile up on one another.
-    SITE_W, SITE_H = 78, 74
-    main_y = {"MAIN-A": 56, "MAIN-B": 24}
+    ***REMOVED*** Nothing here is keyed on a board's name: positions come from how many
+    ***REMOVED*** boards and circuits sit under each main board, so the script carries no
+    ***REMOVED*** trace of the project it was first run against.
+    ***REMOVED***
+    ***REMOVED*** Each main board gets a horizontal band. Inside a band, top to bottom:
+    ***REMOVED*** the transformer, the main board, then its distribution boards stacked
+    ***REMOVED*** down. Each board's circuits form a grid to the right of it, so all the
+    ***REMOVED*** grids line up in the same columns and stacked boards never collide.
+    ***REMOVED*** Circuits fed straight off the main board get their own column further
+    ***REMOVED*** right, clear of every grid.
+    ***REMOVED***
+    ***REMOVED*** Every spacing below is derived from the pitch of the symbols and the
+    ***REMOVED*** number of circuits each board carries, so the layout holds whether the
+    ***REMOVED*** project has six boards or sixty.
+    per_main = defaultdict(list)
+    direct_per_main = defaultdict(int)
+    circ_per_board = defaultdict(int)
+    for r in rows:
+        if r["feederPanel"]:
+            direct_per_main[r["lv"]] += 1
+        elif r["db"]:
+            circ_per_board[r["db"]] += 1
+    for b in boards:
+        per_main[next(r["lv"] for r in rows if r["db"] == b)].append(b)
+
+    GRID_W, GRID_H = 2.6, 2.4          ***REMOVED*** circuit grid pitch, metres
+    COLS = 6                            ***REMOVED*** circuits per row before wrapping
+    GRID_WIDE = COLS * GRID_W           ***REMOVED*** how far a grid reaches to the right
+    TX_DY, MSB_DY, PDB_DY, CIRC_DY = 0, 5, 11, 16
     tx_x, msb_x, pdp_x = 5, 10, 15
-    pdp_y = {"MAIN-A": {"DIST-1": 62, "DIST-2": 56, "DIST-3": 50, "DIST-4": 44},
-             "MAIN-B": {"DIST-5": 30, "DIST-6": 24}}
-    fallback_y = {"MAIN-A": 38, "MAIN-B": 18}
+
+    def grid_rows(n):
+        return (n + COLS - 1) // COLS
+
+    ***REMOVED*** Stacked boards must be far enough apart that one board's circuit grid
+    ***REMOVED*** cannot reach the board below it: a full-height grid plus clearance.
+    max_rows = max([grid_rows(circ_per_board[b]) for b in boards] +
+                   [grid_rows(direct_per_main.get(m, 0)) for m in mains] + [1])
+    board_step = max(14.0, max_rows * GRID_H + 9)
+
+    band_h = {}
+    for m in mains:
+        n_boards = len(per_main.get(m, []))
+        deepest = CIRC_DY + max(0, n_boards - 1) * board_step
+        direct = grid_rows(direct_per_main.get(m, 0)) * GRID_H
+        band_h[m] = deepest + max(max_rows * GRID_H, direct) + 6
+
+    SITE_H = int(sum(band_h.get(m, 20) for m in mains) + 12)
+    SITE_W = int(pdp_x + 4 + 2 * GRID_WIDE + 8)
+    grid_x = pdp_x + 4                    ***REMOVED*** where circuit grids start
+    direct_x = grid_x + GRID_WIDE + 6     ***REMOVED*** one clear column further right
+
+    ***REMOVED*** band tops, measured down from the top of the site
+    band_top = {}
+    y = SITE_H - 6
+    for m in mains:
+        band_top[m] = y
+        y -= band_h[m]
+
+    def main_pos(m):
+        return {"x": tx_x, "y": band_top[m] - TX_DY}
+
+    def board_pos(m, bi):
+        """distribution board bi of main board m, stacked below it"""
+        return {"x": pdp_x, "y": band_top[m] - PDB_DY - bi * board_step}
+
+    board_index = {}
+    for m in mains:
+        for bi, b in enumerate(per_main.get(m, [])):
+            board_index[b] = (m, bi)
 
     tx_ids, pdb_ids, pdp_ids = {}, {}, {}
 
     out = {
-        "name": "Client Line 5 & 9 — production and support",
-        "client": "Client AG",
-        "ref": "project ref",
+        "name": PROJECT_NAME,
+        "client": CLIENT,
+        "ref": PROJECT_REF,
         "designer": "",
-        "date": "2026-10-02",
+        "date": datetime.date.today().isoformat(),
         "site": {"w": SITE_W, "h": SITE_H, "ox": 0, "oy": 0},
         "place": {"snap": 1, "offset": 2, "clearance": 1.5},
         "txs": [], "pdbs": [], "pdps": [], "dbs": [], "panels": [],
@@ -173,38 +263,41 @@ def main():
     for i, m in enumerate(mains, start=1):
         tid = uid("tx", i)
         tx_ids[m] = tid
+        line = next((r["line"] for r in rows if r["lv"] == m and r["line"]), "")
         out["txs"].append({
             "id": tid, "tag": "TX-%d" % i, "num": i,
             "name": "Transformer feeding %s" % m,
-            "ref": "Line %s" % rows[[r["lv"] for r in rows].index(m)]["line"],
-            "kva": TX_KVA, "kvIn": 11, "kvOut": 0.415,
-            "phases": "3", "pf": 0.95, "impZ": 6, "faultKVA": None,
-            "at": 0, "pos": {"x": tx_x, "y": main_y[m]}, "notes":
-                "3,150 kVA assumed — the schedule lists no transformers. "
-                "Both transformers are fed from %s (medium voltage); the MV "
-                "voltage and transformer impedance were not given and are "
-                "assumed, so fault levels on this project are indicative." % MV_REF,
+            "ref": ("Line %s" % line) if line else "",
+            "kva": TX_KVA, "kvIn": MV_KV, "kvOut": 0.415,
+            "phases": "3", "pf": 0.95, "impZ": TX_ZPCT, "faultKVA": None,
+            "at": 0, "pos": main_pos(m), "notes":
+                "%s kVA assumed — the schedule lists no transformers. Both are "
+                "fed from %s (medium voltage); the MV voltage and the transformer "
+                "impedance were not given and are assumed, so fault levels on "
+                "this project are indicative." % (TX_KVA, MV_REF),
         })
 
     ***REMOVED*** ------------------------------------------------------------- main boards
     for i, m in enumerate(mains, start=1):
         pid = uid("pdb", i)
         pdb_ids[m] = pid
+        frames = sum(r["frame"] for r in rows if r["lv"] == m)
         out["pdbs"].append({
             "id": pid, "tag": "PDB-%d" % i, "num": 1,
             "name": "Main LV board %s" % m, "ref": m,
-            "txId": tx_ids[m], "incomerA": 6300, "phases": "3", "spareWays": 0,
-            "pos": {"x": msb_x, "y": main_y[m]},
-            "notes": "Fits %s. Its own rating is an estimate (see the board "
-                     "schedule note); %s is the designation used on the vendor "
-                     "drawing." % (m, m),
+            "txId": tx_ids[m], "incomerA": infer_rating(frames),
+            "phases": "3", "spareWays": 0,
+            "pos": {"x": msb_x, "y": main_pos(m)["y"] - MSB_DY},
+            "notes": "Fits %s. Its incomer rating is an estimate taken from the "
+                     "sum of the outgoing frame sizes; see the board schedule "
+                     "note." % m,
             "cable": {"csa": None, "runs": 1, "cores": 4, "len": 0,
                       "method": "XL-A1", "group": 2, "ambient": 40, "sheathed": True},
         })
 
     ***REMOVED*** --------------------------------------------------- distribution boards
     for i, b in enumerate(boards, start=1):
-        host = next(r["lv"] for r in rows if r["db"] == b)
+        host, bi = board_index[b]
         did = uid("pdp", i)
         pdp_ids[b] = did
         members = [r for r in rows if r["db"] == b]
@@ -220,7 +313,7 @@ def main():
             ***REMOVED*** the sheet lists every way on the board, spares included, so the
             ***REMOVED*** enclosure is full — total ways = rows, spare ways = 0
             "ways": len(members), "spareWays": 0,
-            "pos": {"x": pdp_x, "y": pdp_y.get(host, {}).get(b, fallback_y[host])},
+            "pos": board_pos(host, bi),
             "notes": "Rating estimated: the outgoing frame sizes sum to %d A, "
                      "so the incomer is set to the next standard size, %d A. "
                      "The diversified load on this board is only %.0f kW "
@@ -244,13 +337,20 @@ def main():
     app_total_kva = 0.0
 
     def next_pos(board_key, host_main):
+        """The next free cell in the grid belonging to this circuit's board.
+
+        Circuits on a distribution board share one grid column, stacked so that
+        a board's circuits read as a block. Circuits fed straight off the main
+        board use their own column, clear of every grid."""
         k = slots[board_key]
         slots[board_key] += 1
-        col, row = k % 6, k // 6
-        base_x = pdp_x + 5 if board_key in pdp_ids else msb_x + 5
-        base_y = (pdp_y.get(host_main, {}).get(board_key, fallback_y[host_main])
-                  if board_key in pdp_ids else fallback_y[host_main] - 6)
-        return {"x": base_x + col * 2.6, "y": base_y - 4 - row * 2.4}
+        col, row = k % COLS, k // COLS
+        if board_key in board_index:
+            m, bi = board_index[board_key]
+            base_x, base_y = grid_x, board_pos(m, bi)["y"] - 4
+        else:
+            base_x, base_y = direct_x, band_top[host_main] - PDB_DY - 4
+        return {"x": base_x + col * GRID_W, "y": base_y - row * GRID_H}
 
     for r in rows:
         n += 1
@@ -282,7 +382,7 @@ def main():
             bits.append("Fed from its own feeder panel %s, taken as one way "
                         "on %s; the %s layer was collapsed on import."
                         % (r["feederPanel"], host_main, r["feederPanel"]))
-        bits.append("Client: rated %.1f A, breaker %g A, frame %g A, "
+        bits.append("Schedule: rated %.1f A, breaker %g A, frame %g A, "
                     "nominal %.0f A; rated %.1f kW, nominal %.1f kW, "
                     "estimated consumption %.1f kW; load factor %g, "
                     "diversity factor %g, pf %g."

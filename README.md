@@ -163,21 +163,25 @@ directly for the circuit; on a distribution board it offers the board chooser.
 
 ***REMOVED******REMOVED*** Importing a vendor's load schedule
 
-`tools/client_import.py` converts the Client **project ref** spreadsheet into a
-project file:
+A vendor's spreadsheet rarely matches the workbench's shape, so it takes a
+script. `tools/vendor_import.py` is one, written against a production-line
+load schedule and left generic — edit the column numbers near the top and it
+will read a different sheet:
 
 ```
-python3 tools/client_import.py "schedule.xlsx" tools/client-line5.json
+python3 tools/vendor_import.py "schedule.xlsx" project.json
 ```
 
 Then **Import JSON** in the app. It needs nothing but python3 — the spreadsheet
 reader is in `tools/xlsx_read.py`.
 
-It reads 97 circuits from the sheet and lands them as two 3,150 kVA
-transformers, two main boards, six distribution boards and 97 circuits. The
-workbench's own calculation then reproduces the vendor's consumption figure to
-within 0.1% — 3,963 kW against their 3,961 kW — which is a useful check that
-the mapping is right, because the two numbers are arrived at independently.
+**The cross-check worth keeping.** The spreadsheet it was written for carried
+rated kW, a per-circuit load factor and a per-circuit diversity factor. Feeding
+rated kW in as the connected load and the two factors in as the demand factor
+made the workbench's own calculation land on the vendor's consumption figure to
+within **0.1%** — 3,963 kW against their 3,961 kW. Two numbers arrived at by
+independent routes agreeing that closely is the evidence the mapping is right,
+and it is worth running on any sheet before trusting the import.
 
 | From the sheet | Into the workbench |
 |---|---|
@@ -187,15 +191,16 @@ the mapping is right, because the two numbers are arrived at independently.
 | Rated / breaker / frame current | Kept in the circuit's notes and in a `_vendor` block |
 | Line, machine type, load type | Notes, description, type |
 
-**Decisions taken when this was first imported**, each marked in the script:
+**Decisions that had to be made by hand** on that schedule, each marked in the
+script:
 
-1. Two transformers, one per main board, 3,150 kVA each — the sheet lists none.
-2. `DIST-1`, `DIST-2` and `DIST-3` are fed from `MAIN-A`. A handful of rows on
-   those boards name `MAIN-B` in the main-board column, which would give one board
-   two parents; those cells were confirmed as typos.
-3. The nine `DF-*` feeder panels are collapsed. Each carries exactly one load, so
-   the load becomes one way on the main board and the `DF-*` name is kept as the
-   circuit's reference.
+1. Two transformers, one per main board. The sheet listed none.
+2. Three distribution boards were fed from a main board that their sibling
+   boards were not — a handful of cells named the wrong parent, which would have
+   given one board two. Corrected.
+3. Nine single-load feeder panels (`DF-*`) were collapsed. Each carries exactly
+   one load, so the load became one way on the main board and the `DF-*` name was
+   kept as the circuit's reference.
 4. Board ratings are inferred from the sum of outgoing frame sizes, because the
    sheet gives none. **These are estimates and are almost certainly too large** —
    a real distribution board is rated on the diversified load, not on the sum of
@@ -203,9 +208,9 @@ the mapping is right, because the two numbers are arrived at independently.
    Replace them from the switchgear schedule.
 
 The cable columns in that sheet are headed *"Cable & Installation (to be
-completed)"*, so every circuit arrives without a feeder cable. The audit reports
-80 warnings for that reason and nothing else — which is the correct result, not a
-fault in the import.
+completed)"*, so every circuit arrives without a feeder cable and the audit
+reports a "no feeder cable defined" warning for each — which is the correct
+result, not a fault in the import.
 
 **Importing a different vendor's sheet** means writing a sibling of that script:
 read the columns, map them onto the fields above, write the JSON. Nothing in the
@@ -291,12 +296,12 @@ and a 100 kA one. `uk` is the transformer's **Impedance** field.
 project file, matched by the sheet row the importer recorded:
 
 ```
-python3 tools/add_protection.py tools/wxm-line5.json "schedule.xlsx"
+python3 tools/add_protection.py project.json "switchgear-schedule.xlsx"
 ```
 
-On the Client schedule that is 97 circuits — **56 TM and 41 LI**, from 15 A
-up to 800 A in 250 / 400 / 600 / 800 A frames. These are read from the sheet
-rather than proposed, because they came off the switchgear schedule.
+On that schedule it is 97 circuits — **56 TM and 41 LI**, from 15 A up to 800 A
+in 250 / 400 / 600 / 800 A frames. These are read from the sheet rather than
+proposed, because they came off the switchgear schedule.
 
 The sheet's **Interrupt Rating** column is blank on every row, so the breaking
 capacity is left empty and filled from the calculated fault level when the
@@ -477,9 +482,8 @@ js/plan.js          canvas plan: underlay, rendering, hit-testing, drag, zoom
 js/sld.js           single line diagram: tree layout and IEC 60617 symbols
 js/ui.js            shell: properties, schedules, site map, export, import, print
 tools/xlsx_read.py        minimal spreadsheet reader, standard library only
-tools/client_import.py  vendor load schedule → project file
+tools/vendor_import.py    vendor load schedule → project file
 tools/add_protection.py   vendor switchgear schedule → circuit devices
-tools/wxm-line5.json      the Client Line 5 & Auxiliaries project, ready to import
 test/parser-test.html     35 checks against a synthetic DXF with known geometry
 test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule

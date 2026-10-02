@@ -12,3 +12,8 @@ scratch/
 
 ***REMOVED*** test scaffolding not worth keeping
 test/*.dxf
+
+***REMOVED*** Generated project files. These carry a real client's load schedule, board
+***REMOVED*** references and equipment descriptions — regenerable at any time from the
+***REMOVED*** source spreadsheet with tools/vendor_import.py, so they stay out of the repo.
+tools/*.json
