@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Board numbering — tests</title>
+<style>
+  body{font:13px/1.6 ui-monospace,Menlo,monospace;background:#0f1216;color:#dfe7ee;padding:20px;margin:0}
+  h1{font-size:16px;margin:0 0 4px}
+  p.sub{color:#8fa3b3;margin:0 0 16px;font-size:12px}
+  .case{margin:6px 0;padding:7px 10px;border-radius:6px;background:#151a20;border-left:3px solid #3a4855}
+  .pass{border-left-color:#22c55e}
+  .fail{border-left-color:#ef4444;background:#2a1414}
+  .name{font-weight:700}
+  .fail .name{color:#fca5a5}
+  .detail{color:#8fa3b3;font-size:12px;margin-top:2px}
+  #summary{margin-top:16px;padding:10px;border-radius:8px;font-weight:700}
+  pre{background:#151a20;padding:12px;border-radius:8px;overflow:auto;max-height:340px}
+</style>
+</head>
+<body>
+<h1>Hierarchical board numbering</h1>
+<p class="sub">
+  TX7 → PDB7 → PDP7-1 → DB7-1-1, and the control panels on that sub-board keep their own free-text references.
+</p>
+<div id="cases"></div>
+<div id="summary">running…</div>
+<pre id="tree"></pre>
+
+<script src="../js/data.js"></script>
+<script src="../js/calc.js"></script>
+<script>
+(function () {
+  var results = [];
+  function check(name, got, want) {
+    var ok = JSON.stringify(got) === JSON.stringify(want);
+    results.push({ name: name, ok: ok, got: got, want: want });
+  }
+  function P() { var p = LS.newProject({ site: { w: 40, h: 30 } }); p.dbs = []; return p; }
+  function mkTx(p, n, kva) { var t = LS.newTx({ name: 'tx', kva: kva || 1000, num: n }); p.txs.push(t); return t; }
+  function mkPdb(p, tx) { var b = LS.newPdb({ name: 'pdb', txId: tx.id }); p.pdbs.push(b); return b; }
+  function mkPdp(p, pdb) { var d = LS.newPdp({ name: 'pdp', pdbId: pdb.id }); p.pdps.push(d); return d; }
+  function mkDb(p, pdp) { var b = LS.newDb({ name: 'db', pdpId: pdp.id, tag: 'DB' }); p.dbs.push(b); return b; }
+  function mkPn(p, pdp, tag, db) {
+    var n = LS.newPanel({ name: 'pn', pdpId: pdp.id, tag: tag || 'PNL', dbId: db ? db.id : null });
+    p.panels.push(n);
+    return n;
+  }
+  function tree(p) {
+    return p.txs.map(function (t) {
+      return t.tag + '\n' + p.pdbs.filter(function (b) { return b.txId === t.id; }).map(function (b) {
+        return '  ' + b.tag + '\n' + p.pdps.filter(function (d) { return d.pdbId === b.id; }).map(function (d) {
+          var out = ['    ' + d.tag];
+          p.dbs.filter(function (x) { return x.pdpId === d.id; }).forEach(function (x) {
+            out.push('      ' + x.tag);
+            p.panels.filter(function (n) { return n.dbId === x.id; }).forEach(function (n) {
+              out.push('        ' + n.tag);
+            });
+          });
+          p.panels.filter(function (n) { return n.pdpId === d.id && !n.dbId; }).forEach(function (n) {
+            out.push('      ' + n.tag + '   (on the PDP)');
+          });
+          return out.join('\n');
+        }).join('\n');
+      }).join('\n');
+    }).join('\n');
+  }
+
+  /* 1. the pattern from the brief, exactly */
+  var p = P();
+  var tx7 = mkTx(p, 7, 1000);
+  var pdb7 = mkPdb(p, tx7);
+  var pdp71 = mkPdp(p, pdb7), pdp72 = mkPdp(p, pdb7);
+  var db711 = mkDb(p, pdp71), db712 = mkDb(p, pdp71);
+  var db721 = mkDb(p, pdp72);
+  mkPn(p, pdp71, 'MCC-01', db711);
+  mkPn(p, pdp71, 'MCC-02', db711);
+  mkPn(p, pdp71, 'AHU-02', db712);
+  mkPn(p, pdp72, 'PLT-01', db721);
+  LC.applyNumbering(p);
+  check('transformer keeps its pinned number', tx7.tag, 'TX7');
+  check('main board is PDB7', pdb7.tag, 'PDB7');
+  check('distribution boards number in order', [pdp71.tag, pdp72.tag], ['PDP7-1', 'PDP7-2']);
+  check('sub-boards under PDP7-1', [db711.tag, db712.tag], ['DB7-1-1', 'DB7-1-2']);
+  check('sub-boards under PDP7-2', [db721.tag], ['DB7-2-1']);
+  check('control panels keep their own references',
+    p.panels.map(function (n) { return n.tag; }), ['MCC-01', 'MCC-02', 'AHU-02', 'PLT-01']);
+  check('panels are never numbered by the convention',
+    p.panels.filter(function (n) { return /^DB\d/.test(n.tag); }).length, 0);
+  document.getElementById('tree').textContent = tree(p);
+
+  /* 2. transformers number from 1 when not pinned */
+  var p2 = P();
+  var a = mkTx(p2), b = mkTx(p2), c = mkTx(p2);
+  LC.applyNumbering(p2);
+  check('unpinned transformers number 1,2,3', [a.tag, b.tag, c.tag], ['TX1', 'TX2', 'TX3']);
+
+  /* 3. a pinned number that is taken falls back to the lowest free slot */
+  var p3 = P();
+  var t1 = mkTx(p3, 1), t2 = mkTx(p3, 1), t3 = mkTx(p3, null);
+  LC.applyNumbering(p3);
+  check('duplicate pinned numbers do not collide', [t1.tag, t2.tag, t3.tag], ['TX1', 'TX2', 'TX3']);
+
+  /* 4. a control panel fed straight off a PDP is not given a DB number */
+  var p4 = P();
+  var tx4 = mkTx(p4, 7), pdb4 = mkPdb(p4, tx4), pdp4 = mkPdp(p4, pdb4);
+  var direct = mkPn(p4, pdp4, 'MCC-01');
+  LC.applyNumbering(p4);
+  check('a circuit on the PDP keeps its own tag', direct.tag, 'MCC-01');
+  check('and no sub-board is invented for it', p4.dbs.length, 0);
+  check('the board chain is still numbered', [tx4.tag, pdb4.tag, pdp4.tag], ['TX7', 'PDB7', 'PDP7-1']);
+  /* adding a sub-board does not disturb the circuit on the PDP */
+  var db4 = mkDb(p4, pdp4);
+  LC.applyNumbering(p4);
+  check('adding a sub-board leaves the direct circuit alone', direct.tag, 'MCC-01');
+  check('and the new board is DB7-1-1', db4.tag, 'DB7-1-1');
+  check('still no duplicate references', LC.numberingIssues(p4), []);
+
+  /* 5. deleting a sub-board closes the gap */
+  var p5 = P();
+  var tx5 = mkTx(p5, 7), pdb5 = mkPdb(p5, tx5), pdp5 = mkPdp(p5, pdb5);
+  var s1 = mkDb(p5, pdp5), s2 = mkDb(p5, pdp5), s3 = mkDb(p5, pdp5);
+  LC.applyNumbering(p5);
+  check('three sub-boards', [s1.tag, s2.tag, s3.tag], ['DB7-1-1', 'DB7-1-2', 'DB7-1-3']);
+  p5.dbs = p5.dbs.filter(function (d) { return d !== s2; });
+  LC.applyNumbering(p5);
+  check('deleting the middle one renumbers', [s1.tag, s3.tag], ['DB7-1-1', 'DB7-1-2']);
+
+  /* 6. deleting a distribution board renumbers the sub-boards below it */
+  var p6 = P();
+  var tx6 = mkTx(p6, 1), pdb6 = mkPdb(p6, tx6);
+  var dA = mkPdp(p6, pdb6), dB = mkPdp(p6, pdb6);
+  mkDb(p6, dA); mkDb(p6, dB); mkDb(p6, dB);
+  LC.applyNumbering(p6);
+  check('sub-boards under the second PDP', [p6.dbs[1].tag, p6.dbs[2].tag], ['DB1-2-1', 'DB1-2-2']);
+  /* deleting a PDP cascades to its sub-boards, as the app's delete does */
+  p6.pdps = p6.pdps.filter(function (d) { return d !== dA; });
+  p6.dbs = p6.dbs.filter(function (d) { return d.pdpId !== dA.id; });
+  LC.applyNumbering(p6);
+  check('renumbering after a PDP delete', [p6.dbs[0].tag, p6.dbs[1].tag], ['DB1-1-1', 'DB1-1-2']);
+  check('a sub-board left behind by a partial delete is marked', (function () {
+    var orphan = LS.newDb({ name: 'orphan', tag: 'DB', pdpId: 'gone' });
+    p6.dbs.push(orphan);
+    LC.applyNumbering(p6);
+    return orphan.tag.indexOf('?') > 0;
+  })(), true);
+
+  /* 7. re-parenting renumbers the whole downstream chain */
+  var p7 = P();
+  var txA = mkTx(p7, 1), txB = mkTx(p7, 2);
+  var pbA = mkPdb(p7, txA), pbB = mkPdb(p7, txB);
+  var pdA = mkPdp(p7, pbA), pdB = mkPdp(p7, pbA);
+  var sA = mkDb(p7, pdA);
+  var pn1 = mkPn(p7, pdA, 'MCC-01', sA);
+  LC.applyNumbering(p7);
+  check('under TX1', [pdA.tag, sA.tag, pn1.tag], ['PDP1-1', 'DB1-1-1', 'MCC-01']);
+  sA.pdpId = pdB.id;                       // move the sub-board to the other PDP
+  LC.applyNumbering(p7);
+  check('moving a sub-board renumbers it', sA.tag, 'DB1-2-1');
+  check('and does not touch its circuits', pn1.tag, 'MCC-01');
+
+  /* 8. a transformer with more than one main board continues the sequence */
+  var p8 = P();
+  var tx8 = mkTx(p8, 7);
+  var b1 = mkPdb(p8, tx8);
+  var d1 = mkPdp(p8, b1);
+  mkDb(p8, d1);
+  LC.applyNumbering(p8);
+  check('a lone main board is bare PDB7', b1.tag, 'PDB7');
+  check('and its chain is PDB7 / PDP7-1 / DB7-1-1', [d1.tag, p8.dbs[0].tag], ['PDP7-1', 'DB7-1-1']);
+  var b2 = mkPdb(p8, tx8);                  // add a second main board
+  var d2 = mkPdp(p8, b2);
+  mkDb(p8, d2);
+  LC.applyNumbering(p8);
+  check('adding a second renumbers both', [b1.tag, b2.tag], ['PDB7-1', 'PDB7-2']);
+  check('the chain below follows the renumbering', [d1.tag, p8.dbs[0].tag], ['PDP7-1-1', 'DB7-1-1-1']);
+  check('and the second main board gets its own path', [d2.tag, p8.dbs[1].tag], ['PDP7-2-1', 'DB7-2-1-1']);
+  check('no duplicate references', LC.numberingIssues(p8), []);
+
+  /* 9. orphaned boards get a distinct placeholder, not a collision */
+  var p9 = P();
+  var lonely = LS.newPdp({ name: 'orphan' });
+  p9.pdps.push(lonely);
+  var orphanSub = LS.newDb({ name: 'orphan' });
+  p9.dbs.push(orphanSub);
+  var orphanPanel = LS.newPanel({ name: 'orphan', tag: 'MCC-01' });
+  p9.panels.push(orphanPanel);
+  var threw = false;
+  try { LC.applyNumbering(p9); } catch (e) { threw = true; }
+  check('orphaned board does not throw', threw, false);
+  check('orphaned sub-board is marked', orphanSub.tag.indexOf('?') > 0, true);
+  check('an unnumbered panel is left alone', orphanPanel.tag, 'MCC-01');
+  check('placeholders are not reported as duplicates', LC.numberingIssues(p9), []);
+
+  /* 9b. a stale parent id counts as unconnected rather than being numbered
+         from a board that no longer exists */
+  var p9b = P();
+  var tx9b = mkTx(p9b, 7), pdb9b = mkPdb(p9b, tx9b);
+  var pdp9b = mkPdp(p9b, pdb9b);
+  var subA = mkDb(p9b, pdp9b), subB = mkDb(p9b, pdp9b);
+  var pn9b = mkPn(p9b, pdp9b, 'MCC-01', subA);
+  LC.applyNumbering(p9b);
+  p9b.pdbs = [];                            // the main board vanished
+  LC.applyNumbering(p9b);
+  check('sub-boards with a stale parent are marked', p9b.dbs.every(function (d) { return /\?/.test(d.tag); }), true);
+  check('each placeholder is distinct', p9b.dbs[0].tag !== p9b.dbs[1].tag, true);
+  check('the circuit on it is untouched', pn9b.tag, 'MCC-01');
+  check('stale references are not duplicates', LC.numberingIssues(p9b), []);
+
+  /* 10. names and descriptions are never touched */
+  var p10 = P();
+  var tx10 = mkTx(p10, 7), pdb10 = mkPdb(p10, tx10), pdp10 = mkPdp(p10, pdb10), sub10 = mkDb(p10, pdp10);
+  pdb10.name = 'Main LV board A1'; pdp10.name = 'Cooling plant'; sub10.name = 'Production small power';
+  var pn10 = mkPn(p10, pdp10, 'MCC-01', sub10);
+  pn10.name = 'Conveyor line 1 panel'; pn10.description = 'CV-01 drives';
+  LC.applyNumbering(p10);
+  check('main board name preserved', pdb10.name, 'Main LV board A1');
+  check('distribution board name preserved', pdp10.name, 'Cooling plant');
+  check('sub-board name preserved', sub10.name, 'Production small power');
+  check('circuit name and description preserved', [pn10.name, pn10.description], ['Conveyor line 1 panel', 'CV-01 drives']);
+
+  /* 11. applyNumbering reports what changed, and is idempotent */
+  var p11 = P();
+  var tx11 = mkTx(p11, 7), pdb11 = mkPdb(p11, tx11), pdp11 = mkPdp(p11, pdb11), sub11 = mkDb(p11, pdp11);
+  mkPn(p11, pdp11, 'MCC-01', sub11);
+  check('first pass renames every board', LC.applyNumbering(p11).length, 4);
+  check('second pass changes nothing', LC.applyNumbering(p11).length, 0);
+  check('and never reports the circuits', LC.applyNumbering(p11).filter(function (c) { return c.kind === 'panel'; }).length, 0);
+
+  /* 12. numbering is stable across save / reload */
+  var p12 = P();
+  var tx12 = mkTx(p12, 3), pdb12 = mkPdb(p12, tx12), pdp12 = mkPdp(p12, pdb12), sub12 = mkDb(p12, pdp12);
+  mkPn(p12, pdp12, 'MCC-01', sub12);
+  LC.applyNumbering(p12);
+  var p12b = JSON.parse(JSON.stringify(p12));
+  p12b.dbs = p12b.dbs || [];
+  LC.applyNumbering(p12b);
+  check('after round trip: TX3/PDB3/PDP3-1/DB3-1-1/MCC-01',
+    [p12b.txs[0].tag, p12b.pdbs[0].tag, p12b.pdps[0].tag, p12b.dbs[0].tag, p12b.panels[0].tag],
+    ['TX3', 'PDB3', 'PDP3-1', 'DB3-1-1', 'MCC-01']);
+
+  /* 13. a large mixed site has no duplicate references */
+  var p13 = P();
+  for (var i = 0; i < 3; i++) {
+    var t = mkTx(p13, null, 1000);
+    for (var j = 0; j <= i; j++) {
+      var pb = mkPdb(p13, t);
+      for (var k = 0; k < 3; k++) {
+        var pd = mkPdp(p13, pb);
+        for (var m = 0; m < 2; m++) {
+          var sb = mkDb(p13, pd);
+          for (var n = 0; n < 3; n++) mkPn(p13, pd, 'MCC-' + n, sb);
+        }
+      }
+    }
+  }
+  LC.applyNumbering(p13);
+  check('mixed site has no duplicate references', LC.numberingIssues(p13), []);
+  check('every board is tagged', p13.dbs.filter(function (d) { return !d.tag; }).length, 0);
+  check('circuit count', p13.panels.length, 3 * 6 * 2 * 3);
+
+  /* 14. a project saved before the convention existed migrates on load */
+  var p14 = P();
+  var tx14 = LS.newTx({ tag: 'TX-A', name: 'Main distribution transformer A', kva: 1000 });
+  p14.txs.push(tx14);
+  var pdb14 = LS.newPdb({ tag: 'PDB-A1', name: 'Main LV board A1', txId: tx14.id });
+  p14.pdbs.push(pdb14);
+  var pdp14 = LS.newPdp({ tag: 'PDP-A1-1', name: 'Production west', pdbId: pdb14.id });
+  p14.pdps.push(pdp14);
+  var pn14 = LS.newPanel({ tag: 'MCC-01', name: 'Conveyor line 1 panel', pdpId: pdp14.id });
+  p14.panels.push(pn14);
+  LC.applyNumbering(p14);
+  check('a legacy project is brought into the convention',
+    [tx14.tag, pdb14.tag, pdp14.tag, pn14.tag], ['TX1', 'PDB1', 'PDP1-1', 'MCC-01']);
+  check('the old transformer reference is kept', tx14.ref, 'TX-A');
+  check('the old main board reference is kept', pdb14.ref, 'PDB-A1');
+  check('the old distribution board reference is kept', pdp14.ref, 'PDP-A1-1');
+  check('the circuit keeps its own tag untouched', pn14.tag, 'MCC-01');
+  check('no reference is invented for a circuit', pn14.ref || '', '');
+
+  /* 15. auto-assignment lands a circuit on the PDP, never on a sub-board */
+  var p15 = P();
+  var tx15 = mkTx(p15, 1), pdb15 = mkPdb(p15, tx15), pdp15 = mkPdp(p15, pdb15, 200);
+  var s15 = mkDb(p15, pdp15);
+  var loose = LS.newPanel({ name: 'new circuit', tag: 'MCC-99', kw: 30, pdpId: null, pos: { x: 12, y: 12 } });
+  p15.panels.push(loose);
+  LC.applyNumbering(p15);
+  var log15 = LC.assignPanel(p15, loose, {});
+  check('the circuit is assigned to the PDP', loose.pdpId, pdp15.id);
+  check('and not to the sub-board', loose.dbId, null);
+  check('the sub-board is unaffected by auto-assignment', s15.tag, 'DB1-1-1');
+  check('its existing circuits stay put',
+    p15.panels.filter(function (n) { return n.dbId === s15.id; }).length, 0);
+
+  var host = document.getElementById('cases');
+  results.forEach(function (r) {
+    var d = document.createElement('div');
+    d.className = 'case ' + (r.ok ? 'pass' : 'fail');
+    d.innerHTML = '<div class="name">' + (r.ok ? '✓ ' : '✕ ') + r.name + '</div>' +
+      (r.ok ? '' : '<div class="detail">got ' + JSON.stringify(r.got) + ' — expected ' + JSON.stringify(r.want) + '</div>');
+    host.appendChild(d);
+  });
+  var failed = results.filter(function (r) { return !r.ok; }).length;
+  var sum = document.getElementById('summary');
+  sum.textContent = (results.length - failed) + ' / ' + results.length + ' checks passed';
+  sum.style.background = failed ? '#3b1414' : '#0d3320';
+  sum.style.color = failed ? '#fca5a5' : '#86efac';
+  window.__NUM = { total: results.length, failed: failed };
+})();
+</script>
+</body>
+</html>

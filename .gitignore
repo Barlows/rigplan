@@ -1,19 +1,18 @@
-***REMOVED*** Nothing to build — this is a zero-dependency static app.
-***REMOVED*** These are here so an exported project or a stray export never lands in the repo.
+# Nothing to build — this is a zero-dependency static app.
+# These are here so an exported project or a stray export never lands in the repo.
 *.log
 *.tmp
 .DS_Store
 Thumbs.db
 
-***REMOVED*** local scratch
+# local scratch
 scratch/
 *.bak
 *~
 
-***REMOVED*** test scaffolding not worth keeping
+# test scaffolding not worth keeping
 test/*.dxf
 
-***REMOVED*** Generated project files. These carry a real client's load schedule, board
-***REMOVED*** references and equipment descriptions — regenerable at any time from the
-***REMOVED*** source spreadsheet with tools/vendor_import.py, so they stay out of the repo.
+# Generated project files. Regenerate from the source spreadsheet with the
+# tools in this folder rather than committing the output.
 tools/*.json

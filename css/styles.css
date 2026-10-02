@@ -1,0 +1,432 @@
+/* ============================================================
+   Electrical Load Schedule Workbench — UI theme
+   ============================================================ */
+:root{
+  --bg:#0f1216;
+  --bg-2:#151a20;
+  --bg-3:#1b222a;
+  --bg-4:#222b35;
+  --line:#2b3641;
+  --line-2:#3a4855;
+  --fg:#dfe7ee;
+  --fg-dim:#93a3b2;
+  --fg-mute:#6b7c8b;
+  --accent:#38bdf8;
+  --accent-2:#0ea5e9;
+  --tx:#4ade80;
+  --pdb:#60a5fa;
+  --pdp:#fbbf24;
+  --panel:#94a3b8;
+  --ok:#22c55e;
+  --warn:#f59e0b;
+  --bad:#ef4444;
+  /* phase identity colours — keep in step with PHASE_COLOR in js/data.js */
+  --l1:#8b5a2b;
+  --l2:#1a1a1a;
+  --l3:#9aa5b1;
+  --l1-edge:#c98f4a;
+  --l2-edge:#e8e8e8;
+  --l3-edge:#cbd5e1;
+  --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--fg);font:13px/1.45 var(--sans);
+  display:flex;flex-direction:column;overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+button,input,select,textarea{font:inherit;color:inherit}
+::-webkit-scrollbar{width:11px;height:11px}
+::-webkit-scrollbar-track{background:var(--bg-2)}
+::-webkit-scrollbar-thumb{background:#33404d;border-radius:6px;border:2px solid var(--bg-2)}
+::-webkit-scrollbar-thumb:hover{background:#435565}
+
+/* ---------------- top bar ---------------- */
+.topbar{
+  display:flex;align-items:center;gap:18px;padding:8px 14px;
+  background:linear-gradient(180deg,#182029,#12181e);border-bottom:1px solid var(--line);
+  flex:0 0 auto;z-index:30;
+}
+.brand{display:flex;align-items:center;gap:10px;min-width:250px}
+.bolt{
+  width:30px;height:30px;display:grid;place-items:center;border-radius:8px;font-size:17px;
+  background:linear-gradient(145deg,#1e3a5f,#0f2a3f);border:1px solid #2b5a7a;color:#7dd3fc
+}
+.brand-t{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--fg-mute);font-weight:600}
+.proj-name{
+  background:transparent;border:none;border-bottom:1px dashed transparent;padding:0;
+  font-size:15px;font-weight:600;width:230px;outline:none
+}
+.proj-name:hover{border-bottom-color:var(--line-2)}
+.proj-name:focus{border-bottom-color:var(--accent)}
+.topstats{display:flex;gap:8px;flex:1 1 auto;overflow-x:auto}
+.ts{
+  background:var(--bg-3);border:1px solid var(--line);border-radius:8px;padding:4px 10px;
+  min-width:96px;white-space:nowrap
+}
+.ts .k{font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-mute);display:block}
+.ts .v{font-family:var(--mono);font-size:14px;font-weight:600}
+.ts .v small{font-size:10px;color:var(--fg-dim);font-weight:400}
+.actions{display:flex;gap:6px;flex:0 0 auto}
+.btn{
+  background:var(--bg-3);border:1px solid var(--line-2);border-radius:7px;padding:6px 11px;
+  cursor:pointer;font-size:12px;font-weight:500;transition:.13s;white-space:nowrap
+}
+.btn:hover{background:var(--bg-4);border-color:#4a5a6a;transform:translateY(-1px)}
+.btn:active{transform:translateY(0)}
+.btn.primary{background:linear-gradient(180deg,#0ea5e9,#0284c7);border-color:#0284c7;color:#fff;font-weight:600}
+.btn.primary:hover{background:linear-gradient(180deg,#38bdf8,#0ea5e9)}
+.btn.warn{background:#3a2a10;border-color:#7c5712;color:#fbbf24}
+.btn.warn:hover{background:#4a3512}
+.btn.ghost{background:transparent}
+.btn.danger{border-color:#7f1d1d;color:#fca5a5;background:#2a1414}
+.btn.danger:hover{background:#3b1a1a}
+.btn.sm{padding:4px 8px;font-size:11px}
+
+/* ---------------- workbench grid ---------------- */
+.workbench{
+  flex:1 1 auto;display:grid;grid-template-columns:290px minmax(320px,1fr) 340px;
+  min-height:0;overflow:hidden;
+}
+.col{min-height:0;display:flex;flex-direction:column;background:var(--bg-2)}
+.col-left{border-right:1px solid var(--line)}
+.col-right{border-left:1px solid var(--line)}
+.panel-h{
+  display:flex;align-items:center;justify-content:space-between;gap:8px;padding:7px 10px;
+  background:var(--bg-3);border-bottom:1px solid var(--line);flex:0 0 auto;
+  font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--fg-dim);font-weight:700
+}
+.panel-h-actions{display:flex;gap:4px}
+.mini{
+  background:var(--bg-4);border:1px solid var(--line-2);border-radius:5px;padding:2px 6px;
+  font-size:10.5px;cursor:pointer;color:var(--fg-dim);letter-spacing:0
+}
+.mini:hover{background:#2c3742;color:#fff}
+/* the fold buttons carry a glyph rather than a label — they sit in a narrow
+   header and a word would not fit */
+.mini[data-tree]{font-size:12px;padding:1px 7px;line-height:1.2}
+.pill{background:var(--bg-4);border:1px solid var(--line-2);border-radius:20px;padding:1px 8px;font-size:10px;letter-spacing:0;text-transform:none}
+.tree-scroll,.props-scroll{overflow:auto;flex:1 1 auto;min-height:0}
+
+/* ---------------- tree ---------------- */
+.tree{padding:6px 4px 20px}
+.tnode{margin:1px 0}
+.trow{
+  display:flex;align-items:center;gap:5px;padding:3px 6px;border-radius:6px;cursor:pointer;
+  border:1px solid transparent;user-select:none
+}
+.trow:hover{background:var(--bg-3)}
+.trow.sel{background:#12303f;border-color:#2b6d8f}
+.trow.bad{border-color:#5b2020}
+.tw{width:11px;text-align:center;color:var(--fg-mute);font-size:9px;flex:0 0 auto}
+.tdot{width:8px;height:8px;border-radius:2px;flex:0 0 auto;box-shadow:0 0 0 1px #0006 inset}
+/* The reference is the one thing that must never be cut off, so it takes its
+   space first. Everything to its right shrinks instead. */
+.tname{font-family:var(--mono);font-size:11.5px;flex:0 1 auto;white-space:nowrap;min-width:4.5em}
+.tkva{font-family:var(--mono);font-size:10px;color:var(--fg-mute);flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.tnkids{flex:0 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+/* ...but the row is still padded out to the panel width so the tree keeps its
+   right-hand edge, and the last item soaks up whatever is left */
+.trow::after{content:'';flex:1 1 auto;min-width:0}
+.tkids{margin-left:13px;border-left:1px dashed var(--line-2);padding-left:3px}
+.tbar{height:3px;background:#0b0f13;border-radius:2px;margin:1px 6px 3px 22px;overflow:hidden}
+.tbar i{display:block;height:100%}
+.tadd{font-size:10px;color:var(--accent);opacity:0;flex:0 0 auto;padding:0 3px}
+.trow:hover .tadd{opacity:1}
+.tadd:hover{text-decoration:underline}
+
+/* fold handles */
+.tfold{
+  width:13px;flex:0 0 13px;text-align:center;font-size:8.5px;line-height:1;
+  color:var(--fg-mute);padding:2px 0;border-radius:4px;cursor:pointer;
+  background:transparent;border:0;transition:color .12s,background .12s
+}
+.tfold:hover{color:var(--accent);background:#ffffff12}
+.tfold.open{color:var(--fg-dim)}
+.tfold.ph{cursor:default}
+/* the placeholder keeps circuit rows aligned with the board rows above */
+.trow:has(> .tfold.ph) .tdot{opacity:.8}
+/* what is hidden, shown on the folded row */
+.tnkids{
+  font-family:var(--mono);font-size:9.5px;color:var(--fg-mute);
+  background:#ffffff0d;border-radius:9px;padding:1px 6px;margin-left:2px
+}
+.trow:hover .tnkids{color:var(--fg-dim);background:#ffffff14}
+/* a row is faded slightly when folded, so the depth reads at a glance */
+.trow.folded .tname{color:var(--fg-dim)}
+.tw-empty{padding:18px 12px;color:var(--fg-mute);text-align:center;font-size:11.5px;line-height:1.7}
+
+/* legend */
+.legend{flex:0 0 auto;border-top:1px solid var(--line);padding:7px 10px;background:var(--bg-2);display:grid;grid-template-columns:1fr 1fr;gap:3px 8px}
+.lg{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--fg-dim)}
+.lg i{width:9px;height:9px;border-radius:2px;display:block}
+.lg.w i{background:var(--ok)} .lg.y i{background:var(--warn)} .lg.r i{background:var(--bad)}
+
+/* ---------------- plan toolbar ---------------- */
+.plan-toolbar{
+  flex:0 0 auto;display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;
+  padding:5px 8px;background:var(--bg-2);border-bottom:1px solid var(--line)
+}
+.tb-group{display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0}
+.tb-group.right{margin-left:auto}
+.tb-label{font-size:9.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--fg-mute);font-weight:700}
+.seg{display:flex;background:var(--bg-3);border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.seg-btn{
+  background:transparent;border:none;border-right:1px solid var(--line);padding:4px 7px;cursor:pointer;
+  font-size:11px;color:var(--fg-dim);white-space:nowrap
+}
+.seg-btn:last-child{border-right:none}
+.seg-btn:hover{background:var(--bg-4);color:#fff}
+.seg-btn.on{background:#0e3a4f;color:#bae6fd;box-shadow:inset 0 -2px 0 var(--accent)}
+.fld{display:flex;align-items:center;gap:4px}
+.fld > span{font-size:10px;color:var(--fg-mute);white-space:nowrap}
+.mini-fld input,.mini-fld select{
+  width:58px;background:var(--bg-3);border:1px solid var(--line-2);border-radius:5px;padding:3px 5px;
+  font-family:var(--mono);font-size:11px
+}
+.mini-fld select{width:66px}
+.mini-fld input:focus,.mini-fld select:focus{outline:none;border-color:var(--accent)}
+
+/* ---------------- canvas ---------------- */
+.canvas-wrap{flex:1 1 auto;position:relative;min-height:0;overflow:hidden;background:
+  radial-gradient(1200px 700px at 30% 0%,#151c24,#0d1116)}
+#plan{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:default}
+#plan.panning{cursor:grabbing}
+#plan.placing{cursor:crosshair}
+.plan-hint{position:absolute;left:8px;bottom:6px;font-size:10.5px;color:var(--fg-mute);background:#0b0f14cc;padding:3px 8px;border-radius:6px;pointer-events:none;border:1px solid var(--line)}
+.plan-readout{position:absolute;right:8px;bottom:6px;font-family:var(--mono);font-size:11px;color:#bae6fd;background:#0b0f14cc;padding:3px 9px;border-radius:6px;pointer-events:none;border:1px solid var(--line)}
+.plan-legend-chip{position:absolute;right:8px;top:6px;font-size:10px;color:var(--fg-mute);background:#0b0f14aa;padding:2px 7px;border-radius:5px;pointer-events:none}
+
+/* ---------------- properties ---------------- */
+.props{padding:0 0 30px}
+.props-empty{padding:24px 16px;color:var(--fg-mute);font-size:12px;line-height:1.8}
+.props-empty b{color:var(--fg-dim)}
+.fieldset{border-bottom:1px solid var(--line);padding:9px 11px 11px}
+.fieldset > h4{
+  margin:0 0 8px;font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--fg-mute);
+  font-weight:700;display:flex;align-items:center;gap:6px
+}
+.fieldset > h4::after{content:"";flex:1;height:1px;background:var(--line)}
+.frow{display:grid;grid-template-columns:104px 1fr;gap:6px;align-items:center;margin-bottom:6px}
+.frow > label{font-size:11px;color:var(--fg-dim);padding-right:2px}
+.frow.stack{grid-template-columns:1fr;gap:3px}
+.inp,.sel,.ta{
+  background:var(--bg-3);border:1px solid var(--line-2);border-radius:6px;padding:5px 7px;width:100%;
+  font-family:var(--mono);font-size:12px;outline:none
+}
+.sel{font-family:var(--sans);cursor:pointer}
+.inp:focus,.sel:focus,.ta:focus{border-color:var(--accent);box-shadow:0 0 0 2px #38bdf825}
+.inp[readonly]{background:#141a20;color:var(--fg-dim)}
+.ta{font-family:var(--sans);resize:vertical;min-height:52px;font-size:11.5px}
+.hint{font-size:10.5px;color:var(--fg-mute);line-height:1.5;margin-top:3px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.three{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+.unit{position:relative}
+.unit .u{position:absolute;right:7px;top:50%;transform:translateY(-50%);font-size:10px;color:var(--fg-mute);pointer-events:none}
+.unit .inp{padding-right:32px}
+/* board reference: derived from the hierarchy, so shown, not typed */
+.tagbox{
+  background:#0f1922;border:1px solid #24485c;border-left:3px solid var(--accent);
+  border-radius:7px;padding:6px 9px
+}
+.tagbox-v{font-family:var(--mono);font-size:15px;font-weight:700;color:#bae6fd;letter-spacing:.01em}
+.tagbox-h{font-size:10.5px;color:var(--fg-mute);margin-top:2px;line-height:1.45}
+.pbtn-row{display:flex;gap:6px;flex-wrap:wrap;padding:10px 11px;background:var(--bg-3);border-bottom:1px solid var(--line)}
+
+/* stat blocks */
+.stats{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.st{background:var(--bg-3);border:1px solid var(--line);border-radius:7px;padding:5px 7px}
+.st .k{font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--fg-mute);display:block}
+.st .v{font-family:var(--mono);font-size:13.5px;font-weight:600}
+.st .v small{font-size:10px;color:var(--fg-dim);font-weight:400}
+.st.wide{grid-column:1/-1}
+.utilbar{height:7px;background:#0b0f13;border-radius:4px;overflow:hidden;margin:5px 0 3px;border:1px solid var(--line)}
+.utilbar i{display:block;height:100%;transition:width .25s}
+.util-ok{background:linear-gradient(90deg,#16a34a,#4ade80)}
+.util-warn{background:linear-gradient(90deg,#d97706,#fbbf24)}
+.util-bad{background:linear-gradient(90deg,#b91c1c,#ef4444)}
+.phasebars{display:grid;grid-template-columns:26px 1fr 62px;gap:3px 6px;align-items:center;margin-top:4px}
+.phasebars .pl{font-size:10px;font-family:var(--mono);color:var(--fg-dim)}
+.phasebars .pv{font-family:var(--mono);font-size:10.5px;text-align:right;color:var(--fg-dim)}
+.phasebars .track{height:9px;background:#0b0f13;border-radius:3px;overflow:hidden;border:1px solid var(--line)}
+.phasebars .track i{display:block;height:100%}
+/* L2 is near-black, so each bar carries a hairline in its own edge colour —
+   without it the black bar disappears into the dark track behind it. */
+.pbar-l1{background:var(--l1);box-shadow:inset 0 0 0 1px var(--l1-edge)}
+.pbar-l2{background:var(--l2);box-shadow:inset 0 0 0 1px var(--l2-edge)}
+.pbar-l3{background:var(--l3);box-shadow:inset 0 0 0 1px var(--l3-edge)}
+.badge{display:inline-block;border-radius:5px;padding:1px 7px;font-size:10.5px;font-weight:600;letter-spacing:.02em}
+.badge.ok{background:#0d3320;color:#4ade80;border:1px solid #166534}
+.badge.warn{background:#3a2a0c;color:#fbbf24;border:1px solid #7c5712}
+.badge.bad{background:#3b1414;color:#fca5a5;border:1px solid #7f1d1d}
+.badge.info{background:#0c2b3a;color:#7dd3fc;border:1px solid #155e75}
+.badge.mute{background:var(--bg-4);color:var(--fg-dim);border:1px solid var(--line-2)}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:2px 8px;font-size:11.5px}
+.kv dt{color:var(--fg-mute)}
+.kv dd{margin:0;font-family:var(--mono);text-align:right}
+
+/* ---------------- drawer / tables ---------------- */
+.drawer{
+  flex:0 0 auto;height:270px;display:flex;flex-direction:column;position:relative;
+  background:var(--bg-2);border-top:1px solid var(--line);z-index:10
+}
+.drawer.big{height:70vh}
+/* drag handle on the top edge of the drawer, so the plan can be given
+   more room without losing the schedules */
+.drawer-grip{
+  position:absolute;top:-3px;left:0;right:0;height:7px;cursor:ns-resize;z-index:11;
+}
+.drawer-grip:hover{background:rgba(56,189,248,0.35)}
+.tabs{display:flex;gap:2px;padding:0 8px;background:var(--bg-3);border-bottom:1px solid var(--line);flex:0 0 auto}
+.tab{
+  background:transparent;border:none;border-bottom:2px solid transparent;padding:7px 13px;cursor:pointer;
+  font-size:12px;color:var(--fg-dim);font-weight:500
+}
+.tab:hover{color:#fff}
+.tab.on{color:#bae6fd;border-bottom-color:var(--accent);background:#111a20}
+.tab .cnt{font-family:var(--mono);font-size:10px;background:var(--bad);color:#fff;border-radius:9px;padding:0 5px;margin-left:5px}
+.tab .cnt.zero{background:var(--bg-4);color:var(--fg-mute)}
+.tab-content{flex:1 1 auto;overflow:auto;padding:0}
+table.grid{border-collapse:collapse;width:100%;font-size:11.5px}
+table.grid th{
+  position:sticky;top:0;z-index:2;background:#161d24;color:var(--fg-dim);text-align:right;padding:6px 8px;
+  font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;font-weight:700;white-space:nowrap;
+  border-bottom:1px solid var(--line-2);cursor:pointer;user-select:none
+}
+table.grid th:hover{color:#fff}
+table.grid th.l,table.grid td.l{text-align:left}
+table.grid th.c,table.grid td.c{text-align:center}
+table.grid td{padding:4px 8px;text-align:right;border-bottom:1px solid #1c242c;white-space:nowrap;font-family:var(--mono)}
+table.grid td.l{font-family:var(--sans);white-space:normal}
+table.grid tbody tr:hover{background:#171f27}
+table.grid tr.sel{background:#12303f}
+table.grid tr.clickable{cursor:pointer}
+table.grid tr.grp td{
+  background:#141b22;font-weight:600;color:var(--fg);font-family:var(--sans);
+  border-top:1px solid var(--line-2);border-bottom:1px solid var(--line-2);position:sticky;top:0
+}
+table.grid tr.sub td{background:#111820;font-weight:600;color:var(--fg-dim);font-family:var(--sans)}
+table.grid tr.unassigned td{background:#241a0d}
+table.grid tr.total td{background:#16222a;font-weight:700;border-top:2px solid var(--line-2);font-family:var(--mono)}
+td.num-ok{color:#86efac} td.num-warn{color:#fcd34d} td.num-bad{color:#fca5a5;font-weight:700}
+.cellwrap{max-width:230px;overflow:hidden;text-overflow:ellipsis}
+.empty{padding:40px 20px;text-align:center;color:var(--fg-mute);font-size:12.5px;line-height:1.8}
+.audit-item{display:flex;gap:9px;padding:8px 14px;border-bottom:1px solid #1c242c;align-items:flex-start;cursor:pointer}
+.audit-item:hover{background:#171f27}
+.audit-item .lv{flex:0 0 auto;width:56px;text-align:center}
+.audit-body{flex:1 1 auto}
+.audit-body .t{font-weight:600;font-size:12px}
+.audit-body .d{font-size:11px;color:var(--fg-dim);margin-top:1px;line-height:1.55}
+.audit-body .code{font-family:var(--mono);font-size:10px;color:var(--fg-mute)}
+.notes-wrap{padding:12px 14px;max-width:900px}
+.notes-wrap h5{margin:12px 0 5px;font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--fg-dim)}
+.notes-wrap p,.notes-wrap li{font-size:12px;line-height:1.7;color:var(--fg-dim)}
+.notes-wrap ul{margin:0;padding-left:18px}
+.notes-wrap code{font-family:var(--mono);background:var(--bg-3);padding:1px 5px;border-radius:4px;font-size:11px;color:#bae6fd}
+
+/* ---------------- site map tab ---------------- */
+.map-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:10px;padding:12px 14px;align-items:start}
+.map-card{background:var(--bg-3);border:1px solid var(--line);border-radius:9px;padding:10px 12px 12px}
+.map-card > h5{margin:0 0 8px;font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--fg-mute);font-weight:700}
+.map-card .kv{margin-bottom:6px}
+.map-card .kv dd{color:#bae6fd}
+.layer-list{max-height:190px;overflow:auto;border:1px solid var(--line);border-radius:7px;background:#111820;padding:3px}
+.layer-row{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:5px;cursor:pointer;font-size:11.5px}
+.layer-row:hover{background:var(--bg-4)}
+.layer-row span{font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.map-warn{margin:0;padding-left:17px;color:#fcd34d;font-size:11.5px;line-height:1.7}
+.mono{font-family:var(--mono)}
+
+/* ---------------- single line diagram ---------------- */
+/* The schematic is drawn on white even in the dark UI: it is a drawing, and
+   the stroke weights and symbol fills are chosen to read as ink on paper. */
+.sld-wrap{
+  overflow:auto;max-height:60vh;background:#fbfbf9;border:1px solid var(--line);
+  border-radius:8px;padding:10px
+}
+.sld-scale{transform-origin:0 0}
+.sld{display:block}
+.sld .sym-line{fill:none;stroke:#1f2933;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.sld .sym-box{fill:#fff;stroke:#1f2933;stroke-width:1.5}
+.sld .sym-fill{fill:#1f2933;stroke:#1f2933;stroke-width:1.2}
+.sld .sym-wire,.sld .sld-wire{fill:none;stroke:#4a5b6b;stroke-width:1.4}
+.sld .w-panel{stroke:#7c8b99;stroke-dasharray:3 3}
+.sld .sld-t{font:600 11px var(--mono);fill:#1f2933}
+.sld .sld-b{font:700 12px var(--mono);fill:#1f2933}
+.sld .sld-sm{font:10px var(--mono);fill:#5b6b7b}
+.sld .sld-in{font:700 10.5px var(--mono);fill:#1f2933}
+.sld .sld-tag{font:700 11px var(--mono);fill:#0f172a}
+/* status: a board over its rating is marked on the drawing itself */
+.sld .sym.bad .sym-box{stroke:#dc2626;fill:#fef2f2}
+.sld .sym.warn .sym-box{stroke:#d97706;fill:#fffbeb}
+.sld .sym.bad .sld-tag,.sld .sym.bad .sld-b{fill:#b91c1c}
+.sld .sym.warn .sld-tag{fill:#b45309}
+.sld g[data-select]{cursor:pointer}
+.sld g[data-select]:hover .sym-box{stroke:#0284c7;stroke-width:2.2}
+.sld-foot{font-size:11px;color:var(--fg-dim);margin-top:6px}
+.sld-legend{display:grid;grid-template-columns:1fr 1fr;gap:10px 18px}
+.lg-item{display:flex;gap:10px;align-items:flex-start;font-size:12px;color:var(--fg)}
+.lg-item b{color:var(--fg);display:block}
+.lg-sym{width:34px;height:34px;flex:0 0 34px;background:#fbfbf9;border:1px solid var(--line);border-radius:5px}
+/* printing the report: the diagram goes full width, no scroll, ink colours */
+#printReport .sld-wrap{overflow:visible;max-height:none;background:#fff;border:0;padding:0;page-break-inside:avoid}
+#printReport .sld-scale{transform:none !important;height:auto !important;width:auto !important}
+#printReport .sld-foot,#printReport .toolbar-inline{display:none}
+#printReport .sld{width:100%;height:auto}
+/* numbering convention, shown in the notes tab */
+.convention{background:#0f1922;border:1px solid #24485c;border-radius:8px;padding:9px 12px;display:inline-block}
+.cv-row{display:flex;gap:10px;align-items:baseline;line-height:1.75}
+.cv-t{font-family:var(--mono);font-size:12.5px;color:#bae6fd;white-space:pre;min-width:190px}
+.cv-d{font-size:11.5px;color:var(--fg-dim)}
+.canvas-wrap.dropping::after{
+  content:'Drop a DXF drawing or site photo to use as the background';
+  position:absolute;inset:8px;border:2px dashed var(--accent);border-radius:10px;
+  background:rgba(56,189,248,0.10);color:#bae6fd;display:grid;place-items:center;
+  font-size:13px;font-weight:600;pointer-events:none;z-index:5
+}
+.toolbar-inline{display:flex;gap:6px;align-items:center;padding:7px 12px;border-bottom:1px solid var(--line);background:#141a20;position:sticky;top:0;z-index:3;flex-wrap:wrap}
+
+/* ---------------- toast & modal ---------------- */
+.toast{
+  position:fixed;left:50%;bottom:24px;transform:translate(-50%,20px);opacity:0;pointer-events:none;
+  background:#0f172a;border:1px solid #2b6d8f;color:#bae6fd;padding:8px 16px;border-radius:9px;
+  font-size:12.5px;z-index:100;transition:.2s;max-width:70vw;box-shadow:0 10px 30px #0009
+}
+.toast.show{opacity:1;transform:translate(-50%,0)}
+.toast.bad{border-color:#7f1d1d;color:#fca5a5}
+.toast.good{border-color:#166534;color:#86efac}
+.modal{position:fixed;inset:0;background:#000a;display:grid;place-items:center;z-index:200;backdrop-filter:blur(2px)}
+.modal[hidden]{display:none}
+.modal-box{background:var(--bg-2);border:1px solid var(--line-2);border-radius:12px;width:min(760px,92vw);max-height:86vh;display:flex;flex-direction:column;box-shadow:0 24px 70px #000b}
+.modal-h{padding:11px 15px;border-bottom:1px solid var(--line);font-weight:600;background:var(--bg-3);border-radius:12px 12px 0 0;display:flex;justify-content:space-between;align-items:center}
+.modal-b{padding:15px;overflow:auto}
+.modal-f{padding:11px 15px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px}
+.modal table.grid td{padding:5px 8px}
+
+/* ---------------- print ---------------- */
+@media print{
+  @page{size:A3 landscape;margin:10mm}
+  body{background:#fff;color:#111;overflow:visible;display:block;height:auto}
+  .topbar,.col-left,.col-right,.plan-toolbar,.tabs,.toast,.modal,.canvas-wrap,.drawer{display:none !important}
+  .workbench{display:block}
+  .tab-content{overflow:visible;padding:0}
+  .print-only{display:block !important}
+  #printReport{position:static;background:#fff;color:#111;padding:0;font-size:11px}
+  #printReport h1.pt,#printReport h2,#printReport .psub,#printReport p{color:#111}
+  table.grid{width:100%;page-break-inside:auto}
+  table.grid th{background:#eee !important;color:#111 !important;position:static;page-break-after:avoid}
+  table.grid td{border-color:#ddd !important;color:#111}
+  table.grid tr{page-break-inside:avoid}
+  .badge,.st,.pbar-l1,.pbar-l2,.pbar-l3,.utilbar i,.notes-wrap,.audit-body .d{color:#111}
+  .audit-item{border-color:#ddd}
+  .print-only .notes-wrap{color:#333}
+  .print-only .notes-wrap p,.print-only .notes-wrap li{color:#333}
+  /* the schematic prints at full page width, on white */
+  .print-only .sld-wrap{overflow:visible !important;max-height:none !important;background:#fff !important;border:0 !important;padding:0}
+  .print-only .sld-scale{transform:none !important;height:auto !important;width:auto !important}
+  .print-only .sld{width:100%;height:auto}
+  .print-only .sld .sld-sm{fill:#445}
+}
+.print-only{display:none}

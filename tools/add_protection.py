@@ -1,7 +1,7 @@
-***REMOVED***!/usr/bin/env python3
+#!/usr/bin/env python3
 """Put the vendor's own protective devices onto the circuits of a project file.
 
-The switchgear schedule in 'schedule.xlsx' gives, for every circuit, the
+The switchgear schedule in 'All loads L5.xlsx' gives, for every circuit, the
 breaker rating (Ir), the frame it sits in (In) and the trip unit family (TM for
 the small ones, LI from 200 A up). That data is better than anything the
 workbench would propose — it came off the switchgear schedule — so it is written
@@ -26,11 +26,11 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from xlsx_read import read                                  ***REMOVED*** noqa: E402
+from xlsx_read import read                                  # noqa: E402
 
-C_IB, C_IN, C_TRIP = 13, 14, 15            ***REMOVED*** breaker rating, frame, trip unit
+C_IB, C_IN, C_TRIP = 13, 14, 15            # breaker rating, frame, trip unit
 HEADER_ROW = 10
-***REMOVED*** the trip-unit families that identify an MCCB — see TRIP_UNITS in js/data.js
+# the trip-unit families that identify an MCCB — see TRIP_UNITS in js/data.js
 TRIP_FAMILIES = {"TM", "LI", "LS", "LSI", "eLSI"}
 
 
@@ -52,7 +52,7 @@ def read_devices(path):
 
 def main():
     proj_path = sys.argv[1]
-    sheet = sys.argv[2] if len(sys.argv) > 2 else "/Users/sean/Downloads/schedule.xlsx"
+    sheet = sys.argv[2] if len(sys.argv) > 2 else "/Users/sean/Downloads/All loads L5.xlsx"
 
     devices = read_devices(sheet)
     if not devices:
@@ -75,7 +75,7 @@ def main():
             continue
         ib, frame, trip = d
         if ib <= 0:
-            ***REMOVED*** a spare way: a frame exists, but nothing is protected by it yet
+            # a spare way: a frame exists, but nothing is protected by it yet
             pn["prot"] = {"kind": "mccb" if (trip or "TM") in TRIP_FAMILIES else "mcb",
                           "frame": frame or None, "ir": None, "icu": None,
                           "trip": trip or None, "poles": 4, "aux": "",
@@ -83,16 +83,16 @@ def main():
                                    "connected. Frame %g A, no rating set yet." % frame}
             by_trip["spare"] = by_trip.get("spare", 0) + 1
             continue
-        ***REMOVED*** TM and LI are MCCB trip-unit families; an MCB has a curve letter
-        ***REMOVED*** instead (B, C, D). So a device that arrived with a trip-unit family
-        ***REMOVED*** is an MCCB whatever its rating — a 30 A TM device on this schedule is
-        ***REMOVED*** a Compact NS100, not an Acti9 MCB.
+        # TM and LI are MCCB trip-unit families; an MCB has a curve letter
+        # instead (B, C, D). So a device that arrived with a trip-unit family
+        # is an MCCB whatever its rating — a 30 A TM device on this schedule is
+        # a Compact NS100, not an Acti9 MCB.
         kind = "mccb" if (trip or "TM") in TRIP_FAMILIES else "mcb"
         pn["prot"] = {
             "kind": kind,
-            "ir": ib,                                  ***REMOVED*** the rating it protects at
-            "frame": frame or None,                    ***REMOVED*** the frame it sits in
-            "icu": None,                               ***REMOVED*** sheet column is blank
+            "ir": ib,                                  # the rating it protects at
+            "frame": frame or None,                    # the frame it sits in
+            "icu": None,                               # sheet column is blank
             "trip": trip or None,
             "poles": 2 if str(pn.get("phases")) == "1" else 4,
             "aux": "",

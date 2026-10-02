@@ -25,7 +25,7 @@ def letter(i):
 
 def unesc(t):
     for a, b in [('&lt;', '<'), ('&gt;', '>'), ('&quot;', '"'),
-                 ('&apos;', "'"), ('&***REMOVED***10;', ' '), ('&amp;', '&')]:
+                 ('&apos;', "'"), ('&#10;', ' '), ('&amp;', '&')]:
         t = t.replace(a, b)
     return t
 
@@ -40,8 +40,8 @@ def read(path, sheet='xl/worksheets/sheet1.xml'):
 
     sh = z.read(sheet).decode('utf8', 'replace')
 
-    ***REMOVED*** a cell is either <c .../> or <c ...>...</c>; find the tag head without
-    ***REMOVED*** letting [^>]* swallow a trailing slash
+    # a cell is either <c .../> or <c ...>...</c>; find the tag head without
+    # letting [^>]* swallow a trailing slash
     cell = re.compile(r'<c\s+r="([A-Z]+)(\d+)"((?:[^>"]|"[^"]*")*?)(/>|>)', re.S)
     grid, cur_r, pos = {}, None, 0
     for m in cell.finditer(sh):
@@ -49,7 +49,7 @@ def read(path, sheet='xl/worksheets/sheet1.xml'):
         if close == '/>':
             grid[(rown, colidx(col))] = ''
             continue
-        ***REMOVED*** body runs to the matching </c>
+        # body runs to the matching </c>
         end = sh.find('</c>', m.end())
         body = sh[m.end():end]
         v = re.search(r'<v>(.*?)</v>', body, re.S)
@@ -63,7 +63,7 @@ def read(path, sheet='xl/worksheets/sheet1.xml'):
                 val = ss[int(val)]
         grid[(rown, colidx(col))] = val
 
-    ***REMOVED*** sheet-level dimension / workbook sheet names
+    # sheet-level dimension / workbook sheet names
     names = []
     try:
         wb = z.read('xl/workbook.xml').decode('utf8', 'replace')

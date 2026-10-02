@@ -1,0 +1,57 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>underlay io test</title></head>
+<body><pre id="o">…</pre>
+<script src="../js/data.js"></script>
+<script src="../js/dxf.js"></script>
+<script src="../js/underlay.js"></script>
+<script>
+(async function () {
+  var out = {};
+  var dwg = new Uint8Array([65,67,49,48,50,54,13,10,0,0,0,0]);
+  out.dwgOnArrayBuffer = UNDERLAY.isDwg(dwg.buffer);
+  out.dwgOnUint8Array = UNDERLAY.isDwg(dwg);
+  out.dxfNotOnDwg = UNDERLAY.isDxfText('AC1026\r\n');
+
+  var f = new File([dwg], 'site-plan.dwg', { type: 'application/octet-stream' });
+  try { await UNDERLAY.load(f); out.rejected = false; }
+  catch (e) { out.rejected = true; out.code = e.code; out.told = /export a DXF/i.test(e.message); }
+
+  var f2 = new File(['hello world, not a drawing'], 'notes.txt', { type: 'text/plain' });
+  try { await UNDERLAY.load(f2); out.rejectedText = false; }
+  catch (e) { out.rejectedText = true; out.codeText = e.code; }
+
+  // a real DXF still loads
+  var dxfTxt = await (await fetch('fixture.dxf')).text();
+  var real = await UNDERLAY.load(new File([dxfTxt], 'fixture.dxf', { type: 'application/dxf' }));
+  out.dxfLoads = { kind: real.kind, entities: real.geo.entities.length, unit: real.geo.unitName };
+  out.dxfDetected = UNDERLAY.isDxfText(dxfTxt);
+
+  out.scales = {
+    mm: UNDERLAY.parseScale('5mm', 100),
+    m: UNDERLAY.parseScale('1 m', 100),
+    num: UNDERLAY.parseScale('0.001', 100),
+    bad: UNDERLAY.parseScale('nonsense', 100),
+    ratioReturnsNull: UNDERLAY.parseScale('1:100', 100)
+  };
+
+  // a tiny PNG as an image underlay
+  var png = 'iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mP8z8BQz0AEYBxVSF+FABJADveWkH6oAAAAAElFTkSuQmCC';
+  var bin = atob(png);
+  var arr = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  try {
+    var img = await UNDERLAY.load(new File([arr], 'plan.png', { type: 'image/png' }));
+    out.image = { kind: img.kind, w: img.w, h: img.h, hasImg: !!img.img };
+  } catch (e) { out.image = 'ERR ' + e.message; }
+
+  out.fit = (function () {
+    var p = LS.newProject({ site: { w: 40, h: 20 } });
+    var u = { kind: 'dxf', geo: { minX: 10, minY: 20, maxX: 1010, maxY: 2020, width: 1000, height: 2000 } };
+    UNDERLAY.attach(p, u);
+    return { scale: u.scale, ox: u.ox, oy: u.oy };
+  })();
+
+  window.__U = out;
+  document.getElementById('o').textContent = JSON.stringify(out, null, 1);
+})();
+</script></body></html>

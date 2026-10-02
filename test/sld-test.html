@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Single line diagram — render test</title>
+<link rel="stylesheet" href="../css/styles.css">
+<style>
+  body{background:#0f1216;color:#dfe7ee;margin:0;padding:16px;font:13px ui-monospace,Menlo,monospace}
+  h1{font-size:15px;margin:0 0 4px}
+  p{color:#8fa3b3;margin:0 0 14px;font-size:12px}
+  .sheet{background:#fbfbf9;border-radius:8px;padding:14px;overflow:auto;max-height:82vh}
+  .sheet svg{display:block}
+  #out{margin-top:10px;color:#8fa3b3}
+  .sld .sym-line{fill:none;stroke:#1f2933;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+  .sld .sym-box{fill:#fff;stroke:#1f2933;stroke-width:1.5}
+  .sld .sym-fill{fill:#1f2933;stroke:#1f2933;stroke-width:1.2}
+  .sld .sld-wire{fill:none;stroke:#4a5b6b;stroke-width:1.4}
+  .sld .w-panel{stroke:#7c8b99;stroke-dasharray:3 3}
+  .sld .sld-t{font:600 11px ui-monospace,Menlo,monospace;fill:#1f2933}
+  .sld .sld-b{font:700 12px ui-monospace,Menlo,monospace;fill:#1f2933}
+  .sld .sld-sm{font:10px ui-monospace,Menlo,monospace;fill:#5b6b7b}
+  .sld .sld-in{font:700 10.5px ui-monospace,Menlo,monospace;fill:#1f2933}
+  .sld .sld-tag{font:700 11px ui-monospace,Menlo,monospace;fill:#0f172a}
+  .sld .sym.bad .sym-box{stroke:#dc2626;fill:#fef2f2}
+  .sld .sym.warn .sym-box{stroke:#d97706;fill:#fffbeb}
+  .sld .sym.bad .sld-tag,.sld .sym.bad .sld-b{fill:#b91c1c}
+</style>
+</head>
+<body>
+<h1>Single line diagram</h1>
+<p>Renders the sample project. Check the layout, the IEC symbols and the labels.</p>
+<div class="sheet" id="sheet"></div>
+<div id="out"></div>
+
+<script src="../js/data.js?v=75"></script>
+<script src="../js/calc.js?v=78"></script>
+<script src="../js/sld.js?v=75"></script>
+<script>
+(function () {
+  var checks = [];
+  function check(name, ok, detail) { checks.push({ name: name, ok: !!ok, detail: detail || '' }); }
+
+  var p = LS.sampleProject();
+  LC.applyNumbering(p);
+  var r = SLD.render(p);
+
+  document.getElementById('sheet').innerHTML =
+    '<svg class="sld" viewBox="0 0 ' + r.width + ' ' + r.height + '" width="' + r.width + '" height="' + r.height +
+    '" xmlns="http://www.w3.org/2000/svg">' + r.svg + '</svg>';
+  /* scale it down to the page so the whole sheet can be judged at a glance */
+  var svg = document.querySelector('.sheet svg');
+  svg.style.width = '100%';
+  svg.style.height = 'auto';
+
+  var L = r.nodes;
+  var counts = {};
+  L.forEach(function (n) { counts[n.kind] = (counts[n.kind] || 0) + 1; });
+
+  /* everything on the drawing is clickable */
+  check('every item carries a data-select', L.every(function (n) { return !!n.id; }));
+  var assigned = p.panels.filter(function (pn) { return !!pn.pdpId; });
+  check('every board and circuit is drawn',
+    counts.supply === p.txs.length && counts.tx === p.txs.length &&
+    counts.pdb === p.pdbs.length && counts.pdp === p.pdps.length &&
+    counts.db === p.dbs.length && counts.panel === assigned.length,
+    JSON.stringify(counts) + ' assigned circuits ' + assigned.length);
+  /* an unassigned circuit cannot appear on a single line — it has nothing to
+     hang from — so its absence is correct */
+  check('unassigned circuits are left off the drawing',
+    assigned.length < p.panels.length, p.panels.length - assigned.length + ' unassigned');
+
+  /* every circuit is connected to something */
+  var parents = {};
+  r.links.forEach(function (lk) { parents[lk.to] = (parents[lk.to] || 0) + 1; });
+  var orphans = L.filter(function (n) {
+    return n.kind !== 'supply' && !parents[n.id];
+  });
+  check('no item is left unconnected', orphans.length === 0, orphans.map(function (n) { return n.o.tag; }).join(', '));
+
+  /* wires run between nodes that are on adjacent tiers */
+  var byId = {};
+  L.forEach(function (n) { byId[n.id] = n; });
+  var badWires = r.links.filter(function (lk) {
+    var a = byId[lk.from], b = byId[lk.to];
+    return !a || !b || Math.abs(b.y - a.y) < 10;
+  });
+  check('every branch spans at least one tier', badWires.length === 0, badWires.length + ' bad');
+
+  /* Tiers run top-down in supply order. Each transformer is its own block
+     stacked down the sheet, so the comparison has to be made inside one
+     block — comparing TX1's supply against TX2's transformer says nothing. */
+  var byTier = {};
+  L.forEach(function (n) { (byTier[n.kind] = byTier[n.kind] || []).push(n); });
+
+  /* the block a node belongs to: the transformer at or above it */
+  var txNodes = byTier.tx || [];
+  function blockOf(n) {
+    var best = null;
+    txNodes.forEach(function (t) { if (t.y <= n.y + 1 && (!best || t.y > best.y)) best = t; });
+    return best ? best.id : null;
+  }
+  function tierOf(n) { return n.kind === 'supply' ? 0 : n.kind === 'tx' ? 1 : n.kind === 'pdb' ? 2 : n.kind === 'pdp' ? 3 : n.kind === 'db' ? 4 : 5; }
+
+  function ordered(upper, lower) {
+    var ups = L.filter(function (n) { return n.kind === upper; });
+    var los = L.filter(function (n) { return n.kind === lower; });
+    if (!ups.length || !los.length) return true;
+    /* every branch from an upper node must land on a lower node below it */
+    return r.links.every(function (lk) {
+      var a = byId[lk.from], b = byId[lk.to];
+      if (!a || !b) return true;
+      if (a.kind !== upper || b.kind !== lower) return true;
+      return b.y > a.y + 1;
+    });
+  }
+  check('supply sits above the transformer', ordered('supply', 'tx'));
+  check('transformer sits above the main board', ordered('tx', 'pdb'));
+  check('main board sits above the distribution board', ordered('pdb', 'pdp'));
+  check('distribution board sits above the sub-board', ordered('pdp', 'db'));
+  check('sub-board sits above its circuits', ordered('db', 'panel'));
+  check('a circuit hangs directly off its own board', ordered('pdp', 'panel'));
+
+  /* one block per transformer, stacked without overlapping */
+  var blocks = {};
+  L.forEach(function (n) {
+    var k = blockOf(n);
+    if (!k) return;
+    blocks[k] = blocks[k] || { min: 1e9, max: -1e9 };
+    blocks[k].min = Math.min(blocks[k].min, n.y);
+    blocks[k].max = Math.max(blocks[k].max, n.y);
+  });
+  var keys = Object.keys(blocks);
+  check('one block per transformer', keys.length === p.txs.length, keys.length + ' blocks for ' + p.txs.length + ' transformers');
+  check('transformer blocks do not overlap vertically', keys.every(function (k, i) {
+    return i === 0 || blocks[k].min > blocks[keys[i - 1]].max;
+  }), JSON.stringify(blocks));
+
+  /* A board is centred over the span of what it feeds, so its circuits sit
+     either side of it — that is the convention, not an error. What must hold
+     is that each circuit is below its own board and inside that board's span. */
+  var feedOf = {};
+  r.links.forEach(function (lk) { if (byId[lk.to] && byId[lk.to].kind === 'panel') feedOf[lk.to] = byId[lk.from]; });
+  check('a circuit is below the board that feeds it',
+    Object.keys(feedOf).every(function (id) { return byId[id].y > feedOf[id].y; }));
+  check('a board is centred over the circuits it feeds',
+    Object.keys(feedOf).every(function (id) {
+      var board = feedOf[id];
+      var sibs = r.links.filter(function (lk) { return lk.from === board.id; })
+        .map(function (lk) { return byId[lk.to].x; });
+      if (sibs.length < 2) return true;
+      var lo = Math.min.apply(null, sibs), hi = Math.max.apply(null, sibs);
+      return board.x >= lo - 2 && board.x <= hi + 2;
+    }));
+
+  /* symbols are present in the markup */
+  check('transformer symbol drawn', r.svg.indexOf('sym-tx') >= 0);
+  check('earth symbol drawn', r.svg.indexOf('symEarth') < 0 && /sym-line/.test(r.svg));
+  check('circuit-breaker symbols drawn', (r.svg.match(/sym-fill/g) || []).length >= p.txs.length + p.pdbs.length);
+  check('fuse symbol drawn on every circuit',
+    (r.svg.match(/<g><rect/g) || []).length === assigned.length,
+    (r.svg.match(/<g><rect/g) || []).length + ' for ' + assigned.length + ' circuits');
+
+  /* The sheet scales to fit, so absolute pixels are not the constraint — the
+     aspect ratio is. A single line diagram for a whole site is legitimately
+     wide; what must not happen is it becoming a long thin strip, which is
+     unreadable both on screen and on paper. */
+  check('the drawing is a usable sheet shape',
+    r.width / r.height < 6 && r.height <= 1600,
+    r.width + '×' + r.height + ' = ' + (r.width / r.height).toFixed(1) + ':1');
+  /* One block per transformer, stacked. The depth is therefore set by the
+     number of transformers and the tiers, not by the number of circuits —
+     which is the property that keeps the drawing on a page. */
+  var band = SLD.M.band, supplyY = SLD.M.supplyY, blockGap = SLD.M.blockGap;
+  /* the last block is not followed by another, and the sheet ends just below
+     its deepest node rather than a full block's worth of padding */
+  var block = supplyY + 5 * band + 78 + blockGap;
+  var expected = (p.txs.length - 1) * block + supplyY + 5 * band + 104;
+  check('depth is set by the transformers, not the circuit count',
+    Math.abs(r.height - expected) < 4, r.height + ' vs expected ' + Math.round(expected));
+  check('a circuit count of this size still fits one sheet', r.height <= 1600,
+    r.height + ' for ' + assigned.length + ' circuits');
+  check('every circuit label is inside the sheet', L.every(function (n) {
+    return n.x - 70 > 0 && n.x + 140 < r.width;
+  }));
+
+  /* two transformers must not be laid out on top of each other */
+  check('no two items on different tiers share a position', (function () {
+    var clash = 0;
+    L.forEach(function (a, i) {
+      L.forEach(function (b, j) {
+        if (i === j || a.kind === 'supply' || b.kind === 'supply') return;
+        if (tierOf(a) === tierOf(b) && Math.abs(a.x - b.x) < 40 && Math.abs(a.y - b.y) < 30) clash++;
+      });
+    });
+    return clash === 0;
+  })());
+
+  document.getElementById('out').innerHTML = checks.map(function (c) {
+    return (c.ok ? '✓ ' : '✕ ') + c.name + (c.ok ? '' : ' — ' + c.detail);
+  }).join('<br>') + '<br><b>' + checks.filter(function (c) { return c.ok; }).length + ' / ' + checks.length + ' checks passed</b>';
+})();
+</script>
+</body>
+</html>

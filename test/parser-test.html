@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>DXF parser — regression test</title>
+<style>
+  body{font:13px/1.6 ui-monospace,Menlo,monospace;background:#0f1216;color:#dfe7ee;padding:20px;margin:0}
+  h1{font-size:16px;margin:0 0 4px}
+  p.sub{color:#8fa3b3;margin:0 0 16px;font-size:12px}
+  .case{margin:8px 0;padding:8px 10px;border-radius:6px;background:#151a20;border-left:3px solid #3a4855}
+  .pass{border-left-color:#22c55e}
+  .fail{border-left-color:#ef4444;background:#2a1414}
+  .name{font-weight:700}
+  .fail .name{color:#fca5a5}
+  .detail{color:#8fa3b3;font-size:12px;margin-top:2px}
+  #summary{margin-top:16px;padding:10px;border-radius:8px;font-weight:700}
+</style>
+</head>
+<body>
+<h1>DXF parser regression test</h1>
+<p class="sub">Runs the parser against a synthetic DXF with known geometry and checks the results.</p>
+<div id="cases"></div>
+<div id="summary">running…</div>
+
+<script src="../js/dxf.js"></script>
+<script>
+(function () {
+  var results = [];
+  function check(name, got, want, cmp) {
+    var ok = cmp ? cmp(got, want) : JSON.stringify(got) === JSON.stringify(want);
+    results.push({ name: name, ok: ok, got: got, want: want });
+    return ok;
+  }
+  function g(c, v) { return c + '\n' + v + '\n'; }
+  function section(body) { return g(0, 'SECTION') + g(2, 'ENTITIES') + body + g(0, 'ENDSEC') + g(0, 'EOF'); }
+  function near(a, b, tol) { return Math.abs(a - b) <= (tol === undefined ? 1e-6 : tol); }
+  function nearArr(a, b, tol) {
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) if (!near(a[i], b[i], tol)) return false;
+    return true;
+  }
+
+  /* --- 1. a plain LINE ------------------------------------------------- */
+  var r1 = DXF.parse(section(g(0, 'LINE') + g(8, 'W') + g(10, 10) + g(20, 20) + g(11, 110) + g(21, 220)));
+  var l1 = r1.entities.filter(function (e) { return e.type === 'poly'; })[0];
+  check('LINE → one 2-point polyline', l1 ? l1.pts.length / 2 : 0, 2);
+  check('LINE coordinates', l1 ? l1.pts.slice(0, 2) : null, [10, 20], nearArr);
+
+  /* --- 2. closed LWPOLYLINE -------------------------------------------- */
+  var lwp = g(0, 'LWPOLYLINE') + g(8, 'W') + g(90, 4) + g(70, 1) +
+            g(10, 0) + g(20, 0) + g(42, 0) + g(10, 100) + g(20, 0) + g(42, 0) +
+            g(10, 100) + g(20, 50) + g(42, 0) + g(10, 0) + g(20, 50) + g(42, 0);
+  var r2 = DXF.parse(section(lwp));
+  var p2 = r2.entities.filter(function (e) { return e.type === 'poly'; })[0];
+  check('LWPOLYLINE closed flag', p2 ? p2.closed : null, true);
+  check('LWPOLYLINE has 5 points (4 + closing)', p2 ? p2.pts.length / 2 : 0, 5);
+  check('LWPOLYLINE returns to start', p2 ? [p2.pts[0], p2.pts[1]] : null, [0, 0], nearArr);
+
+  /* --- 3. bulge arc ---------------------------------------------------- */
+  /* Segment (1000,1000) -> (0,1000) with bulge 0.5.
+     theta = 4*atan(0.5) = 1.8546;  r = 1000/(2*sin(theta/2)) = 625
+     Centre is on the normal to the chord, offset by h = sqrt(625^2-500^2) = 375.
+     A positive bulge sweeps counter-clockwise, which puts the centre below
+     the chord at (500, 625); the arc therefore rises above y=1000. */
+  var bul = g(0, 'LWPOLYLINE') + g(8, 'W') + g(90, 4) + g(70, 1) +
+            g(10, 0) + g(20, 0) + g(42, 0) + g(10, 1000) + g(20, 0) + g(42, 0) +
+            g(10, 1000) + g(20, 1000) + g(42, 0.5) + g(10, 0) + g(20, 1000) + g(42, 0);
+  var r3 = DXF.parse(section(bul));
+  var p3 = r3.entities.filter(function (e) { return e.type === 'poly'; })[0];
+  var n3 = p3 ? p3.pts.length / 2 : 0;
+  check('bulge segment is tessellated (>4 points)', n3 > 4, true);
+  /* points 0 and 1 are the straight edges; the arc runs point 2 .. n-2 */
+  var radii = [];
+  if (p3) for (var i = 4; i + 1 < p3.pts.length - 2; i += 2) {
+    radii.push(Math.hypot(p3.pts[i] - 500, p3.pts[i + 1] - 625));
+  }
+  check('bulge arc lies on a circle of r=625 about (500,625)',
+        radii.length > 0 && radii.every(function (r) { return near(r, 625, 1.5); }), true);
+  check('bulge arc bulges outward (y > 1000)',
+        p3 ? p3.pts.slice(5, -1).some(function (v, k) { return k % 2 === 0 && v > 1000; }) : false, true);
+  check('bulge endpoints preserved',
+        p3 ? [near(p3.pts[4], 1000, 0.01), near(p3.pts[5], 1000, 0.01),
+              near(p3.pts[p3.pts.length - 4], 0, 0.01), near(p3.pts[p3.pts.length - 3], 1000, 0.01)]
+           : null, [true, true, true, true]);
+
+  /* --- 4. ARC / CIRCLE ------------------------------------------------- */
+  var r4 = DXF.parse(section(g(0, 'ARC') + g(8, 'W') + g(10, 0) + g(20, 0) + g(40, 100) + g(50, 0) + g(51, 90)));
+  var a4 = r4.entities.filter(function (e) { return e.type === 'poly'; })[0];
+  var arcN = a4 ? a4.pts.length / 2 : 0;
+  check('ARC quarter circle is tessellated', arcN >= 4 && arcN <= 64, true);
+  check('ARC radius correct', a4 ? near(Math.hypot(a4.pts[0], a4.pts[1]), 100, 0.01) : false, true);
+  check('ARC ends at 90 degrees', a4 ? near(a4.pts[a4.pts.length - 2], 0, 0.5) && near(a4.pts[a4.pts.length - 1], 100, 0.5) : false, true);
+  var r5 = DXF.parse(section(g(0, 'CIRCLE') + g(8, 'W') + g(10, 0) + g(20, 0) + g(40, 50)));
+  var c5 = r5.entities.filter(function (e) { return e.type === 'poly'; })[0];
+  check('CIRCLE is closed', c5 ? c5.closed : null, true);
+  check('CIRCLE radius correct', c5 ? near(Math.hypot(c5.pts[0], c5.pts[1]), 50, 0.01) : false, true);
+
+  /* --- 5. old-style POLYLINE + VERTEX + SEQEND -------------------------- */
+  var old = g(0, 'POLYLINE') + g(8, 'W') + g(70, 1) + g(10, 0) + g(20, 0);
+  [[0, 0], [100, 0], [100, 100]].forEach(function (v) { old += g(0, 'VERTEX') + g(8, 'W') + g(10, v[0]) + g(20, v[1]); });
+  old += g(0, 'SEQEND');
+  var r6 = DXF.parse(section(old));
+  var p6 = r6.entities.filter(function (e) { return e.type === 'poly'; })[0];
+  check('POLYLINE stitches VERTEX entities', p6 ? p6.pts.length / 2 : 0, 4);
+  check('POLYLINE closed flag honoured', p6 ? p6.closed : null, true);
+  check('POLYLINE not reported as skipped', r6.stats.skipped.POLYLINE !== undefined, false);
+
+  /* --- 6. INSERT with a block, scaled and rotated ----------------------- */
+  var blocks = g(0, 'SECTION') + g(2, 'BLOCKS') +
+    g(0, 'BLOCK') + g(8, 'W') + g(2, 'DOOR') + g(70, 0) + g(10, 0) + g(20, 0) +
+    g(0, 'LINE') + g(8, 'W') + g(10, 0) + g(20, 0) + g(11, 10) + g(21, 0) +
+    g(0, 'ENDBLK') + g(0, 'ENDSEC');
+  var r7 = DXF.parse(blocks + g(0, 'SECTION') + g(2, 'ENTITIES') +
+    g(0, 'INSERT') + g(8, 'W') + g(2, 'DOOR') + g(10, 100) + g(20, 100) + g(41, 2) + g(42, 2) + g(50, 0) +
+    g(0, 'ENDSEC') + g(0, 'EOF'));
+  var ins = r7.entities.filter(function (e) { return e.type === 'poly'; })[0];
+  check('INSERT expands its block', !!ins, true);
+  check('INSERT applies scale', ins ? nearArr([ins.pts[0], ins.pts[1], ins.pts[2], ins.pts[3]], [100, 100, 120, 100], 1e-6) : false, true);
+
+  /* --- 7. TEXT / MTEXT ------------------------------------------------- */
+  var r8 = DXF.parse(section(
+    g(0, 'TEXT') + g(8, 'T') + g(10, 0) + g(20, 0) + g(40, 2.5) + g(1, 'PLANT') +
+    g(0, 'MTEXT') + g(8, 'T') + g(10, 0) + g(20, 5) + g(40, 2.5) + g(1, '{\\fArial|b0;ROOM}\\P12.5')
+  ));
+  var tx = r8.entities.filter(function (e) { return e.type === 'text'; });
+  check('TEXT extracted', tx.length, 2);
+  check('TEXT content', tx[0] ? tx[0].s : null, 'PLANT');
+  check('MTEXT formatting codes stripped', tx[1] ? tx[1].s : null, 'ROOM 12.5');
+
+  /* --- 8. units --------------------------------------------------------- */
+  function withUnits(code) {
+    return g(0, 'SECTION') + g(2, 'HEADER') + g(9, '$INSUNITS') + g(70, code) + g(0, 'ENDSEC') +
+      section(g(0, 'LINE') + g(8, 'W') + g(10, 0) + g(20, 0) + g(11, 1) + g(21, 1));
+  }
+  check('millimetres → 0.001 m/unit', DXF.parse(withUnits(4)).metresPerUnit, 0.001);
+  check('metres → 1 m/unit', DXF.parse(withUnits(6)).metresPerUnit, 1);
+  check('inches → 0.0254 m/unit', DXF.parse(withUnits(1)).metresPerUnit, 0.0254);
+  check('unitless drawing warns', DXF.parse(withUnits(0)).warnings.length > 0, true);
+
+  /* --- 9. layers -------------------------------------------------------- */
+  var lay = g(0, 'SECTION') + g(2, 'TABLES') + g(0, 'TABLE') + g(2, 'LAYER') + g(70, 2) +
+    g(0, 'LAYER') + g(2, 'WALLS') + g(70, 0) + g(62, 7) +
+    g(0, 'LAYER') + g(2, 'DIMENSIONS') + g(70, 0) + g(62, 1) +
+    g(0, 'ENDTAB') + g(0, 'ENDSEC');
+  var r9 = DXF.parse(lay + section(g(0, 'LINE') + g(8, 'WALLS') + g(10, 0) + g(20, 0) + g(11, 5) + g(21, 5)));
+  check('layers discovered from the layer table', r9.layers.sort(), ['DIMENSIONS', 'WALLS']);
+  check('noisy layer hidden by default', r9.layersOff.DIMENSIONS, true);
+  check('drawing layer visible by default', r9.layersOff.WALLS, false);
+
+  /* --- 10. unsupported entities are counted, not fatal ------------------- */
+  var r10 = DXF.parse(section(g(0, 'LINE') + g(8, 'W') + g(10, 0) + g(20, 0) + g(11, 1) + g(21, 1) +
+                                   g(0, 'DIMENSION') + g(8, 'D') + g(10, 0) + g(20, 0)));
+  check('unsupported entity counted', r10.stats.skipped.DIMENSION, 1);
+  check('supported entity still drawn', r10.entities.length, 1);
+
+  /* --- 11. malformed input must not throw -------------------------------- */
+  var threw = false, res = null;
+  try { res = DXF.parse('garbage\nnot a dxf\nat all\n'); } catch (e) { threw = true; }
+  check('garbage input does not throw', threw, false);
+  check('garbage input yields no entities', res ? res.entities.length : -1, 0);
+  threw = false;
+  try { res = DXF.parse(''); } catch (e) { threw = true; }
+  check('empty input does not throw', threw, false);
+  threw = false;
+  try { res = DXF.parse(g(0, 'SECTION') + g(2, 'ENTITIES') + g(0, 'LWPOLYLINE') + g(8, 'W') + g(90, 4) + g(0, 'ENDSEC') + g(0, 'EOF')); } catch (e) { threw = true; }
+  check('truncated LWPOLYLINE does not throw', threw, false);
+
+  /* --- render --------------------------------------------------------- */
+  var host = document.getElementById('cases');
+  results.forEach(function (r) {
+    var d = document.createElement('div');
+    d.className = 'case ' + (r.ok ? 'pass' : 'fail');
+    d.innerHTML = '<div class="name">' + (r.ok ? '✓ ' : '✕ ') + r.name + '</div>' +
+      (r.ok ? '' : '<div class="detail">got ' + JSON.stringify(r.got) + ' — expected ' + JSON.stringify(r.want) + '</div>');
+    host.appendChild(d);
+  });
+  var failed = results.filter(function (r) { return !r.ok; }).length;
+  var sum = document.getElementById('summary');
+  sum.textContent = (results.length - failed) + ' / ' + results.length + ' checks passed';
+  sum.style.background = failed ? '#3b1414' : '#0d3320';
+  sum.style.color = failed ? '#fca5a5' : '#86efac';
+  window.__TEST = { total: results.length, failed: failed, results: results };
+})();
+</script>
+</body>
+</html>

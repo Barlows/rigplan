@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Protective devices — tests</title>
+<style>
+  body{font:13px/1.6 ui-monospace,Menlo,monospace;background:#0f1216;color:#dfe7ee;padding:20px;margin:0}
+  h1{font-size:16px;margin:0 0 4px}
+  p.sub{color:#8fa3b3;margin:0 0 16px;font-size:12px}
+  .case{margin:6px 0;padding:7px 10px;border-radius:6px;background:#151a20;border-left:3px solid #3a4855}
+  .pass{border-left-color:#22c55e}
+  .fail{border-left-color:#ef4444;background:#2a1414}
+  .name{font-weight:700}
+  .fail .name{color:#fca5a5}
+  .detail{color:#8fa3b3;font-size:12px;margin-top:2px}
+  #summary{margin-top:16px;padding:10px;border-radius:8px;font-weight:700}
+</style>
+</head>
+<body>
+<h1>Protective devices</h1>
+<p class="sub">
+  Every supply gets a device. Main boards and distribution boards take an MCCB,
+  sub-boards an MCB, final circuits an MCB below 160 A. Three things are checked
+  separately because they fail separately: the breaking capacity against the
+  fault level, the setting against the load, and the setting against the cable
+  the device protects.
+</p>
+<div id="cases"></div>
+<div id="summary">running…</div>
+
+<script src="../js/data.js?v=78"></script>
+<script src="../js/calc.js?v=78"></script>
+<script>
+(function () {
+  var results = [];
+  function check(name, got, want) {
+    results.push({ name: name, ok: JSON.stringify(got) === JSON.stringify(want), got: got, want: want });
+  }
+  function near(a, b, tol) { return Math.abs(a - b) <= (tol === undefined ? 0.51 : tol); }
+  function P() { var p = LS.newProject({ site: { w: 60, h: 40 } }); p.dbs = []; return p; }
+
+  /* one transformer, one main board, one distribution board, one sub-board */
+  function site(opts) {
+    opts = opts || {};
+    var p = P();
+    /* `opts.kva || 1000` would turn a deliberate zero into 1000, so the
+       kVA is checked for undefined rather than being defaulted with || */
+    var kva = opts.kva === undefined ? 1000 : opts.kva;
+    var tx = LS.newTx({ kva: kva, impZ: opts.impZ === undefined ? 6 : opts.impZ, pos: { x: 5, y: 30 } });
+    p.txs.push(tx);
+    var pdb = LS.newPdb({ txId: tx.id, incomerA: opts.pdbA || 2500, pos: { x: 10, y: 30 } }); p.pdbs.push(pdb);
+    var pdp = LS.newPdp({ pdbId: pdb.id, incomerA: opts.pdpA || 1000, spareWays: 20, ways: 36, pos: { x: 20, y: 30 } }); p.pdps.push(pdp);
+    var db = LS.newDb({ pdpId: pdp.id, incomerA: opts.dbA || 125, ways: 36, pos: { x: 26, y: 30 } }); p.dbs.push(db);
+    LC.applyNumbering(p);
+    return { p: p, tx: tx, pdb: pdb, pdp: pdp, db: db };
+  }
+  function load(p, board, kw, pf) {
+    var pn = LS.newPanel({ tag: 'L-' + (p.panels.length + 1), kw: kw, pf: pf || 0.9, pdpId: board.id, autoAssign: false });
+    pn.__kind = 'panel';
+    p.panels.push(pn);
+    return pn;
+  }
+  function titles(p, needle) {
+    return LC.audit(p).filter(function (i) { return i.title.indexOf(needle) >= 0; }).map(function (i) { return i.level + '|' + i.title; });
+  }
+  function count(p, needle) { return titles(p, needle).length; }
+
+  /* ------------------------------------------------------- fault levels ---- */
+  /* A 1,000 kVA transformer at 6% has a short-circuit power of 16.7 MVA, which
+     at 415 V is 23.2 kA. Reading the rating as the fault power would give
+     1.4 kA — wrong by a factor of about 17. */
+  var f1 = site({ kva: 1000, impZ: 6 });
+  check('fault level at the terminals comes from the impedance',
+    near(LC.txFaultKA(f1.p, f1.tx), 23.2, 0.3), true);
+  var f2t = site({ kva: 3150, impZ: 6 });
+  check('a 3,150 kVA transformer at 6% is about 73 kA',
+    near(LC.txFaultKA(f2t.p, f2t.tx), 73.0, 0.5), true);
+  check('a lower impedance gives a higher fault level',
+    LC.txFaultKA(site({ kva: 1000, impZ: 4 }).p, site({ kva: 1000, impZ: 4 }).tx) > LC.txFaultKA(site({ kva: 1000, impZ: 10 }).p, site({ kva: 1000, impZ: 10 }).tx), true);
+  check('the level falls as it goes down the chain',
+    LC.faultAt(f1.p, f1.pdb, 'pdb') > LC.faultAt(f1.p, f1.pdp, 'pdp') &&
+    LC.faultAt(f1.p, f1.pdp, 'pdp') > LC.faultAt(f1.p, f1.db, 'db'), true);
+  var f0 = site({ kva: 0 });
+  check('a transformer with no rating has no fault level',
+    LC.txFaultKA(f0.p, f0.tx), null);
+
+  /* ------------------------------------------------------------ proposals -- */
+  var f2 = site();
+  load(f2.p, f2.pdp, 300, 0.9);
+  var rPdb = LC.proposeProt(f2.p, f2.pdb, 'pdb');
+  var rPdp = LC.proposeProt(f2.p, f2.pdp, 'pdp');
+  check('a main board gets an MCCB', rPdb.device.kind, 'mccb');
+  check('a distribution board gets an MCCB', rPdp.device.kind, 'mccb');
+  check('the device is set above the load', rPdp.device.ir >= LC.boardStats(f2.p, f2.pdp, 'pdp').amp, true);
+  check('and below the board it protects', rPdp.device.ir <= f2.pdp.incomerA, true);
+  check('breaking capacity exceeds the fault level', rPdp.device.icu >= LC.faultAt(f2.p, f2.pdp, 'pdp'), true);
+  check('a board with circuits below it gets a short-time stage', rPdp.device.trip, 'LS');
+  check('the frame can carry the setting', rPdp.device.frame >= rPdp.device.ir, true);
+
+  /* a 125 A sub-board is within MCB range */
+  var f3 = site({ dbA: 125 });
+  load(f3.p, f3.db, 20, 0.9);
+  var rDb = LC.proposeProt(f3.p, f3.db, 'db');
+  check('a 125 A sub-board gets an MCB', rDb.device.kind, 'mcb');
+  check('the MCB is at or below the largest that exists', rDb.device.ir <= LS.MCB_MAX_A, true);
+
+  /* a 250 A sub-board is not — and saying "MCCB" is the honest answer */
+  var f4 = site({ dbA: 250 });
+  load(f4.p, f4.db, 20, 0.9);
+  var rDb250 = LC.proposeProt(f4.p, f4.db, 'db');
+  check('a 250 A sub-board cannot be protected by an MCB', rDb250.device.kind, 'mccb');
+  check('and the reason is given', rDb250.why.indexOf('beyond any MCB') >= 0, true);
+  check('the note says what the alternative is',
+    /shunt trip/.test(rDb250.device.notes), true);
+
+  /* an empty board is sized on its rating, not on nothing */
+  var f5 = site({ dbA: 250 });
+  var rEmpty = LC.proposeProt(f5.p, f5.db, 'db');
+  check('an empty 250 A board still gets a device', rEmpty.device.ir, 250);
+
+  /* a small final circuit gets an MCB; a big one an MCCB */
+  var f6 = site();
+  var small = load(f6.p, f6.pdp, 5, 0.9);
+  var big = load(f6.p, f6.pdp, 400, 0.9);
+  check('a 5 kW circuit gets an MCB', LC.proposeProt(f6.p, small, 'panel').device.kind, 'mcb');
+  check('a 400 kW circuit gets an MCCB', LC.proposeProt(f6.p, big, 'panel').device.kind, 'mccb');
+
+  /* ------------------------------------------- keep what is already set ---- */
+  var f7 = site();
+  var given = load(f7.p, f7.pdp, 100, 0.9);
+  given.prot = LS.newProt({ kind: 'mccb', ir: 160, frame: 250, trip: 'LI', icu: null });
+  LC.applyProt(f7.p, given, 'panel', false);
+  check('an existing device is left alone', given.prot.ir, 160);
+  check('but its breaking capacity is filled in', given.prot.icu > 0, true);
+  var f8 = site();
+  var given2 = load(f8.p, f8.pdp, 100, 0.9);
+  given2.prot = LS.newProt({ kind: 'mccb', ir: 160, frame: 250, trip: 'LI' });
+  LC.applyProt(f8.p, given2, 'panel', true);
+  check('replace=true does overwrite it', given2.prot.ir !== 160, true);
+
+  /* --------------------------------------------------------- the audit ---- */
+  var a1 = site();
+  load(a1.p, a1.pdp, 300, 0.9);
+  check('a supply with no device is reported', count(a1.p, 'no protective device') > 0, true);
+
+  var a2 = site();
+  load(a2.p, a2.pdp, 100, 0.9);
+  a2.pdp.prot = LS.newProt({ kind: 'mccb', ir: 1000, frame: 1000, icu: 6, trip: 'LI' });
+  check('an Icu below the fault level is a fault',
+    titles(a2.p, 'breaking capacity below').length, 1);
+
+  var a3 = site();
+  load(a3.p, a3.pdp, 100, 0.9);
+  a3.pdp.prot = LS.newProt({ kind: 'mccb', ir: 10, frame: 1000, icu: 50, trip: 'LI' });
+  check('a setting below the load is a fault', titles(a3.p, 'set below its load').length, 1);
+
+  var a4 = site();
+  load(a4.p, a4.pdp, 100, 0.9);
+  a4.pdb.prot = LS.newProt({ kind: 'mccb', ir: 800, frame: 1000, icu: 50, trip: 'LI' });
+  a4.pdb.cable = { csa: 95, runs: 1, cores: 4, len: 5, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  check('a device larger than its cable is a fault', titles(a4.p, 'device too large for its cable').length, 1);
+
+  var a5 = site();
+  load(a5.p, a5.pdp, 100, 0.9);
+  a5.pdb.prot = LS.newProt({ kind: 'mccb', ir: 5000, frame: 5000, icu: 50, trip: 'LI' });
+  a5.pdb.cable = { csa: 500, runs: 8, cores: 4, len: 5, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  check('past what copper can carry, it says busbar rather than "bigger cable"',
+    titles(a5.p, 'above what a cable can carry').length, 1);
+
+  var a6 = site();
+  load(a6.p, a6.pdp, 100, 0.9);
+  a6.pdp.prot = LS.newProt({ kind: 'mcb', ir: 250, icu: 25, trip: 'C' });
+  check('an MCB above the largest that exists is a fault',
+    titles(a6.p, 'MCB rated above').length, 1);
+
+  var a7 = site();
+  var x = load(a7.p, a7.pdp, 100, 0.9);
+  x.prot = LS.newProt({ kind: 'mccb', ir: 400, frame: 250, icu: 50, trip: 'LI' });
+  check('a setting above its frame is a fault', titles(a7.p, 'set above its frame').length, 1);
+
+  /* ------------------------------------------------- cable follows device -- */
+  var c1 = site();
+  var cp = load(c1.p, c1.pdp, 100, 0.9);
+  cp.prot = LS.newProt({ kind: 'mccb', ir: 250, frame: 250, icu: 50, trip: 'LI' });
+  LC.sizeCableForPanel(c1.p, cp);
+  check('a circuit is sized on its device, not on its load',
+    LC.cableRating(cp.cable).derated >= 250, true);
+
+  var c2 = site();
+  load(c2.p, c2.pdp, 100, 0.9);
+  c2.pdp.prot = LS.newProt({ kind: 'mccb', ir: 1250, frame: 1250, icu: 50, trip: 'LI' });
+  LC.sizeCablesFor(c2.p, c2.pdp);
+  check('a distribution board feeder is sized on its device too',
+    LC.cableRating(c2.pdp.cable).derated >= 1250, true);
+
+  /* ------------------------------------------------------- everything at once */
+  var z = site();
+  for (var i = 1; i <= 6; i++) load(z.p, z.pdp, 30, 0.9);
+  var res = LC.protAll(z.p, {});
+  check('protAll sets a device on every supply — 3 boards and 6 circuits', res.count, 9);
+  check('and then nothing is left unproposed', count(z.p, 'no protective device'), 0);
+
+  var done = results.filter(function (r) { return r.ok; }).length;
+  document.getElementById('cases').innerHTML = results.map(function (r) {
+    return '<div class="case ' + (r.ok ? 'pass' : 'fail') + '"><div class="name">' +
+      (r.ok ? '✓ ' : '✕ ') + r.name + '</div>' +
+      (r.ok ? '' : '<div class="detail">got ' + JSON.stringify(r.got) + ' · want ' + JSON.stringify(r.want) + '</div>') +
+      '</div>';
+  }).join('');
+  document.getElementById('summary').textContent =
+    done + ' / ' + results.length + ' checks passed' + (done === results.length ? '' : ' — ' + (results.length - done) + ' FAILED');
+  document.getElementById('summary').style.background = done === results.length ? '#12301f' : '#3a1414';
+})();
+</script>
+</body>
+</html>

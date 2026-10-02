@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Load Schedule &amp; LV Distribution Plan — Electrical</title>
+<link rel="stylesheet" href="css/styles.css?v=78">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="bolt">⚡</span>
+    <div>
+      <div class="brand-t">Electrical Load Schedule Workbench</div>
+      <input id="projName" class="proj-name" placeholder="Untitled project">
+    </div>
+  </div>
+
+  <div class="topstats" id="topStats"></div>
+
+  <div class="actions">
+    <button class="btn" id="btnSample" title="Load a worked example project">Sample</button>
+    <button class="btn" id="btnClear" title="Start an empty project">Clear</button>
+    <button class="btn" id="btnJson">Export JSON</button>
+    <button class="btn" id="btnImport">Import JSON</button>
+    <button class="btn" id="btnCsv">Export CSV</button>
+    <button class="btn primary" id="btnPrint">Print report</button>
+    <input type="file" id="fileJson" accept=".json,application/json" hidden>
+  </div>
+</header>
+
+<main class="workbench">
+
+  <!-- ============ LEFT: supply hierarchy ============ -->
+  <aside class="col col-left">
+    <div class="panel-h">
+      <span>Supply hierarchy</span>
+      <div class="panel-h-actions">
+        <button class="mini" data-tree="collapse" title="Fold everything down to the transformers">⊟</button>
+        <button class="mini" data-tree="expand" title="Unfold the whole hierarchy">⊞</button>
+        <button class="mini" data-tree="invert" title="Invert: fold what is open, open what is folded">⇅</button>
+        <button class="mini" data-add="tx"   title="Add transformer">+ TX</button>
+        <button class="mini" data-add="pdb"  title="Add main LV board">+ PDB</button>
+        <button class="mini" data-add="pdp"  title="Add distribution board">+ PDP</button>
+      </div>
+    </div>
+    <div class="tree-scroll"><div id="tree" class="tree"></div></div>
+    <div class="legend" id="legend"></div>
+  </aside>
+
+  <!-- ============ CENTER: site plan ============ -->
+  <section class="col col-center">
+    <div class="plan-toolbar">
+      <div class="tb-group">
+        <span class="tb-label">Place</span>
+        <div class="seg" id="placeModes">
+          <button class="seg-btn" data-mode="none"   title="Select / move mode">↖ Select</button>
+          <button class="seg-btn" data-mode="panel" title="Click the plan to add a control panel">▣ Panel</button>
+          <button class="seg-btn" data-mode="pdp"    title="Click the plan to add a PDP">▤ PDP</button>
+          <button class="seg-btn" data-mode="pdb"    title="Click the plan to add a PDB">▥ PDB</button>
+          <button class="seg-btn" data-mode="tx"     title="Click the plan to add a TX">▨ TX</button>
+        </div>
+      </div>
+
+      <div class="tb-group">
+        <span class="tb-label">Grid</span>
+        <label class="fld mini-fld"><span>Snap</span>
+          <select id="snap">
+            <option value="0.25">0.25 m</option>
+            <option value="0.5">0.5 m</option>
+            <option value="1" selected>1 m</option>
+            <option value="2">2 m</option>
+            <option value="5">5 m</option>
+          </select>
+        </label>
+        <button class="btn sm" id="btnSite" title="Site size and board placement rules">Site…</button>
+      </div>
+
+      <div class="tb-group">
+        <span class="tb-label">View</span>
+        <div class="seg" id="viewToggles">
+          <button class="seg-btn on" data-view="cables"  title="Show supply cables">Cables</button>
+          <button class="seg-btn on" data-view="labels"  title="Show tags &amp; grid references">Labels</button>
+          <button class="seg-btn"    data-view="vectors" title="Show phase load vectors">Phases</button>
+        </div>
+        <div class="seg">
+          <button class="seg-btn" id="btnFit"  title="Fit plan to view">Fit</button>
+          <button class="seg-btn" id="btnZoomOut" title="Zoom out">−</button>
+          <button class="seg-btn" id="btnZoomIn"  title="Zoom in">+</button>
+        </div>
+        <button class="btn sm" id="btnMoreView" title="Grid references, imbalance flags and drawing text">…</button>
+      </div>
+
+      <div class="tb-group">
+        <span class="tb-label">Map</span>
+        <button class="btn sm" id="btnMap" title="Load a DXF drawing or a site photo as a background to design over">Load…</button>
+        <button class="btn sm" id="btnMapOpts" title="Underlay visibility, scale and position" hidden>Options</button>
+        <button class="btn sm" id="btnMapFit" title="Fit the drawing to the site extent" hidden>Fit</button>
+        <button class="btn sm" id="btnMapClear" title="Remove the background drawing" hidden>✕</button>
+        <input type="file" id="fileMap" accept=".dxf,.dwg,image/*,.png,.jpg,.jpeg,.webp,.gif,.bmp" hidden>
+      </div>
+
+      <div class="tb-group right">
+        <button class="btn warn" id="btnRebalance" title="Level the loading of the distribution boards feeding from each main board">Balance</button>
+        <button class="btn" id="btnRebalanceTx" title="Also move circuits between main boards / transformers — this changes the supply topology">Balance ↔ TX</button>
+        <button class="btn" id="btnProtect" title="Propose a protective device for every supply: MCCB on the main and distribution boards, MCB on the sub-boards, MCB on the final circuits">Propose protection</button>
+        <button class="btn" id="btnAudit" title="Run the design checks and list anything that needs attention">Audit</button>
+      </div>
+    </div>
+
+    <div class="canvas-wrap" id="canvasWrap">
+      <canvas id="plan"></canvas>
+      <div class="plan-hint" id="planHint">Drag to pan · wheel to zoom · drag a board to move it (grid snap on)</div>
+      <div class="plan-readout" id="planReadout"></div>
+      <div class="plan-legend-chip">E → · N ↑ · metres</div>
+    </div>
+  </section>
+
+  <!-- ============ RIGHT: properties ============ -->
+  <aside class="col col-right">
+    <div class="panel-h"><span id="propsTitle">Properties</span>
+      <div class="panel-h-actions"><span class="pill" id="propsKind"></span></div>
+    </div>
+    <div class="props-scroll"><div id="props" class="props"></div></div>
+  </aside>
+</main>
+
+<!-- ============ BOTTOM: schedules / reports ============ -->
+<section class="drawer" id="drawer">
+  <div class="drawer-grip" id="drawerGrip" title="Drag to resize — gives the plan more or less room"></div>
+  <nav class="tabs" id="tabs">
+    <button class="tab on" data-tab="loads">Load schedule</button>
+    <button class="tab" data-tab="cables">Cables &amp; volt drop</button>
+    <button class="tab" data-tab="boards">Board schedules</button>
+    <button class="tab" data-tab="sld">Single line diagram</button>
+    <button class="tab" data-tab="audit">Audit / warnings</button>
+    <button class="tab" data-tab="notes">Notes</button>
+    <button class="tab" data-tab="map" id="tabMap" hidden>Site map</button>
+  </nav>
+  <div class="tab-content" id="tabContent"></div>
+</section>
+
+<div class="toast" id="toast"></div>
+<div class="modal" id="modal" hidden>
+  <div class="modal-box">
+    <div class="modal-h" id="modalH">Title</div>
+    <div class="modal-b" id="modalB"></div>
+    <div class="modal-f" id="modalF"></div>
+  </div>
+</div>
+
+<script src="js/data.js?v=78"></script>
+<script src="js/calc.js?v=78"></script>
+<script src="js/dxf.js?v=5"></script>
+<script src="js/underlay.js?v=5"></script>
+<script src="js/plan.js?v=78"></script>
+<script src="js/sld.js?v=78"></script>
+<script src="js/ui.js?v=82"></script>
+</body>
+</html>

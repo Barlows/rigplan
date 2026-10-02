@@ -1,4 +1,4 @@
-***REMOVED*** Electrical Load Schedule & LV Distribution Plan
+# Electrical Load Schedule & LV Distribution Plan
 
 An interactive load-scheduling workbench for electrical design. Plan transformers,
 main LV boards (PDB) and distribution boards (PDP) on a grid-referenced site plan,
@@ -8,7 +8,7 @@ board, sizes its feeder and keeps the loading balanced.
 No build step, no dependencies, no server. Open `index.html` in a browser.
 
 ```
-open index.html          ***REMOVED*** macOS
+open index.html          # macOS
 ```
 
 A worked example loads on first open (press **Sample** to reload it). Work is kept
@@ -16,7 +16,7 @@ in the browser's local storage, and can be exported/imported as JSON.
 
 ---
 
-***REMOVED******REMOVED*** Designing over a real site map
+## Designing over a real site map
 
 Press **Load…** in the toolbar, or drop a file straight onto the plan.
 
@@ -71,7 +71,7 @@ the electrical design, and you are told when that happens.
 
 ---
 
-***REMOVED******REMOVED*** Board numbering
+## Board numbering
 
 The four board tiers carry a reference derived from their place in the supply
 hierarchy. Control panels do not:
@@ -120,7 +120,7 @@ and the schedules show both.
 existed is renumbered on load, and the references its boards carried are moved into
 the Equipment ref field rather than being overwritten, so nothing is lost.
 
-***REMOVED******REMOVED******REMOVED*** The supply hierarchy folds
+### The supply hierarchy folds
 
 The tree on the left opens a level at a time: fold it to see only the
 transformers, open one to see its main boards, open a main board for the
@@ -142,7 +142,7 @@ remembered between sessions.
 
 ---
 
-***REMOVED******REMOVED*** Circuits fed straight from a main board
+## Circuits fed straight from a main board
 
 Not every load belongs on a distribution board. A washer, a thermal oxidiser, an
 air compressor — a large item of plant with its own feeder panel — takes one way
@@ -161,27 +161,23 @@ directly for the circuit; on a distribution board it offers the board chooser.
 
 ---
 
-***REMOVED******REMOVED*** Importing a vendor's load schedule
+## Importing a vendor's load schedule
 
-A vendor's spreadsheet rarely matches the workbench's shape, so it takes a
-script. `tools/vendor_import.py` is one, written against a production-line
-load schedule and left generic — edit the column numbers near the top and it
-will read a different sheet:
+`tools/roeslein_import.py` converts the Roeslein **AG230-25** spreadsheet into a
+project file:
 
 ```
-python3 tools/vendor_import.py "schedule.xlsx" project.json
+python3 tools/roeslein_import.py "All loads L5.xlsx" tools/roeslein-line5.json
 ```
 
 Then **Import JSON** in the app. It needs nothing but python3 — the spreadsheet
 reader is in `tools/xlsx_read.py`.
 
-**The cross-check worth keeping.** The spreadsheet it was written for carried
-rated kW, a per-circuit load factor and a per-circuit diversity factor. Feeding
-rated kW in as the connected load and the two factors in as the demand factor
-made the workbench's own calculation land on the vendor's consumption figure to
-within **0.1%** — 3,963 kW against their 3,961 kW. Two numbers arrived at by
-independent routes agreeing that closely is the evidence the mapping is right,
-and it is worth running on any sheet before trusting the import.
+It reads 97 circuits from the sheet and lands them as two 3,150 kVA
+transformers, two main boards, six distribution boards and 97 circuits. The
+workbench's own calculation then reproduces the vendor's consumption figure to
+within 0.1% — 3,963 kW against their 3,961 kW — which is a useful check that
+the mapping is right, because the two numbers are arrived at independently.
 
 | From the sheet | Into the workbench |
 |---|---|
@@ -191,16 +187,15 @@ and it is worth running on any sheet before trusting the import.
 | Rated / breaker / frame current | Kept in the circuit's notes and in a `_vendor` block |
 | Line, machine type, load type | Notes, description, type |
 
-**Decisions that had to be made by hand** on that schedule, each marked in the
-script:
+**Decisions taken when this was first imported**, each marked in the script:
 
-1. Two transformers, one per main board. The sheet listed none.
-2. Three distribution boards were fed from a main board that their sibling
-   boards were not — a handful of cells named the wrong parent, which would have
-   given one board two. Corrected.
-3. Nine single-load feeder panels (`DF-*`) were collapsed. Each carries exactly
-   one load, so the load became one way on the main board and the `DF-*` name was
-   kept as the circuit's reference.
+1. Two transformers, one per main board, 3,150 kVA each — the sheet lists none.
+2. `PDP5001`, `PDP5002` and `PDP5003` are fed from `MSB8`. A handful of rows on
+   those boards name `MSB9` in the main-board column, which would give one board
+   two parents; those cells were confirmed as typos.
+3. The nine `DF-*` feeder panels are collapsed. Each carries exactly one load, so
+   the load becomes one way on the main board and the `DF-*` name is kept as the
+   circuit's reference.
 4. Board ratings are inferred from the sum of outgoing frame sizes, because the
    sheet gives none. **These are estimates and are almost certainly too large** —
    a real distribution board is rated on the diversified load, not on the sum of
@@ -208,9 +203,9 @@ script:
    Replace them from the switchgear schedule.
 
 The cable columns in that sheet are headed *"Cable & Installation (to be
-completed)"*, so every circuit arrives without a feeder cable and the audit
-reports a "no feeder cable defined" warning for each — which is the correct
-result, not a fault in the import.
+completed)"*, so every circuit arrives without a feeder cable. The audit reports
+80 warnings for that reason and nothing else — which is the correct result, not a
+fault in the import.
 
 **Importing a different vendor's sheet** means writing a sibling of that script:
 read the columns, map them onto the fields above, write the JSON. Nothing in the
@@ -218,7 +213,7 @@ app needs to change to accept it.
 
 ---
 
-***REMOVED******REMOVED*** Protective devices
+## Protective devices
 
 Every supply carries a device: each board's incomer, and each final circuit.
 Three numbers describe it, and they are three different things:
@@ -251,7 +246,7 @@ A device is sized on the **load with margin**, not on the board's rating: a
 4,000 A board carrying 700 A gets a 1,000 A device, because the board is bought
 big for the circuits to come. A device never exceeds the board it protects.
 
-***REMOVED******REMOVED******REMOVED*** The one case where the convention gives way
+### The one case where the convention gives way
 
 A 250 A sub-board is **beyond any MCB** — the largest is 125 A. Following the
 "MCBs for DBs" rule literally would put a 125 A device in front of a 250 A
@@ -260,7 +255,7 @@ regardless, the alternative is an MCB assembly with a **shunt trip and an
 undervoltage release**: a small MCB cuts the load and the assembly opening
 isolates it.
 
-***REMOVED******REMOVED******REMOVED*** What the audit checks
+### What the audit checks
 
 Three failures, checked separately because they are separate:
 
@@ -274,7 +269,7 @@ device cannot be protected by any cable. That last one matters: above about
 4,000 A no number of parallel cables is enough, and the audit says **busbar**
 rather than sending someone off to add another core.
 
-***REMOVED******REMOVED******REMOVED*** Fault levels
+### Fault levels
 
 The fault level at a board comes from the transformer's **impedance**, not its
 rating:
@@ -290,18 +285,18 @@ and a 100 kA one. `uk` is the transformer's **Impedance** field.
 
 ---
 
-***REMOVED******REMOVED*** Protection from the switchgear schedule
+## Protection from the switchgear schedule
 
 `tools/add_protection.py` puts the vendor's own devices onto the circuits of a
 project file, matched by the sheet row the importer recorded:
 
 ```
-python3 tools/add_protection.py project.json "switchgear-schedule.xlsx"
+python3 tools/add_protection.py tools/wxm-line5.json "All loads L5.xlsx"
 ```
 
-On that schedule it is 97 circuits — **56 TM and 41 LI**, from 15 A up to 800 A
-in 250 / 400 / 600 / 800 A frames. These are read from the sheet rather than
-proposed, because they came off the switchgear schedule.
+On the Roeslein schedule that is 97 circuits — **56 TM and 41 LI**, from 15 A
+up to 800 A in 250 / 400 / 600 / 800 A frames. These are read from the sheet
+rather than proposed, because they came off the switchgear schedule.
 
 The sheet's **Interrupt Rating** column is blank on every row, so the breaking
 capacity is left empty and filled from the calculated fault level when the
@@ -313,7 +308,7 @@ set is touched.
 
 ---
 
-***REMOVED******REMOVED*** Sub-distribution boards
+## Sub-distribution boards
 
 A sub-distribution board is a **125 A or 250 A** board — an Acti9, Acti9P or
 similar — fed from a distribution board and carrying lighting, small power and the
@@ -369,7 +364,7 @@ identical references.
 
 ---
 
-***REMOVED******REMOVED*** The workflow
+## The workflow
 
 1. **Set out the supply.** Pick a place mode in the toolbar — `TX`, `PDB` or `PDP` —
    and click the plan. Or add boards from the left-hand hierarchy with the
@@ -389,7 +384,7 @@ identical references.
 
 ---
 
-***REMOVED******REMOVED*** How assignment works
+## How assignment works
 
 Every board is scored for the load you are placing it on:
 
@@ -424,7 +419,7 @@ changes the supply topology and should be a deliberate act.
 
 ---
 
-***REMOVED******REMOVED*** What is calculated
+## What is calculated
 
 - **Load** — design kVA = connected kW ÷ power factor × demand factor. Current from
   kVA at the board voltage; single-phase circuits use the phase-to-neutral voltage.
@@ -447,7 +442,7 @@ changes the supply topology and should be a deliberate act.
 
 ---
 
-***REMOVED******REMOVED*** Layout
+## Layout
 
 | | |
 |---|---|
@@ -465,7 +460,7 @@ panel to trade schedule space for plan area; double-click it to collapse.
 
 ---
 
-***REMOVED******REMOVED*** Files
+## Files
 
 ```
 index.html          markup
@@ -482,8 +477,9 @@ js/plan.js          canvas plan: underlay, rendering, hit-testing, drag, zoom
 js/sld.js           single line diagram: tree layout and IEC 60617 symbols
 js/ui.js            shell: properties, schedules, site map, export, import, print
 tools/xlsx_read.py        minimal spreadsheet reader, standard library only
-tools/vendor_import.py    vendor load schedule → project file
+tools/roeslein_import.py  vendor load schedule → project file
 tools/add_protection.py   vendor switchgear schedule → circuit devices
+tools/wxm-line5.json      the Roeslein Line 5 & Auxiliaries project, ready to import
 test/parser-test.html     35 checks against a synthetic DXF with known geometry
 test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
@@ -498,7 +494,7 @@ Open a `test/*.html` page in a browser after changing the matching module — ea
 prints a pass/fail list. If you edit the JavaScript while testing over HTTP and the
 browser serves a cached copy, bump the `?v=` query string in `index.html`.
 
-***REMOVED******REMOVED*** Single line diagram
+## Single line diagram
 
 The **Single line diagram** tab draws the whole supply as a schematic, using IEC
 60617 symbols: two overlapping circles for a transformer, a filled square for the
@@ -527,7 +523,7 @@ standard and your practice's house style before issue.
 
 ---
 
-***REMOVED******REMOVED*** Limits — read before using this for real work
+## Limits — read before using this for real work
 
 This builds and checks a schedule. It is **not** a design certification tool.
 

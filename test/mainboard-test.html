@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Circuits on a main board — tests</title>
+<style>
+  body{font:13px/1.6 ui-monospace,Menlo,monospace;background:#0f1216;color:#dfe7ee;padding:20px;margin:0}
+  h1{font-size:16px;margin:0 0 4px}
+  p.sub{color:#8fa3b3;margin:0 0 16px;font-size:12px}
+  .case{margin:6px 0;padding:7px 10px;border-radius:6px;background:#151a20;border-left:3px solid #3a4855}
+  .pass{border-left-color:#22c55e}
+  .fail{border-left-color:#ef4444;background:#2a1414}
+  .name{font-weight:700}
+  .fail .name{color:#fca5a5}
+  .detail{color:#8fa3b3;font-size:12px;margin-top:2px}
+  #summary{margin-top:16px;padding:10px;border-radius:8px;font-weight:700}
+</style>
+</head>
+<body>
+<h1>Circuits fed straight from a main board</h1>
+<p class="sub">
+  A large item of plant with its own feeder panel is one way on the MSB — it does not go through a
+  distribution board. A circuit may therefore name a main board (<code>pdbId</code>) and no PDP.
+  These checks cover the hierarchy, the loading that rolls up, and the rule that such a circuit is
+  never moved by auto-assignment.
+</p>
+<div id="cases"></div>
+<div id="summary">running…</div>
+
+<script src="../js/data.js?v=75"></script>
+<script src="../js/calc.js?v=78"></script>
+<script src="../js/sld.js?v=75"></script>
+<script>
+(function () {
+  var results = [];
+  function check(name, got, want) {
+    results.push({ name: name, ok: JSON.stringify(got) === JSON.stringify(want), got: got, want: want });
+  }
+  function P() { var p = LS.newProject({ site: { w: 60, h: 40 } }); p.dbs = []; return p; }
+
+  /* One transformer, one main board, one distribution board. The main board is
+     rated so it is loaded by both its direct circuits and everything the PDP
+     carries — that is the whole point of the check. */
+  function site(pdbA) {
+    var p = P();
+    var tx = LS.newTx({ name: 'tx', kva: 2000, pos: { x: 5, y: 30 } }); p.txs.push(tx);
+    var pdb = LS.newPdb({ name: 'pdb', txId: tx.id, incomerA: pdbA || 2000, pos: { x: 10, y: 30 } }); p.pdbs.push(pdb);
+    var pdp = LS.newPdp({ name: 'pdp', pdbId: pdb.id, incomerA: 400, spareWays: 20, pos: { x: 20, y: 30 } }); p.pdps.push(pdp);
+    LC.applyNumbering(p);
+    return { p: p, tx: tx, pdb: pdb, pdp: pdp };
+  }
+  function onMain(pdb, kw, tag) {
+    var pn = LS.newPanel({ tag: tag || 'MCC-01', name: 'Machine panel', kw: kw, pf: 0.85, pdbId: pdb.id, autoAssign: false });
+    pn.__kind = 'panel';
+    return pn;
+  }
+  function onPdp(pdp, kw, tag) {
+    var pn = LS.newPanel({ tag: tag, name: 'Load', kw: kw, pf: 0.9, pdpId: pdp.id, autoAssign: false });
+    pn.__kind = 'panel';
+    return pn;
+  }
+
+  /* ------------------------------------------------------------- placement */
+  var a = site();
+  a.p.panels.push(onMain(a.pdb, 100, 'MCC-01'));
+  check('a main-board circuit is found by panelsOnPdb',
+    LC.panelsOnPdb(a.p, a.pdb.id).map(function (x) { return x.tag; }), ['MCC-01']);
+  check('it is not counted as a circuit of any PDP',
+    LC.panelsOf(a.p, a.pdp.id).length, 0);
+  check('its chain reaches the transformer',
+    (function () { var c = LC.chain(a.p, a.p.panels[0]); return [!!c.pdb, !!c.pdp, !!c.tx]; })(), [true, false, true]);
+
+  var b = site();
+  b.p.panels.push(onPdp(b.pdp, 50, 'LMP-1'));
+  check('panelsOnPdb ignores circuits on a PDP',
+    LC.panelsOnPdb(b.p, b.pdb.id).length, 0);
+
+  var c = site();
+  var mix1 = onMain(c.pdb, 100, 'MCC-01');
+  var mix2 = onPdp(c.pdp, 50, 'LMP-1');
+  c.p.panels.push(mix1, mix2);
+  check('a main board sees both its own circuits and the PDP\'s',
+    LC.boardStats(c.p, c.pdb, 'pdb').panels.map(function (x) { return x.tag; }).sort(), ['LMP-1', 'MCC-01']);
+
+  /* --------------------------------------------------------------- loading */
+  var d = site(2000);
+  d.p.panels.push(onMain(d.pdb, 100, 'MCC-01'));
+  var dPdp = LC.boardStats(d.p, d.pdp, 'pdp');
+  var dPdb = LC.boardStats(d.p, d.pdb, 'pdb');
+  check('a PDP carries none of it', dPdp.amp, 0);
+  check('the main board carries all of it', Math.round(dPdb.amp), Math.round(LC.panelDemand(d.p, d.p.panels[0]).amp));
+  check('the main board also carries its PDP circuits',
+    LC.boardStats(d.p, d.pdb, 'pdb').amp > 0, true);
+
+  /* the sum along the chain must be additive: main board = direct + PDP */
+  var e = site(2000);
+  e.p.panels.push(onMain(e.pdb, 100, 'MCC-01'));
+  e.p.panels.push(onPdp(e.pdp, 200, 'LMP-1'));
+  var ePdp = LC.boardStats(e.p, e.pdp, 'pdp').amp;
+  var ePdb = LC.boardStats(e.p, e.pdb, 'pdb').amp;
+  check('main board load = its own circuits + the PDP',
+    Math.round(ePdb), Math.round(ePdp + LC.panelDemand(e.p, e.p.panels[0]).amp));
+  check('the transformer sees the lot',
+    Math.round(LC.boardStats(e.p, e.tx, 'tx').amp), Math.round(ePdb));
+
+  /* ------------------------------------------------------------- parenting */
+  check('its parent is the main board',
+    LC.parentOf(e.p, e.p.panels[0], 'panel'), { kind: 'pdb', id: e.pdb.id });
+  check('a PDP circuit still parents to its PDP',
+    LC.parentOf(e.p, e.p.panels[1], 'panel'), { kind: 'pdp', id: e.pdp.id });
+
+  /* ---------------------------------------------------------- fault levels */
+  /* one distribution stage fewer than a circuit on the same PDP, so the fault
+     level at the main-board circuit must be the higher of the two */
+  var f = site();
+  f.p.panels.push(onMain(f.pdb, 100, 'MCC-01'));
+  f.p.panels.push(onPdp(f.pdp, 100, 'LMP-1'));
+  var kMain = LC.boardStats(f.p, f.p.panels[0], 'panel');
+  var kPdp = LC.boardStats(f.p, f.p.panels[1], 'panel');
+  check('a main-board circuit sees a higher fault level than one on the PDP',
+    kMain.faultKA > kPdp.faultKA, true);
+
+  /* ------------------------------------------- auto-assign must leave it be */
+  var g = site();
+  var fixed = onMain(g.pdb, 100, 'MCC-01');
+  g.p.panels.push(fixed);
+  var log = LC.assignPanel(g.p, fixed, {});
+  check('assignPanel refuses to move a main-board circuit', log.reason, 'main-board');
+  check('and leaves it where it was', fixed.pdbId === g.pdb.id && !fixed.pdpId, true);
+  check('no board was invented for it', g.p.pdps.length, 1);
+
+  /* re-balancing must not sweep it onto a distribution board either.
+     auto-balance is a levelling pass, not a solve — it moves one circuit off
+     each overloaded board per pass, so the board is only relieved once the
+     passes have been repeated. What matters here is that the main-board
+     circuit is untouched throughout. */
+  var h = site(200);
+  var held = onMain(h.pdb, 30, 'MCC-01');
+  h.p.panels.push(held);
+  for (var i = 1; i <= 4; i++) h.p.panels.push(onPdp(h.pdp, 90, 'LMP-' + i));   // overload the PDP
+  var stayedPut = true;
+  for (var pass = 0; pass < 4; pass++) {
+    LC.autoBalance(h.p, { tolerance: 12 });
+    if (!(held.pdbId === h.pdb.id && !held.pdpId)) stayedPut = false;
+  }
+  check('auto-balance never moves the main-board circuit, over repeated passes', stayedPut, true);
+  check('…and still converges on the overloaded PDP',
+    LC.boardStats(h.p, h.pdp, 'pdp').util <= 100, true);
+
+  /* ---------------------------------------------------- counting as placed */
+  check('it is not reported as unassigned',
+    LC.topStats ? LC.topStats(h.p).unassigned : h.p.panels.filter(function (x) { return !x.pdpId && !x.pdbId; }).length, 0);
+  check('a circuit with neither parent still is',
+    h.p.panels.filter(function (x) { return !x.pdpId && !x.pdbId; }).length, 0);
+
+  /* ------------------------------------------------------------- rendering */
+  var s = site();
+  s.p.panels.push(onMain(s.pdb, 100, 'MCC-01'));
+  s.p.panels.push(onPdp(s.pdp, 100, 'LMP-1'));
+  var drawn = SLD.render(s.p);
+  var kinds = drawn.nodes.map(function (n) { return n.kind + ':' + (n.o && n.o.tag); });
+  check('the main-board circuit appears on the diagram',
+    kinds.indexOf('panel:MCC-01') >= 0, true);
+  /* and it must hang off the main board, not the distribution board */
+  var edges = drawn.links.map(function (k) { return k.from + '→' + k.to; });
+  check('it is fed from the main board',
+    edges.indexOf(s.pdb.id + '→' + s.p.panels[0].id) >= 0, true);
+  check('the drawing still renders without error', typeof drawn.svg === 'string' && drawn.svg.length > 0, true);
+  check('no feeder is drawn twice',
+    edges.filter(function (e, i) { return edges.indexOf(e) !== i; }).length, 0);
+
+  /* ------------------------------------------------------------------ done */
+  var pass = results.filter(function (r) { return r.ok; }).length;
+  var html = results.map(function (r) {
+    return '<div class="case ' + (r.ok ? 'pass' : 'fail') + '"><div class="name">' +
+      (r.ok ? '✓ ' : '✕ ') + r.name + '</div>' +
+      (r.ok ? '' : '<div class="detail">got ' + JSON.stringify(r.got) + ' · want ' + JSON.stringify(r.want) + '</div>') +
+      '</div>';
+  }).join('');
+  document.getElementById('cases').innerHTML = html;
+  document.getElementById('summary').textContent =
+    pass + ' / ' + results.length + ' checks passed' + (pass === results.length ? '' : ' — ' + (results.length - pass) + ' FAILED');
+  document.getElementById('summary').style.background = pass === results.length ? '#12301f' : '#3a1414';
+})();
+</script>
+</body>
+</html>

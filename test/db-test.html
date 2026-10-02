@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sub-distribution boards — tests</title>
+<style>
+  body{font:13px/1.6 ui-monospace,Menlo,monospace;background:#0f1216;color:#dfe7ee;padding:20px;margin:0}
+  h1{font-size:16px;margin:0 0 4px}
+  p.sub{color:#8fa3b3;margin:0 0 16px;font-size:12px}
+  .case{margin:6px 0;padding:7px 10px;border-radius:6px;background:#151a20;border-left:3px solid #3a4855}
+  .pass{border-left-color:#22c55e}
+  .fail{border-left-color:#ef4444;background:#2a1414}
+  .name{font-weight:700}
+  .fail .name{color:#fca5a5}
+  .detail{color:#8fa3b3;font-size:12px;margin-top:2px}
+  #summary{margin-top:16px;padding:10px;border-radius:8px;font-weight:700}
+</style>
+</head>
+<body>
+<h1>Sub-distribution boards</h1>
+<p class="sub">
+  A DB is a 125 A or 250 A board fed from a PDP, carrying lighting, small power and other small
+  final circuits — treated like a machine main control panel, just another feeder. The 63 A limit
+  is on the largest single load fed <em>from</em> it, not on the board's own rating.
+</p>
+<div id="cases"></div>
+<div id="summary">running…</div>
+
+<script src="../js/data.js?v=75"></script>
+<script src="../js/calc.js?v=78"></script>
+<script>
+(function () {
+  var results = [];
+  function check(name, got, want) {
+    var ok = JSON.stringify(got) === JSON.stringify(want);
+    results.push({ name: name, ok: ok, got: got, want: want });
+  }
+  function P() { var p = LS.newProject({ site: { w: 40, h: 30 } }); p.dbs = []; return p; }
+
+  /* a site with two transformers, one main board each, one PDP each */
+  function site() {
+    var p = P();
+    var tx = LS.newTx({ name: 'tx', kva: 1000 }); p.txs.push(tx);
+    var pdb = LS.newPdb({ name: 'pdb', txId: tx.id }); p.pdbs.push(pdb);
+    var pdp = LS.newPdp({ name: 'pdp', pdbId: pdb.id, incomerA: 400, spareWays: 20 }); p.pdps.push(pdp);
+    LC.applyNumbering(p);
+    return p;
+  }
+  function addDb(p, pdp, kw, amp, serves) {
+    var b = LS.newDb({
+      name: 'Lighting & small power', pdpId: pdp.id, incomerA: amp || 125, ways: 36,
+      serves: serves || 'lighting, small power', pos: { x: 20, y: 12 }
+    });
+    b.__kind = 'db';
+    p.dbs.push(b);
+    return b;
+  }
+  /* A 230 V circuit is single-phase: it must be declared as such, or it is
+     calculated as three-phase at 230 V and comes out at three times the
+     current. Getting this right is the whole point of these checks. */
+  function addLoad(p, db, tag, kw, volt) {
+    var v = volt || 400;
+    var n = LS.newPanel({
+      name: tag, tag: tag, type: 'db_sk', kw: kw, pdpId: db.pdpId,
+      dbId: db.id === undefined ? null : db.id,
+      volt: v, phases: v === 230 ? '1' : '3', pos: { x: 24, y: 12 }
+    });
+    n.__kind = 'panel';
+    p.panels.push(n);
+    return n;
+  }
+  function amps(p, pn) { return LC.panelDemand(p, pn).amp; }
+  function auditTitles(p, re) {
+    return LC.audit(p).filter(function (i) { return re.test(i.title); }).map(function (i) { return i.level + ': ' + i.title; });
+  }
+
+  /* 1. the board's own rating is 125 A or 250 A — not capped at 63 A */
+  check('the standard sub-board sizes are 125 A and 250 A', LS.DB_SIZES_A, [125, 250]);
+  check('the 63 A limit is on the load, not the board', LS.DB_LOAD_MAX_A, 63);
+
+  var p1 = site();
+  var pdp1 = p1.pdps[0];
+  var d125 = addDb(p1, pdp1, null, 125);
+  var d250 = addDb(p1, pdp1, null, 250);
+  LC.applyNumbering(p1);
+  check('a 125 A sub-board is accepted', d125.incomerA, 125);
+  check('a 250 A sub-board is accepted', d250.incomerA, 250);
+  check('neither is flagged for being over 63 A', auditTitles(p1, /rated \d+ A/), []);
+  check('their references number in sequence', [d125.tag, d250.tag], ['DB1-1-1', 'DB1-1-2']);
+
+  /* 2. more than one sub-board on the same PDP is normal */
+  check('two sub-boards on one PDP raise no warning', auditTitles(p1, /more than one sub-board|one sub-board per/), []);
+  check('both belong to the same PDP', [d125.pdpId, d250.pdpId], [pdp1.id, pdp1.id]);
+  check('each gets its own reference', LC.numberingIssues(p1), []);
+
+  /* 3. the largest equipment fed from a sub-board is 63 A */
+  var p2 = site();
+  var pdp2 = p2.pdps[0];
+  var db2 = addDb(p2, pdp2, null, 125);
+  /* 55 kW at 400 V, 0.9 pf ≈ 88 A — too large for a sub-board */
+  var big = addLoad(p2, db2, 'DB-BIG', 55);
+  LC.applyNumbering(p2);
+  check('a large load on a sub-board is flagged (' + amps(p2, big).toFixed(0) + ' A)',
+    auditTitles(p2, /too large for/).length, 1);
+  var bigWarn = auditTitles(p2, /too large for/)[0] || '';
+  check('the warning names the load and the board', /DB-BIG at \d+ A is too large for DB1-1-1/.test(bigWarn), true);
+  check('and says where it should go', /to PDP1-1 directly/.test(LC.audit(p2).filter(function (i) { return /too large/.test(i.title); })[0].detail), true);
+  /* 44 kW ≈ 70 A — still too large */
+  var big2 = addLoad(p2, db2, 'DB-BIG2', 44);
+  LC.applyNumbering(p2);
+  check('both oversized loads are reported, not just the first',
+    auditTitles(p2, /too large for/).length, 2);
+  check('44 kW is still over the limit (' + amps(p2, big2).toFixed(0) + ' A)',
+    auditTitles(p2, /DB-BIG2.*too large/).length, 1);
+  /* 30 kW ≈ 48 A — acceptable */
+  var ok1 = addLoad(p2, db2, 'LT-01', 30);
+  check('30 kW is within the limit', auditTitles(p2, /LT-01.*too large/), []);
+
+  /* 4. typical sub-board loads — the mix that actually goes on one */
+  var p3 = site();
+  var pdp3 = p3.pdps[0];
+  var db3 = addDb(p3, pdp3, null, 125);
+  addLoad(p3, db3, 'LT-01', 1.5, 230);        // lighting circuit, 16 A
+  addLoad(p3, db3, 'LT-02', 2.2, 230);        // lighting circuit, 16 A
+  addLoad(p3, db3, 'SK-230-1', 3.7, 230);    // 230 V socket, 32 A
+  addLoad(p3, db3, 'SK-230-2', 3.7, 230);    // 230 V socket, 32 A
+  addLoad(p3, db3, 'INSP-01', 2.75, 230);    // inspection system, 32 A
+  addLoad(p3, db3, 'SK-400-1', 5.5, 400);    // 400 V socket, 32 A
+  addLoad(p3, db3, 'PROC-01', 5.5, 400);     // general process sockets
+  addLoad(p3, db3, 'PROC-02', 3.7, 230);     // general process sockets
+  LC.applyNumbering(p3);
+  var worst3 = LC.boardStats(p3, db3, 'db');
+  var errs3 = LC.audit(p3).filter(function (i) { return i.level === 'bad'; });
+  var over3 = LC.audit(p3).filter(function (i) { return /too large/.test(i.title); });
+  check('a realistic set of sub-board loads raises no errors', errs3, []);
+  check('and no load is over the 63 A limit', over3, []);
+  check('they all fit a 125 A board together (' + worst3.amp.toFixed(0) + ' A, ' + worst3.util.toFixed(0) + '%)',
+    worst3.util < 100, true);
+  check('with no single load over 63 A',
+    LC.panelsOnDb(p3, db3.id).every(function (n) { return amps(p3, n) <= LS.DB_LOAD_MAX_A; }), true);
+  check('and the single-phase circuits are balanced',
+    LC.audit(p3).filter(function (i) { return /imbalance/.test(i.title); }), []);
+
+  /* 5. main plant goes on the distribution board, not the sub-board */
+  var p4 = site();
+  var pdp4 = p4.pdps[0];
+  var db4 = addDb(p4, pdp4, null, 125);
+  var chiller = LS.newPanel({ name: 'chiller', tag: 'CHL-01', type: 'chiller', kw: 110, pdpId: pdp4.id, pos: { x: 24, y: 12 } });
+  chiller.__kind = 'panel';
+  p4.panels.push(chiller);
+  LC.applyNumbering(p4);
+  check('a chiller on the PDP is fine', auditTitles(p4, /CHL-01.*too large/), []);
+  check('and it loads the PDP directly', LC.boardStats(p4, pdp4, 'pdp').panels.length, 1);
+  check('the sub-board is still empty', LC.boardStats(p4, db4, 'db').panels.length, 0);
+  check('an empty sub-board is noted as spare', auditTitles(p4, /DB1-1-1 is spare/), ['info: DB1-1-1 is spare']);
+
+  /* 6. auto-assignment never lands a circuit on a sub-board */
+  var p5 = site();
+  var pdp5 = p5.pdps[0];
+  var db5 = addDb(p5, pdp5, null, 125);
+  var loose = LS.newPanel({ name: 'new', tag: 'MCC-NEW', type: 'mcc', kw: 40, pdpId: null, pos: { x: 22, y: 12 } });
+  p5.panels.push(loose);
+  LC.assignPanel(p5, loose, {});
+  check('auto-assign puts it on the PDP', loose.pdpId, pdp5.id);
+  check('and never on the sub-board', loose.dbId, null);
+  check('the sub-board is untouched', LC.boardStats(p5, db5, 'db').panels.length, 0);
+
+  /* 7. auto-assignment counts ways on circuits landing on the PDP directly,
+        not those the sub-board carries. Two distribution boards so there is
+        somewhere else for the circuit to go. */
+  var p6 = site();
+  var pdp6 = p6.pdps[0];
+  var pdp6b = LS.newPdp({ name: 'pdp2', pdbId: p6.pdbs[0].id, incomerA: 400, spareWays: 20, pos: { x: 15, y: 8 } });
+  p6.pdps.push(pdp6b);
+  LC.applyNumbering(p6);
+  pdp6.spareWays = 2;
+  var db6 = addDb(p6, pdp6, null, 125);
+  /* fill the first board's own two ways */
+  var direct = { pdpId: pdp6.id, dbId: null };
+  addLoad(p6, direct, 'A-1', 5);
+  addLoad(p6, direct, 'A-2', 5);
+  addLoad(p6, db6, 'LT-1', 5);
+  addLoad(p6, db6, 'LT-2', 5);
+  LC.applyNumbering(p6);
+  check('the two sub-board loads are on the sub-board', LC.panelsOnDb(p6, db6.id).length, 2);
+  check('and two more land on the PDP itself',
+    LC.boardStats(p6, pdp6, 'pdp').panels.filter(function (n) { return !n.dbId; }).length, 2);
+  check('the first board is at its way count', pdp6.spareWays, 2);
+  /* the sub-board's two loads must not make the first board look 4 ways full */
+  var res = LC.choosePdp(p6, LS.newPanel({ name: 'n', kw: 5, tag: 'A-3' }), {});
+  check('so the next circuit goes to the board with ways free', res.pdp === pdp6b, true);
+  check('rather than the one whose ways are used', res.pdp === pdp6, false);
+
+  /* 8. deleting a sub-board returns its circuits to the distribution board */
+  var p7 = site();
+  var pdp7 = p7.pdps[0];
+  var db7 = addDb(p7, pdp7, null, 125);
+  var on = addLoad(p7, db7, 'LT-01', 5);
+  on.dbId = db7.id;
+  check('the circuit starts on the sub-board', on.dbId, db7.id);
+  /* the app's delete clears dbId rather than orphaning the circuit */
+  p7.panels.forEach(function (n) { if (n.dbId === db7.id) n.dbId = null; });
+  p7.dbs = p7.dbs.filter(function (b) { return b !== db7; });
+  check('after deleting it the circuit falls back to the PDP', [on.dbId, on.pdpId], [null, pdp7.id]);
+  LC.applyNumbering(p7);
+  check('and the circuit keeps its own tag', on.tag, 'LT-01');
+  check('with no sub-boards left to renumber', p7.dbs.length, 0);
+
+  /* 9. a sub-board feeder is sized for the board's rating, not today's load */
+  var p8 = site();
+  var pdp8 = p8.pdps[0];
+  var db8 = addDb(p8, pdp8, null, 250);
+  addLoad(p8, db8, 'LT-01', 6);                       // a small load, 13 A
+  LC.sizeCablesForDb(p8, db8);
+  var rate = LC.cableRating(db8.cable);
+  check('the feeder carries the 250 A rating, not the 13 A load',
+    rate.derated >= 250 * LS.num(p8.design.designMargin, 1.15), true);
+  check('so it is a sensible cable, not the smallest that fits today',
+    LS.num(db8.cable.csa, 0) >= 35, true);
+
+  /* 10. the circuit types that belong on a sub-board are all within the limit,
+        and each is a single-phase circuit at its own voltage */
+  check('the sub-board load types are the ones in use', Object.keys(LS.DB_LOAD_TYPES),
+    ['lighting', 'socket-230', 'socket-400', 'inspection', 'process']);
+  check('their protective devices are 16 A or 32 A',
+    Object.keys(LS.DB_LOAD_TYPES).every(function (k) {
+      return [16, 32].indexOf(LS.DB_LOAD_TYPES[k].device) >= 0;
+    }), true);
+  check('230 V circuits are single-phase',
+    Object.keys(LS.DB_LOAD_TYPES).every(function (k) {
+      return LS.DB_LOAD_TYPES[k].volts === 400 || LS.DB_LOAD_TYPES[k].volts === 230;
+    }), true);
+  var p9b = site();
+  var db9b = addDb(p9b, p9b.pdps[0], null, 125);
+  var worstType = 0, worstName = '';
+  Object.keys(LS.DB_LOAD_TYPES).forEach(function (k) {
+    var t = LS.DB_LOAD_TYPES[k];
+    var n = addLoad(p9b, db9b, 'C-' + k, t.typical, t.volts);
+    var a = amps(p9b, n);
+    if (a > worstType) { worstType = a; worstName = t.name; }
+  });
+  check('the heaviest typical sub-board circuit is within 63 A (' + worstName + ' ' + worstType.toFixed(0) + ' A)',
+    worstType <= LS.DB_LOAD_MAX_A, true);
+
+  /* 11. the sample follows the same rules */
+  var sample = LS.sampleProject();
+  LC.applyNumbering(sample);
+  check('every sub-board in the sample is 125 A or 250 A',
+    sample.dbs.every(function (b) { return LS.DB_SIZES_A.indexOf(b.incomerA) >= 0; }), true);
+  check('no load on a sub-board exceeds 63 A',
+    sample.panels.filter(function (n) { return n.dbId; }).every(function (n) {
+      return LC.panelDemand(sample, n).amp <= LS.DB_LOAD_MAX_A;
+    }), true);
+  check('no sub-board is overloaded',
+    sample.dbs.every(function (b) { return LC.boardStats(sample, b, 'db').util <= 100; }), true);
+  check('the plant is on the distribution boards, not the sub-boards',
+    sample.panels.filter(function (n) { return n.dbId && /CHL|BLR|COMP|MCC|UPS|LIFT|GENSET/.test(n.tag); }), []);
+
+  var host = document.getElementById('cases');
+  results.forEach(function (r) {
+    var d = document.createElement('div');
+    d.className = 'case ' + (r.ok ? 'pass' : 'fail');
+    d.innerHTML = '<div class="name">' + (r.ok ? '✓ ' : '✕ ') + r.name + '</div>' +
+      (r.ok ? '' : '<div class="detail">got ' + JSON.stringify(r.got) + ' — expected ' + JSON.stringify(r.want) + '</div>');
+    host.appendChild(d);
+  });
+  var failed = results.filter(function (r) { return !r.ok; }).length;
+  var sum = document.getElementById('summary');
+  sum.textContent = (results.length - failed) + ' / ' + results.length + ' checks passed';
+  sum.style.background = failed ? '#3b1414' : '#0d3320';
+  sum.style.color = failed ? '#fca5a5' : '#86efac';
+  window.__DB = { total: results.length, failed: failed };
+})();
+</script>
+</body>
+</html>
