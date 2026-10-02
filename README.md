@@ -120,7 +120,29 @@ and the schedules show both.
 existed is renumbered on load, and the references its boards carried are moved into
 the Equipment ref field rather than being overwritten, so nothing is lost.
 
-***REMOVED******REMOVED******REMOVED*** Sub-distribution boards
+***REMOVED******REMOVED******REMOVED*** The supply hierarchy folds
+
+The tree on the left opens a level at a time: fold it to see only the
+transformers, open one to see its main boards, open a main board for the
+distribution boards, open one of those for its loads and sub-boards, and open
+the sub-board for the circuits on it.
+
+Every board row carries a fold handle (▸ / ▾). A folded row shows how much is
+hidden inside it — `4 bds` under a transformer, `7 items` under a distribution
+board, `2 loads` under a sub-board — so a collapsed tree is still a summary of the
+design rather than a list of two lines.
+
+Three buttons in the panel header: **⊟** fold everything to the transformers,
+**⊞** unfold everything, **⇅** invert what is open and what is folded.
+**Shift-click** a transformer's handle to open everything below it at once.
+
+Selecting a board or circuit from the plan, a schedule or the audit opens the path
+down to it, so it is never selected somewhere you cannot see. The fold state is
+remembered between sessions.
+
+---
+
+***REMOVED******REMOVED*** Sub-distribution boards
 
 A sub-distribution board is a **125 A or 250 A** board — an Acti9, Acti9P or
 similar — fed from a distribution board and carrying lighting, small power and the
@@ -259,7 +281,7 @@ changes the supply topology and should be a deliberate act.
 | | |
 |---|---|
 | **Top bar** | Live totals: connected kW, design kVA, installed kVA, TX loading, phase imbalance, warning count |
-| **Left** | Supply hierarchy with per-board utilisation bars and inline add buttons |
+| **Left** | Supply hierarchy — a foldable tree with per-board utilisation bars and inline add buttons |
 | **Centre** | The site plan — grid references, drag to move, zoom, phase vectors, cable colouring by status |
 | **Right** | Properties of whatever is selected, with live checks |
 | **Bottom** | Load schedule · cable and volt drop schedule · board schedule · single line diagram · audit · design criteria · site map |
@@ -290,7 +312,7 @@ js/sld.js           single line diagram: tree layout and IEC 60617 symbols
 js/ui.js            shell: properties, schedules, site map, export, import, print
 test/parser-test.html     35 checks against a synthetic DXF with known geometry
 test/numbering-test.html  58 checks on the board numbering scheme
-test/db-test.html        sub-board sizing and the 63 A rule
+test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        24 checks on the single line diagram layout and symbols
 test/underlay-test.html   image/DXF/DWG loading and scale handling
 ```
