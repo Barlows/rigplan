@@ -142,6 +142,77 @@ remembered between sessions.
 
 ---
 
+***REMOVED******REMOVED*** Circuits fed straight from a main board
+
+Not every load belongs on a distribution board. A washer, a thermal oxidiser, an
+air compressor — a large item of plant with its own feeder panel — takes one way
+on the **main board** and nothing else hangs off it.
+
+Set **Main board (PDB)** in a circuit's properties and clear the PDP. The circuit
+then counts towards that main board's load, not towards any distribution board,
+and rolls up to the transformer through it.
+
+Because it is a deliberate placement, such a circuit is **left alone** by
+auto-assign and by re-balance: the tool will not drag a machine panel onto a
+distribution board to even out a load.
+
+Every board has a **+CP** button that adds a circuit. On a main board it asks
+directly for the circuit; on a distribution board it offers the board chooser.
+
+---
+
+***REMOVED******REMOVED*** Importing a vendor's load schedule
+
+`tools/client_import.py` converts the Client **project ref** spreadsheet into a
+project file:
+
+```
+python3 tools/client_import.py "schedule.xlsx" tools/client-line5.json
+```
+
+Then **Import JSON** in the app. It needs nothing but python3 — the spreadsheet
+reader is in `tools/xlsx_read.py`.
+
+It reads 97 circuits from the sheet and lands them as two 3,150 kVA
+transformers, two main boards, six distribution boards and 97 circuits. The
+workbench's own calculation then reproduces the vendor's consumption figure to
+within 0.1% — 3,963 kW against their 3,961 kW — which is a useful check that
+the mapping is right, because the two numbers are arrived at independently.
+
+| From the sheet | Into the workbench |
+|---|---|
+| Rated power (kW) | Connected load |
+| Load factor × diversity factor | Demand factor |
+| Power factor | Power factor |
+| Rated / breaker / frame current | Kept in the circuit's notes and in a `_vendor` block |
+| Line, machine type, load type | Notes, description, type |
+
+**Decisions taken when this was first imported**, each marked in the script:
+
+1. Two transformers, one per main board, 3,150 kVA each — the sheet lists none.
+2. `DIST-1`, `DIST-2` and `DIST-3` are fed from `MAIN-A`. A handful of rows on
+   those boards name `MAIN-B` in the main-board column, which would give one board
+   two parents; those cells were confirmed as typos.
+3. The nine `DF-*` feeder panels are collapsed. Each carries exactly one load, so
+   the load becomes one way on the main board and the `DF-*` name is kept as the
+   circuit's reference.
+4. Board ratings are inferred from the sum of outgoing frame sizes, because the
+   sheet gives none. **These are estimates and are almost certainly too large** —
+   a real distribution board is rated on the diversified load, not on the sum of
+   the frames. Each board's notes says so and gives the diversified figure.
+   Replace them from the switchgear schedule.
+
+The cable columns in that sheet are headed *"Cable & Installation (to be
+completed)"*, so every circuit arrives without a feeder cable. The audit reports
+80 warnings for that reason and nothing else — which is the correct result, not a
+fault in the import.
+
+**Importing a different vendor's sheet** means writing a sibling of that script:
+read the columns, map them onto the fields above, write the JSON. Nothing in the
+app needs to change to accept it.
+
+---
+
 ***REMOVED******REMOVED*** Sub-distribution boards
 
 A sub-distribution board is a **125 A or 250 A** board — an Acti9, Acti9P or
@@ -310,10 +381,13 @@ js/underlay.js      file loading (image / DXF), DWG detection, placement
 js/plan.js          canvas plan: underlay, rendering, hit-testing, drag, zoom
 js/sld.js           single line diagram: tree layout and IEC 60617 symbols
 js/ui.js            shell: properties, schedules, site map, export, import, print
+tools/xlsx_read.py        minimal spreadsheet reader, standard library only
+tools/client_import.py  vendor load schedule → project file
 test/parser-test.html     35 checks against a synthetic DXF with known geometry
 test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        24 checks on the single line diagram layout and symbols
+test/mainboard-test.html  24 checks on circuits fed straight from a main board
 test/underlay-test.html   image/DXF/DWG loading and scale handling
 ```
 
