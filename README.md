@@ -213,6 +213,101 @@ app needs to change to accept it.
 
 ---
 
+***REMOVED******REMOVED*** Protective devices
+
+Every supply carries a device: each board's incomer, and each final circuit.
+Three numbers describe it, and they are three different things:
+
+| | |
+|---|---|
+| **Ir** — the setting | what the device actually protects at |
+| **In** — the frame | the largest the mechanism and contacts are built for |
+| **Icu** — the breaking capacity | the largest fault it can switch off |
+
+A 250 A frame set to 200 A is a 200 A device for the supply's purposes; the
+250 A frame exists so the 200 A one can be set up to its rating.
+
+**The rule per tier** is a house convention, not physics:
+
+| Tier | Device |
+|---|---|
+| Main board (PDB) | MCCB |
+| Distribution board (PDP) | MCCB |
+| Sub-board (DB) | MCB |
+| Final circuit | MCB below 160 A, MCCB above |
+
+**Propose protection** in the toolbar sets a device on everything that has
+none. It asks first whether to replace devices that are already set, because a
+project imported from a switchgear schedule has the real devices on every
+circuit and quietly overwriting them would throw away the only data that came
+off the schedule. *Only where missing* fills in the gaps and leaves the rest.
+
+A device is sized on the **load with margin**, not on the board's rating: a
+4,000 A board carrying 700 A gets a 1,000 A device, because the board is bought
+big for the circuits to come. A device never exceeds the board it protects.
+
+***REMOVED******REMOVED******REMOVED*** The one case where the convention gives way
+
+A 250 A sub-board is **beyond any MCB** — the largest is 125 A. Following the
+"MCBs for DBs" rule literally would put a 125 A device in front of a 250 A
+board, so the proposal returns an **MCCB** and says why. If an MCB is wanted
+regardless, the alternative is an MCB assembly with a **shunt trip and an
+undervoltage release**: a small MCB cuts the load and the assembly opening
+isolates it.
+
+***REMOVED******REMOVED******REMOVED*** What the audit checks
+
+Three failures, checked separately because they are separate:
+
+- **Breaking capacity below the fault level** — the device would fail to
+  interrupt. Reports the next catalogue size to order.
+- **Setting below the load** — it will nuisance-trip.
+- **Setting above the cable** — the cable overheats before the device trips.
+
+Plus **selectivity** between a board and the one feeding it, and a note when a
+device cannot be protected by any cable. That last one matters: above about
+4,000 A no number of parallel cables is enough, and the audit says **busbar**
+rather than sending someone off to add another core.
+
+***REMOVED******REMOVED******REMOVED*** Fault levels
+
+The fault level at a board comes from the transformer's **impedance**, not its
+rating:
+
+```
+Ssc = Sn / uk        a 3,150 kVA transformer at 6% has a short-circuit
+Isc = Ssc / (√3·V)   power of 52.5 MVA — about 73 kA at 400 V
+```
+
+Reading the rating as though it were the fault power gives 4.4 kA, which is
+wrong by a factor of about 17 — the difference between ordering a 6 kA device
+and a 100 kA one. `uk` is the transformer's **Impedance** field.
+
+---
+
+***REMOVED******REMOVED*** Protection from the switchgear schedule
+
+`tools/add_protection.py` puts the vendor's own devices onto the circuits of a
+project file, matched by the sheet row the importer recorded:
+
+```
+python3 tools/add_protection.py tools/wxm-line5.json "schedule.xlsx"
+```
+
+On the Client schedule that is 97 circuits — **56 TM and 41 LI**, from 15 A
+up to 800 A in 250 / 400 / 600 / 800 A frames. These are read from the sheet
+rather than proposed, because they came off the switchgear schedule.
+
+The sheet's **Interrupt Rating** column is blank on every row, so the breaking
+capacity is left empty and filled from the calculated fault level when the
+project is opened. A blank column is not a reason to invent a figure.
+
+A project with *some* devices but gaps in them is completed on open — boards
+that have no device, and a breaking capacity that is missing. Nothing already
+set is touched.
+
+---
+
 ***REMOVED******REMOVED*** Sub-distribution boards
 
 A sub-distribution board is a **125 A or 250 A** board — an Acti9, Acti9P or
@@ -383,11 +478,15 @@ js/sld.js           single line diagram: tree layout and IEC 60617 symbols
 js/ui.js            shell: properties, schedules, site map, export, import, print
 tools/xlsx_read.py        minimal spreadsheet reader, standard library only
 tools/client_import.py  vendor load schedule → project file
+tools/add_protection.py   vendor switchgear schedule → circuit devices
+tools/wxm-line5.json      the Client Line 5 & Auxiliaries project, ready to import
 test/parser-test.html     35 checks against a synthetic DXF with known geometry
 test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        24 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
+test/protection-test.html 34 checks on fault levels, device proposals and the
+                          protection audit
 test/underlay-test.html   image/DXF/DWG loading and scale handling
 ```
 
@@ -443,9 +542,18 @@ This builds and checks a schedule. It is **not** a design certification tool.
   measurement you use to set it.
 - Volt drop uses an indicative cable impedance, not a full impedance and temperature
   calculation.
-- **No** protection coordination, discrimination/selectivity, cable thermal withstand
-  under fault, short-circuit capacity, RCD discrimination, or cost checks.
-- Fault levels are indicative only (see above).
+- The selectivity check compares device ratings only. It ignores curves, energy
+  classes, let-through and time bands, so it is a prompt to check the curves —
+  **not** a discrimination study. A pass here is not proof of selectivity, and a
+  warning is not proof of a fault.
+- Cable thermal withstand under fault, short-circuit capacity, RCD discrimination
+  and cost are **not** checked.
+- Fault levels are indicative only (see above): they rest on the assumed
+  transformer impedance and fault MVA, and ignore busbar and contact impedance.
+  Breaking capacities are chosen with 15% on top for that reason. Confirm against
+  an actual short-circuit study before ordering.
+- The device ranges are the Compact NS and Acti9 families. A manufacturer with
+  different ranges can be typed in by hand.
 - No diversity is applied between circuits — each panel is loaded at its own demand
   factor. Add demand factors per panel to model diversity.
 - Starting currents, inrush, harmonic effects, motor acceleration and generator
