@@ -122,32 +122,42 @@ the Equipment ref field rather than being overwritten, so nothing is lost.
 
 ***REMOVED******REMOVED******REMOVED*** Sub-distribution boards
 
-A sub-distribution board is the small board at the end of the chain — an Acti9,
-Acti9P or similar, fed from a PDP and carrying final circuits. It has its own
-incomer, its own outgoing ways and its own feeder cable, and the audit checks all
-three: overload, circuits against ways, and cable capacity.
+A sub-distribution board is a **125 A or 250 A** board — an Acti9, Acti9P or
+similar — fed from a distribution board and carrying lighting, small power and the
+other small final circuits. In design terms it is just another feeder off the PDP,
+handled in the same way as a machine main control panel.
 
-**One per distribution board, 63 A and below.** That is the design the tool
-enforces:
+**One per distribution board is the usual starting point**, because you would
+generally have use for it later. More than one on the same PDP is entirely normal
+where a distribution board covers more than one area, and the tool allows it: `+DB`
+is offered on every PDP.
 
-- `+DB` is only offered on a PDP that does not already have a sub-board. Asking
-  for a second selects the existing one and says why.
-- A sub-board above 63 A is flagged: a board that size is a second distribution
-  board and should be modelled as a PDP.
-- Two sub-boards on one PDP is an error in the audit.
-- A PDP with no sub-board is noted — the design expects one.
-- The `Carries` field ("lighting, small power") records what the board is for, and
-  appears on the schedules.
+**The 63 A limit is on the largest single piece of equipment fed *from* the board**,
+not on the board's own rating. Lighting circuits (16 A), 230 V sockets (32 A), an
+inspection system (32 A), 400 V sockets (32 A) and general process sockets all
+belong on a DB; anything larger is supplied directly from the distribution board.
+The audit reports every circuit over the limit, naming the board it should move to.
+
+Sub-boards have their own incomer, ways, enclosure, feeder cable and description
+of what they carry. The audit checks overload, circuits against ways, imbalance,
+feeder capacity and the 63 A rule. A sub-board feeder is sized for the board's
+**rating**, not for the circuits currently on it — a board at 20% now will be full
+eventually, and the cable has to serve it when it is.
 
 **Main panels connect directly to the distribution board.** An MCC, a chiller, a
-compressor or a boiler has no place on a 63 A lighting board, and the sample keeps
-them on the PDP where they belong.
+compressor or a boiler has no place on a sub-board, and the sample keeps them on the
+PDP where they belong.
 
-Auto-assignment **always lands a circuit on the PDP**, never on a sub-board — a
-63 A lighting board is a deliberate placement decision, not something the tool
-should pick because a board had 30 A of headroom. Once placed you can move a
-circuit onto a sub-board in its properties, and the sub-board list only offers
-boards on that circuit's own PDP so the two cannot contradict each other.
+Deleting a sub-board returns its circuits to feeding from the distribution board,
+which is where they came from. Auto-balance never separates a circuit from the board
+it sits on: it moves the whole sub-board or leaves it alone.
+
+Auto-assignment **always lands a circuit on a distribution board**, never on a
+sub-board — a 125 A lighting board is a deliberate placement decision, not
+something the tool should pick because a board had 30 A of headroom. Once placed
+you can move a circuit onto a sub-board in its properties, and the sub-board list
+only offers boards on that circuit's own PDP so the two cannot contradict each
+other.
 
 Because the main panels sit on the distribution board directly, a distribution
 board's spare ways are counted against the circuits that land on it directly —
@@ -280,6 +290,7 @@ js/sld.js           single line diagram: tree layout and IEC 60617 symbols
 js/ui.js            shell: properties, schedules, site map, export, import, print
 test/parser-test.html     35 checks against a synthetic DXF with known geometry
 test/numbering-test.html  58 checks on the board numbering scheme
+test/db-test.html        sub-board sizing and the 63 A rule
 test/sld-test.html        24 checks on the single line diagram layout and symbols
 test/underlay-test.html   image/DXF/DWG loading and scale handling
 ```
@@ -310,6 +321,10 @@ It goes into the print report as its own section, scaled to the page width.
 
 Unassigned circuits are not drawn — they have nothing to hang from. They appear in
 the audit as "not assigned to a PDP".
+
+The symbols follow IEC 60617 conventions but the **legend is descriptive, not a
+normative reference**. Check the drawing conventions against your own copy of the
+standard and your practice's house style before issue.
 
 ---
 
