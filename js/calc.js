@@ -722,7 +722,24 @@ var LC = (function () {
   /* ---------------------------------------------------------------- audit  */
   function audit(p) {
     var out = [], i;
-    var add = function (lvl, scope, id, t, d) { out.push({ level: lvl, scope: scope, id: id, title: t, detail: d }); };
+    /* `key` is an optional grouping handle. Two findings with the same key are
+       the same problem seen on two different items, which is what lets a check
+       that fires on every circuit be reported as one line instead of ninety —
+       see groupFindings(). Omit it and the finding stands on its own. */
+    var add = function (lvl, scope, id, t, d, key, kw) {
+      var rec = { level: lvl, scope: scope, id: id, title: t, detail: d,
+                  groupKey: key || null, groupKw: kw || null };
+      /* The item and the board it sits on, so a grouped row can name where the
+         problem is without the check having to word it that way. */
+      if (id && id !== '-') {
+        var o = get(p, scope, id);
+        if (o) {
+          rec.item = o;
+          rec.boardTag = boardTagOf(p, scope, o);
+        }
+      }
+      out.push(rec);
+    };
 
     /* board capacity */
     p.pdps.forEach(function (b) {
@@ -828,7 +845,8 @@ var LC = (function () {
         '. The device is ' + over.toFixed(over > 20 ? 0 : 1) + '× too slow for this core — a larger core, ' +
             'a lower fault level or a faster device would be needed.' +
         ' Both figures are indicative: the fault level rests on the assumed transformer impedance, and the ' +
-        'clearing time is a band rather than a curve. Check against the manufacturer\'s data before sizing on this.');
+        'clearing time is a band rather than a curve. Check against the manufacturer\'s data before sizing on this.',
+        'withstand', 0);
     }
 
     function checkProt(p, item, kind, loadA, cableA, faultKA) {
@@ -995,8 +1013,14 @@ var LC = (function () {
          sub-board, or a main board directly. */
       if (!pn.pdpId && !pn.pdbId) { add('warn', 'panel', pn.id, pn.tag + ' not assigned to a board', 'Set a grid reference or press Auto-assign.'); return; }
       if (pn.phases === '1' && D.num(pn.volt, 400) < 230) add('info', 'panel', pn.id, pn.tag + ' single phase at ' + pn.volt + ' V', 'Check the phase-to-neutral voltage.');
+      /* Every large motor gets this note, so on a real project it fires on a
+         fifth of the circuits and says the same thing each time. The group key
+         folds them into one line carrying the total load, which is the number
+         that tells you whether the starting problem is one machine or a
+         cluster that has to be sequenced. */
       if (pn.kw > 90 && String(pn.start) === 'DOL') add('info', 'panel', pn.id, pn.tag + ' large DOL starting load',
-        'Confirm the incomer and contactor withstand the starting current and check voltage dip.');
+        'Confirm the incomer and contactor withstand the starting current and check voltage dip.',
+        'dol-start', num(pn.kw, 0));
       /* a reserved circuit with no load yet (e.g. a generator connection
          point) is a placeholder, not a missing design decision */
       var placeholder = d.kw <= 0 && d.kva <= 0;
@@ -1033,26 +1057,115 @@ var LC = (function () {
     return out;
   }
 
+  /* ------------------------------------------------------- grouped findings
+     The audit reports what it finds, item by item, because that is the truth
+     about the checks. But a check that fires on every large motor, or on every
+     circuit whose device is too slow, produces one finding per item and the
+     list stops being readable — on the real project 56 of 97 circuits failed the
+     new withstand check, all for the same reason, and the ones that genuinely
+     differed from their neighbours were the four lost in the middle.
+
+     So the list is grouped on the way out. Findings that share a group key are
+     the same finding about different equipment, and collapse into one row
+     that carries the count and the total load. The row lists the items so
+     nothing is hidden, and it can be expanded back to the individual findings
+     for the ones that differ.
+
+     Two thresholds matter. Below MIN_GROUP the items are shown in full, because
+     two of something is usually two separate problems and grouping them
+     hides that. Above MAX_LIST the row is left collapsed by default, because
+     a list of ninety tags is not information anyone reads. */
+  var MIN_GROUP = 3, MAX_LIST = 8;
+
+  /* How a group's severity is read: the worst member decides the row, so a
+     group of notes containing one error is still an error. */
+  var LEVEL_RANK = { bad: 0, warn: 1, info: 2 };
+  function worstLevel(list) {
+    return list.map(function (f) { return f.level; })
+      .sort(function (a, b) { return LEVEL_RANK[a] - LEVEL_RANK[b]; })[0];
+  }
+
+  /* The row's title and detail, per group. A group with one member keeps its
+     own wording — there is nothing to summarise. */
+  function groupWord(findings) {
+    var tags = findings.map(function (f) {
+      var o = f.item || null;
+      return o && (o.tag || o.name) ? (o.tag || o.name) : 'item';
+    });
+    var kw = findings.reduce(function (a, f) { return a + (f.groupKw || 0); }, 0);
+    var board = findings.map(function (f) { return f.boardTag; })
+      .filter(function (v, i, arr) { return v && arr.indexOf(v) === i; });
+    return {
+      tags: tags,
+      kw: kw,
+      where: board,
+      load: kw > 0 ? kw.toFixed(0) + ' kW between them' : ''
+    };
+  }
+
+  /* Fold a list of findings into grouped rows. Anything without a group key
+     passes through untouched, so a one-off finding is never summarised. */
+  function groupFindings(findings) {
+    var order = { bad: 0, warn: 1, info: 2 };
+    var out = [], byKey = {}, idx = {};
+    findings.forEach(function (f) {
+      if (!f.groupKey) { out.push(f); return; }
+      /* the key is scoped by level, because a warn and a bad with the same key
+         are different problems and must not be merged into one row */
+      var k = f.groupKey + ' ' + f.level;
+      if (!byKey[k]) {
+        idx[k] = { level: f.level, groupKey: f.groupKey, members: [], sample: f };
+        byKey[k] = idx[k];
+      }
+      idx[k].members.push(f);
+    });
+    Object.keys(idx).forEach(function (k) {
+      var g = idx[k];
+      if (g.members.length < MIN_GROUP) { g.members.forEach(function (m) { out.push(m); }); return; }
+      var w = groupWord(g.members);
+      out.push({
+        level: g.level, scope: g.sample.scope, id: g.sample.id,
+        title: g.members.length + ' × ' + groupTitle(g.groupKey, w),
+        detail: w.where.length
+          ? 'On ' + w.where.join(', ') + '.' + (w.load ? ' ' + w.load + '.' : '')
+          : (w.load ? w.load + '.' : 'Expand the row for the individual items.'),
+        groupKey: g.groupKey, grouped: true, members: g.members,
+        tags: w.tags, kw: w.kw
+      });
+    });
+    out.sort(function (a, b) { return order[a.level] - order[b.level]; });
+    return out;
+  }
+
+  /* Which board an item hangs off, for a grouped row to say where the problem
+     is. Deliberately the immediate parent only: a group spread across four
+     main boards is four problems, and naming the parent is what tells them
+     apart. */
+  function boardTagOf(p, scope, o) {
+    if (scope === 'panel') {
+      if (o.dbId) return (get(p, 'db', o.dbId) || {}).tag;
+      if (o.pdpId) return (get(p, 'pdp', o.pdpId) || {}).tag;
+      if (o.pdbId) return (get(p, 'pdb', o.pdbId) || {}).tag;
+      return null;
+    }
+    if (scope === 'db') return (get(p, 'pdp', o.pdpId) || {}).tag;
+    if (scope === 'pdp') return (get(p, 'pdb', o.pdbId) || {}).tag;
+    if (scope === 'pdb') return (get(p, 'tx', o.txId) || {}).tag;
+    return null;
+  }
+
+  function groupTitle(key, w) {
+    if (key === 'dol-start') return 'large DOL starting load';
+    if (key === 'withstand') return 'cable that cannot survive the fault';
+    return key;
+  }
+
   /* ------------------------------------------------- thermal withstand -----
-     How long a cable survives a short circuit, and therefore whether the
-     device is fast enough to clear the fault before the conductor melts.
-
-     The adiabatic equation gives the highest current the conductor can carry for
-     a given time without its temperature exceeding the insulation limit:
-
-         k = 1 / sqrt(t) / c       with t in seconds and c the material factor
-         I²t = k² S² / R20
-
-     Only the ratio matters for a pass/fail comparison, and R20 has already been
-     folded into the cross-section term, so the allowable I²t for a core is:
-
-         allowable I²t = (1 / c)² × S² / t_max
-
-     R20 is not tabulated here. It is absorbed into a constant fitted to
-     copper, and for aluminium the constant is divided by roughly 0.5 in the
-     (1/α)²·R20 product, so aluminium gets its own factor. The comparison is
-     therefore indicative in the same way the fault level is: the sign is right,
-     the margin is not to be relied on.
+     How long a cable survives a short circuit, and therefore whether the device
+     is fast enough to clear the fault before the conductor melts. Nothing else
+     in the app looks at this: the ampacity checks ask whether a cable can carry
+     its load all day, and this asks whether it can carry sixty times its load
+     for the fraction of a second the protection takes to react.
 
      The clearing time compared against is taken from the device's own band,
      not from a fixed reference. A device with no short-time stage genuinely can
@@ -1742,6 +1855,7 @@ var LC = (function () {
     txFaultKA, faultAt, boardStats, phaseSplit, audit, cableCheck,
     mccbFrameFor, icuFor, mcbRatingFor, tripFor, deviceRatingFor, proposeProt, applyProt, protAll, hasDownstream,
     withstandI2t, clearingTimeS, checkWithstand, msOrS, WITHSTAND_K,
+    groupFindings, worstLevel, groupTitle, boardTagOf, MIN_GROUP, MAX_LIST,
     choosePdp, assignPanel, createPdpFor, feederLen, syncLen,
     sizeCablesFor, sizeCablesForPdb, sizeCablesForDb, suggestDbFeeder, sizeCableForPanel, sizeAll, feederAmp, needsSizing,
     nextPracticalPos, resolveDrop, autoBalance, totals, boardList, dist, uniqueTag,

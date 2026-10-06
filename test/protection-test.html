@@ -29,7 +29,7 @@
 <div id="summary">running…</div>
 
 <script src="../js/data.js?v=78"></script>
-<script src="../js/calc.js?v=100"></script>
+<script src="../js/calc.js?v=102"></script>
 <script>
 (function () {
   var results = [];
@@ -288,6 +288,64 @@
   gp.cable = { csa: 300, runs: 1, cores: 4, len: 25, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
   check('a core the device clears in time says nothing',
     LC.audit(fpz.p).filter(function (x) { return /withstand/i.test(x.title); }).length, 0);
+
+  /* ---------------------------------------------------- grouped findings */
+  /* Folding repeats is what makes the list readable, so the shape of the fold
+     matters as much as the numbers above. */
+  function f(lvl, key, kw, tag, board) {
+    return { level: lvl, scope: 'panel', id: tag, title: tag + ' thing', detail: '',
+             groupKey: key || null, groupKw: kw || null, item: { tag: tag },
+             boardTag: board || 'PDP1-1' };
+  }
+  var two = [f('info', 'x', 10, 'A'), f('info', 'x', 20, 'B')];
+  check('two of the same finding are left alone — two is usually two problems',
+    LC.groupFindings(two).length, 2);
+  check('and both keep their own title', LC.groupFindings(two)[1].title, 'B thing');
+
+  var three = [f('info', 'x', 10, 'A'), f('info', 'x', 20, 'B'), f('info', 'x', 30, 'C')];
+  var g3 = LC.groupFindings(three);
+  check('three fold into one row', g3.length, 1);
+  check('the row is marked as grouped, so the UI knows not to make it clickable', g3[0].grouped, true);
+  check('the row counts them', g3[0].title.slice(0, 3), '3 ×');
+  check('the row sums the load between them, which is the number that says whether it is one problem or a cluster', g3[0].kw, 60);
+  check('and the row keeps every member, so nothing is hidden', g3[0].members.length, 3);
+
+  /* A group that spans boards is named by board — that is what tells two
+     separate problems on two main boards apart from one systemic one. */
+  var split = [f('info', 'x', 10, 'A', 'PDP1-1'), f('info', 'x', 10, 'B', 'PDP1-1'),
+               f('info', 'x', 10, 'C', 'PDP2-1'), f('info', 'x', 10, 'D', 'PDP2-1')];
+  var gs = LC.groupFindings(split);
+  check('four across two boards are still one row, keyed by level', gs.length, 1);
+  check('and the row names both boards', /PDP1-1/.test(gs[0].detail) && /PDP2-1/.test(gs[0].detail), true);
+
+  check('severities are not merged — a warn and a bad with the same key are two problems',
+    LC.groupFindings([f('warn', 'x', 1, 'A'), f('warn', 'x', 1, 'B'), f('warn', 'x', 1, 'C'),
+                      f('bad', 'x', 1, 'D'), f('bad', 'x', 1, 'E'), f('bad', 'x', 1, 'F')]).length, 2);
+  check('and findings with no key pass straight through',
+    LC.groupFindings([f('info', null, 0, 'A'), f('info', null, 0, 'B')]).length, 2);
+
+  var many = [];
+  for (var g = 0; g < 40; g++) many.push(f('bad', 'withstand', 0, 'C' + g));
+  check('a group of forty still folds to one row', LC.groupFindings(many).length, 1);
+  check('with the worst severity, which is what a reader scans for', LC.groupFindings(many)[0].level, 'bad');
+  check('the longest tag list is capped, because a list of ninety is not information',
+    LC.MAX_LIST, 8);
+
+  /* And the two real grouped checks, end to end. */
+  var dz = site();
+  for (var m = 0; m < 5; m++) {
+    var mp = load(dz.p, dz.pdp, 120, 0.9);
+    mp.start = 'DOL';
+  }
+  LC.protAll(dz.p, {});
+  var draw = LC.audit(dz.p);
+  var dnotes = draw.filter(function (x) { return /DOL/.test(x.title); });
+  check('five large motors give five findings ungrouped', dnotes.length, 5);
+  check('that carry a group key so they can be folded', typeof dnotes[0].groupKey, 'string');
+  var dg = LC.groupFindings(draw).filter(function (x) { return x.grouped; });
+  check('and one row when grouped', dg.length, 1);
+  check('counting all five', dg[0].title.slice(0, 1), '5');
+  check('with their combined load, 600 kW', Math.round(dg[0].kw), 600);
 
   /* ------------------------------------------------------- everything at once */
   var z = site();

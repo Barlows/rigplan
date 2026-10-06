@@ -10,6 +10,12 @@
   var sort = { col: null, dir: 1 };
   var filter = { q: '', unassigned: false, noCable: false };
   var store = 'eload-sched-v1';
+  /* Whether the audit folds repeated findings together. On by default, because
+     a list where the same finding appears once per affected circuit cannot be
+     read — on the real project 36 of 59 rows were the same note about large
+     motors. The full list is always in the CSV and the print report, so this
+     only changes what the screen shows. */
+  var auditGrouped = true;
 
   /* ------------------------------------------------------------------ undo --
      Snapshot undo rather than command reversal. Reversing an operation means
@@ -1243,22 +1249,50 @@
   }
 
   function viewAudit() {
-    var issues = LC.audit(S);
+    var raw = LC.audit(S);
+    /* Grouped both ways, because the button has to survive the mode it is in:
+       counting what *would* be folded is what keeps it on screen after the
+       user has already unfolded, rather than the control removing itself and
+       leaving no way back. */
+    var folded = LC.groupFindings(raw);
+    var issues = auditGrouped ? folded : raw;
+    var bad = raw.filter(function (i) { return i.level === 'bad'; }).length;
+    var warn = raw.filter(function (i) { return i.level === 'warn'; }).length;
+    var info = raw.filter(function (i) { return i.level === 'info'; }).length;
+    var collapsible = folded.length !== raw.length;
+    var hidden = raw.length - folded.length;
     var h = '<div class="toolbar-inline"><span style="font-size:11px;color:var(--fg-dim)">' +
-      issues.filter(function (i) { return i.level === 'bad'; }).length + ' errors · ' +
-      issues.filter(function (i) { return i.level === 'warn'; }).length + ' warnings · ' +
-      issues.filter(function (i) { return i.level === 'info'; }).length + ' notes</span>' +
-      '<span style="margin-left:auto"></span>' + btn2('balance', 'Auto-balance') + btn2('autocables', 'Size all cables') + btn2('print', 'Print report') + '</div>';
-    if (!issues.length) return h + '<div class="empty">✓ No design warnings.<br>Boards are within capacity, phases balanced, cables and volt drops compliant.</div>';
+      bad + ' errors · ' + warn + ' warnings · ' + info + ' notes' +
+      /* What is collapsed, so the shorter list is not mistaken for all of it */
+      (auditGrouped && collapsible ? ' <span style="color:var(--fg-dim2)">(' + hidden + ' of the same kind folded together)</span>' : '') +
+      '</span>' +
+      '<span style="margin-left:auto"></span>' +
+      (collapsible ? '<button class="btn sm" data-global="auditgroup">' + (auditGrouped ? 'Show every finding' : 'Group repeats') + '</button>' : '') +
+      btn2('balance', 'Auto-balance') + btn2('autocables', 'Size all cables') + btn2('print', 'Print report') + '</div>';
+    if (!raw.length) return h + '<div class="empty">✓ No design warnings.<br>Boards are within capacity, phases balanced, cables and volt drops compliant.</div>';
     h += issues.map(function (i) {
       var lvc = i.level === 'bad' ? 'bad' : i.level === 'warn' ? 'warn' : 'info';
       var lvt = i.level === 'bad' ? 'ERROR' : i.level === 'warn' ? 'WARNING' : 'NOTE';
-      var can = i.id && i.id !== '-' && LC.get(S, i.scope, i.id);
-      return '<div class="audit-item' + (can ? ' clickable' : '') + '"' + (can ? ' data-select="' + i.id + '" data-kind="' + i.scope + '"' : '') + '>' +
+      /* A grouped row is not itself clickable — there is no one item it
+         means. Its members are listed instead, each one selectable. */
+      var can = !i.grouped && i.id && i.id !== '-' && LC.get(S, i.scope, i.id);
+      var out = '<div class="audit-item' + (can ? ' clickable' : '') + '"' +
+        (can ? ' data-select="' + i.id + '" data-kind="' + i.scope + '"' : '') + '>' +
         '<div class="lv"><span class="badge ' + lvc + '">' + lvt + '</span></div>' +
         '<div class="audit-body"><div class="t">' + esc(i.title) + '</div>' +
-        (i.detail ? '<div class="d">' + esc(i.detail) + '</div>' : '') +
-        '<div class="code">' + esc(i.scope.toUpperCase()) + ' · design margin ' + S.design.designMargin + '× · drop limit ' + S.design.vdropLimitLv + '%</div></div></div>';
+        (i.detail ? '<div class="d">' + esc(i.detail) + '</div>' : '');
+      if (i.grouped) {
+        /* Long lists are the reason grouping exists, so a group of ninety gets
+           the first eight and a count for the rest rather than all ninety —
+           the full list is in the CSV and the print report. */
+        var show = LC.MAX_LIST;
+        out += '<div class="d" style="margin-top:5px">' +
+          i.tags.slice(0, show).map(function (tg) { return esc(tg); }).join(' · ') +
+          (i.tags.length > show ? ' <span style="color:var(--fg-dim2)">and ' + (i.tags.length - show) + ' more — see the CSV export</span>' : '') +
+          '</div>';
+      }
+      out += '<div class="code">' + esc(i.scope.toUpperCase()) + ' · design margin ' + S.design.designMargin + '× · drop limit ' + S.design.vdropLimitLv + '%</div></div></div>';
+      return out;
     }).join('');
     return h;
   }
@@ -2573,6 +2607,7 @@
     if (a === 'mapfit') return mapFit();
     if (a === 'mapclear') return mapClear();
     if (a === 'mapcal') return mapCalibrate();
+    if (a === 'auditgroup') { auditGrouped = !auditGrouped; renderTab(); return; }
     if (a === 'protect') return proposeAllProt();
     if (a === 'protect-keep') return proposeAllProt(true);
     if (a === 'balance' || a === 'balance-tx') {
