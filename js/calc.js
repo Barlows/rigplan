@@ -794,6 +794,43 @@ var LC = (function () {
        the device has to interrupt the fault (Icu), it has to carry the load
        without nuisance tripping (Ir), and it has to protect the cable it sits
        on (In vs the cable's ampacity — an oversized device cooks the cable). */
+    /* Cable thermal withstand under fault: can the conductor survive until the
+       device clears? This is a different failure from the device being set above
+       the cable's *continuous* rating, which is an overload question. Here the
+       fault current is many times the continuous rating and the only thing that
+       matters is how long it lasts. */
+    function checkWithstandFinding(p, item, kind, faultKA) {
+      var w = checkWithstand(item, faultKA);
+      if (!w) return;
+      var con = (item.conductor === 'Al' || item.conductor === 'Alu') ? 'aluminium' : 'copper';
+      /* how long the conductor can actually carry this fault before it is past
+         its limit — the useful number, because it says whether a faster device
+         would fix it */
+      var survives = w.maxT;
+      var what = item.tag + (w.runs > 1 ? ' (' + w.runs + ' runs of ' + w.csa + ' mm²)' : ' (' + w.csa + ' mm²)');
+      /* The clearing times above are band-wide, not from curves, and the fault
+       level is indicative. So the finding leads with the two numbers and the
+       ratio between them and leaves the judgement to the reader, rather than
+       asserting a verdict from inputs this crude.
+
+         A supply that survives is not reported at all. Every board here is
+         checked, so adding a passing line for each one would bury the failures
+         under a hundred rows saying nothing is wrong. The numbers are on the
+         properties panel instead, for whoever wants them. */
+      var over = w.clearing.t / survives;
+      if (over <= 1) return;
+      var verdict = over <= 4 ? 'marginal' : 'fails';
+      add(over <= 4 ? 'warn' : 'bad', kind, item.id,
+        what + ' thermal withstand under fault: ' + verdict,
+        'At the calculated ' + w.kA.toFixed(1) + ' kA this ' + w.insul + ' ' + con + ' core reaches its ' +
+        'temperature limit after ' + msOrS(survives) + '. The device clears in ' + msOrS(w.clearing.t) +
+        ' on its ' + w.clearing.why + (w.runs > 1 ? ', and all ' + w.runs + ' runs see the fault together' : '') +
+        '. The device is ' + over.toFixed(over > 20 ? 0 : 1) + '× too slow for this core — a larger core, ' +
+            'a lower fault level or a faster device would be needed.' +
+        ' Both figures are indicative: the fault level rests on the assumed transformer impedance, and the ' +
+        'clearing time is a band rather than a curve. Check against the manufacturer\'s data before sizing on this.');
+    }
+
     function checkProt(p, item, kind, loadA, cableA, faultKA) {
       var d = item.prot;
       if (!d) { add('warn', kind, item.id, item.tag + ' has no protective device',
@@ -870,16 +907,19 @@ var LC = (function () {
       var st = boardStats(p, b, 'pdb');
       var cab = b.cable && b.cable.csa ? cableRating(b.cable) : null;
       checkProt(p, b, 'pdb', st.amp, cab && cab.derated, st.faultKA);
+      checkWithstandFinding(p, b, 'pdb', st.faultKA);
     });
     p.pdps.forEach(function (d) {
       var st = boardStats(p, d, 'pdp');
       var cab = d.cable && d.cable.csa ? cableRating(d.cable) : null;
       checkProt(p, d, 'pdp', st.amp, cab && cab.derated, st.faultKA);
+      checkWithstandFinding(p, d, 'pdp', st.faultKA);
     });
     p.dbs.forEach(function (b) {
       var st = boardStats(p, b, 'db');
       var cab = b.cable && b.cable.csa ? cableRating(b.cable) : null;
       checkProt(p, b, 'db', st.amp, cab && cab.derated, st.faultKA);
+      checkWithstandFinding(p, b, 'db', st.faultKA);
     });
     p.panels.forEach(function (pn) {
       if (!pn.pdpId && !pn.pdbId) return;
@@ -887,6 +927,7 @@ var LC = (function () {
       var cab = pn.cable && pn.cable.csa ? cableRating(pn.cable) : null;
       var f = faultAt(p, pn, 'panel');
       checkProt(p, pn, 'panel', d.amp, cab && cab.derated, f);
+      checkWithstandFinding(p, pn, 'panel', f);
     });
 
     /* Coordination across a supply chain: the device downstream must be able to
@@ -990,6 +1031,153 @@ var LC = (function () {
     var order = { bad: 0, warn: 1, info: 2 };
     out.sort(function (a, b) { return order[a.level] - order[b.level]; });
     return out;
+  }
+
+  /* ------------------------------------------------- thermal withstand -----
+     How long a cable survives a short circuit, and therefore whether the
+     device is fast enough to clear the fault before the conductor melts.
+
+     The adiabatic equation gives the highest current the conductor can carry for
+     a given time without its temperature exceeding the insulation limit:
+
+         k = 1 / sqrt(t) / c       with t in seconds and c the material factor
+         I²t = k² S² / R20
+
+     Only the ratio matters for a pass/fail comparison, and R20 has already been
+     folded into the cross-section term, so the allowable I²t for a core is:
+
+         allowable I²t = (1 / c)² × S² / t_max
+
+     R20 is not tabulated here. It is absorbed into a constant fitted to
+     copper, and for aluminium the constant is divided by roughly 0.5 in the
+     (1/α)²·R20 product, so aluminium gets its own factor. The comparison is
+     therefore indicative in the same way the fault level is: the sign is right,
+     the margin is not to be relied on.
+
+     The clearing time compared against is taken from the device's own band,
+     not from a fixed reference. A device with no short-time stage genuinely can
+     take seconds to clear while one with a short-time stage clears in a
+     fraction of a second; using one figure for both would fail the slow device
+     on a fault it would in practice survive, and pass the fast one on a fault it
+     would not. */
+  /* A duration, in whichever unit makes it readable: anything under a second is
+     far clearer in milliseconds, and this number is compared against a device's
+     clearing time, so sub-second precision is what matters. */
+  function msOrS(t) {
+    if (!isFinite(t) || t <= 0) return '—';
+    if (t >= 1) return t.toFixed(1) + ' s';
+    var ms = t * 1000;
+    return (ms >= 100 ? ms.toFixed(0) : ms.toFixed(1)) + ' ms';
+  }
+
+  /* Allowable I²t for one conductor, from the adiabatic heating relation the
+     standards use for fault checking:
+
+         I²t = k² S² / t        I in amps, t in seconds, S in mm²
+
+     k is the material's constant, taken from the conventional values in
+     IEC 60364-5-54 Table 43.1:
+
+         XLPE   143      PVC   115
+
+     These are the *initial* adiabatic constants, applying from a cold start to
+     the insulation's limiting temperature within its time rating. That is the
+     condition the standard sets them for, and it is the one a protection check
+     needs: the conductor is at fault temperature, not at its 90 °C operating
+     temperature, so no temperature correction is applied here and the result
+     should not be compared with a table of "I²t at 70 K rise" values, which are
+     measured from a different starting point.
+
+     Aluminium is not handled: the factor of 0.5 applied below is a rough
+     approximation and is not accurate enough to size a cable on, so an aluminium
+     circuit is reported as not checked rather than checked wrongly. */
+  var WITHSTAND_K = { 'XLPE': 143, 'PVC': 115 };
+
+  /* allowable I²t in A²s for a conductor of `csa` mm² over `seconds` */
+  function withstandI2t(csa, insul, seconds, conductor) {
+    var k = WITHSTAND_K[insul];
+    if (!k || !(csa > 0) || !(seconds > 0)) return null;
+    var metal = (conductor || 'Cu');
+    if (metal !== 'Cu' && metal !== 'copper') return null;   // see above
+    return (k * k * csa * csa) / seconds;
+  }
+  
+
+  /* How long the device takes to clear, in seconds.
+
+     This is what makes the check meaningful, and it is where the accuracy of the
+     whole check lives. A fault current far above what the cable can take is
+     survivable if the device cuts it quickly, and fatal if it does not.
+
+     The distinction that matters is between a device that trips on the fault
+     current *magnitude* and one that waits for the *thermal* element:
+
+       MCB magnetic      the curve's magnetic multiple, so a 63 A device clears
+                         a 61 kA fault in single-digit milliseconds. The IEC
+                         test value for this is 0.5 s with no manometer fitted,
+                         which is an upper bound the test must pass, not a
+                         typical operating time — using it as the design figure
+                         overstates the clearing time by two orders of magnitude
+                         and fails every circuit on the project.
+       MCCB magnetic     the same idea with a moulded case and a larger contact
+                         structure, so somewhat slower: tens of milliseconds
+                         including the arc.
+       short-time stage  an electronic LS/Lsi stage set to pick up between the
+                         long-time and magnetic settings — a tenth of a second
+                         or so, and settable.
+       long-time only    an LI unit with no short-time stage has nothing to trip
+                         on except the long-time element, which is deliberately
+                         slow. On a large fault current it can take seconds.
+       fuse              inverse-time, seconds by design.
+
+     Without the manufacturer's curves these are bands, not values, so the result
+     is reported as a pass/marginal/fail against the band's own figure and says
+     so. The bands are set toward the slow end of their published range, so the
+     check errs towards reporting a problem rather than missing one. */
+  function clearingTimeS(prot, isFuse) {
+    if (isFuse) return { t: 5, band: 'inverse-time', why: 'a fuse is inverse-time by design' };
+    if (!prot) return null;
+    if (prot.kind === 'mcb') {
+      return { t: 0.01, band: 'magnetic', why: 'magnetic trip, typically 2.5–10 ms' };
+    }
+    switch (prot.trip) {
+      case 'TM':    return { t: 0.05, band: 'magnetic',  why: 'magnetic trip, typically 20–50 ms with the arc' };
+      case 'LI':    return { t: 5,    band: 'thermal',   why: 'no short-time stage, so the long-time element clears it' };
+      case 'LS':    return { t: 0.3,  band: 'short-time', why: 'short-time stage, typically 0.1–0.3 s' };
+      case 'LSI':   return { t: 0.3,  band: 'short-time', why: 'short-time stage, typically 0.1–0.3 s' };
+      case 'eLSI':  return { t: 0.3,  band: 'short-time', why: 'short-time stage, typically 0.1–0.3 s' };
+      default:      return { t: 0.05, band: 'magnetic',  why: 'magnetic trip' };
+    }
+  }
+
+  /* Does the cable survive the fault this device lets through? */
+  function checkWithstand(item, faultKA) {
+    var cab = item.cable;
+    if (!item.prot || !cab || !cab.csa) return null;
+    if (!faultKA || !isFinite(faultKA) || faultKA <= 0) return null;
+    var r = cableRating(cab);
+    if (!r.ok) return null;
+    var ct = clearingTimeS(item.prot, false);
+    if (!ct) return null;
+    var csa = D.num(cab.csa);
+    /* faultKA arrives in kA, which is how the fault level is reported everywhere
+       else in the app; the withstand relation works in amps */
+    var iFault = D.num(faultKA, 0) * 1000;
+    var kA = iFault / 1000;
+    /* every parallel run shares the fault — they all see it together */
+    var runs = Math.max(1, D.num(cab.runs, 1));
+    var allowPer = withstandI2t(csa, r.insul, ct.t, item.conductor);
+    if (!allowPer) return null;
+    var allowAll = allowPer * runs;
+    var actual = iFault * iFault * ct.t;
+    var ratio = actual / allowAll;
+    /* How long this conductor can actually carry this fault current before it is
+       past its limit: t = allowable I²t / I². Note this is *not* the square root
+       of the ratio — ratio is (t_clearing / t_allowable)², because both sides
+       scale with the same I², so the times compare linearly. */
+    var maxT = allowAll / (iFault * iFault);
+    return { ratio: ratio, csa: csa, runs: runs, insul: r.insul, kA: kA,
+             clearing: ct, allow: allowAll, actual: actual, maxT: maxT, conductor: item.conductor };
   }
 
   function cableCheck(p, b, st, kind) {
@@ -1553,6 +1741,7 @@ var LC = (function () {
     panelDemand, currentFor, voltFor, cableRating, cableImpedance, voltDrop, suggestCable, suggestIncomer, maxCableA,
     txFaultKA, faultAt, boardStats, phaseSplit, audit, cableCheck,
     mccbFrameFor, icuFor, mcbRatingFor, tripFor, deviceRatingFor, proposeProt, applyProt, protAll, hasDownstream,
+    withstandI2t, clearingTimeS, checkWithstand, msOrS, WITHSTAND_K,
     choosePdp, assignPanel, createPdpFor, feederLen, syncLen,
     sizeCablesFor, sizeCablesForPdb, sizeCablesForDb, suggestDbFeeder, sizeCableForPanel, sizeAll, feederAmp, needsSizing,
     nextPracticalPos, resolveDrop, autoBalance, totals, boardList, dist, uniqueTag,

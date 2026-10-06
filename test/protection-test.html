@@ -29,7 +29,7 @@
 <div id="summary">running…</div>
 
 <script src="../js/data.js?v=78"></script>
-<script src="../js/calc.js?v=78"></script>
+<script src="../js/calc.js?v=100"></script>
 <script>
 (function () {
   var results = [];
@@ -192,6 +192,102 @@
   LC.sizeCablesFor(c2.p, c2.pdp);
   check('a distribution board feeder is sized on its device too',
     LC.cableRating(c2.pdp.cable).derated >= 1250, true);
+
+  /* ----------------------------------------------------- cable withstand */
+  /* One core of `csa` mm², XLPE unless stated, with a device of `trip`. */
+  function wx(csa, trip, kA, runs, method) {
+    return {
+      tag: 'WX', conductor: 'Cu',
+      cable: { csa: csa, runs: runs || 1, cores: 4, len: 25, method: method || 'XL-A1', group: 1, ambient: 40, sheathed: true },
+      prot: { kind: trip === 'C' ? 'mcb' : 'mccb', ir: 250, frame: 250, icu: 80, trip: trip === 'C' ? 'C' : trip, poles: 4 }
+    };
+  }
+
+  /* The adiabatic relation itself. k = 143 for XLPE, so I²t = k²S²/t. Checked
+     against values that can be recomputed by hand from that one relation —
+     the point is to catch a change in the constant or in the exponent, which a
+     self-consistent but wrong implementation would not. */
+  check('allowable I²t at 143 for XLPE: 95 mm² over 0.5 s',
+    Math.round(LC.withstandI2t(95, 'XLPE', 0.5, 'Cu')), 369104450);
+  check('and the same core over 10 s is a hundredth of it',
+    Math.round(LC.withstandI2t(95, 'XLPE', 10, 'Cu')), 18455223);
+  check('allowable I²t for PVC at 115: 95 mm² over 0.5 s',
+    Math.round(LC.withstandI2t(95, 'PVC', 0.5, 'Cu')), 238711250);
+  check('a bigger core scales as the square of the size',
+    Math.round(LC.withstandI2t(190, 'XLPE', 0.5, 'Cu')), 1476417800);
+  check('aluminium is reported as unchecked rather than checked wrongly',
+    LC.withstandI2t(95, 'XLPE', 0.5, 'Al'), null);
+  check('and an insulation type with no constant is also unchecked',
+    LC.withstandI2t(95, 'EPR', 0.5, 'Cu'), null);
+
+  /* Clearing time. These are the figures the whole check rests on, and they had
+     to change once: the 0.5 s that IEC 60898 uses as the magnetic-release test
+     value is a bound the test must pass with no manometer fitted, not a
+     typical operating time, and using it failed every cable on the project. */
+  check('an MCB clears on its magnetic trip, in single-digit milliseconds',
+    LC.clearingTimeS({ kind: 'mcb', trip: 'C' }, false).t, 0.01);
+  check('a thermal-magnetic MCCB is slower than an MCB but still not 0.5 s',
+    LC.clearingTimeS({ kind: 'mccb', trip: 'TM' }, false).t, 0.05);
+  check('a short-time stage lands between the two',
+    LC.clearingTimeS({ kind: 'mccb', trip: 'LSI' }, false).t, 0.3);
+  check('an LI unit with no short-time stage is judged on seconds',
+    LC.clearingTimeS({ kind: 'mccb', trip: 'LI' }, false).t, 5);
+  check('a fuse is slower than any of them',
+    LC.clearingTimeS(null, true).t > LC.clearingTimeS({ kind: 'mccb', trip: 'TM' }, false).t, true);
+
+  /* The check itself, against the fault level the real project actually has. */
+  var wTM = LC.checkWithstand(wx(95, 'TM', 61.3), 61.3);
+  check('a 95 mm² core takes a second to give at 61 kA, against 50 ms to clear',
+    wTM.maxT > 0.9 && wTM.maxT < 1.1, true);
+  check('which passes comfortably', wTM.ratio <= 1, true);
+  var w16 = LC.checkWithstand(wx(16, 'TM', 61.3), 61.3);
+  check('a 16 mm² core on the same fault lasts only tens of milliseconds', w16.maxT < 0.1, true);
+  check('and does not survive a 50 ms clearing time', w16.ratio > 1, true);
+  var w16m = LC.checkWithstand(wx(16, 'C', 61.3), 61.3);
+  check('but it does survive an MCB clearing in 10 ms', w16m.ratio <= 1, true);
+  /* the clearing time is the only thing that differs between those two, and the
+     allowance falls as 1/t, so a device five times faster buys five times the
+     time — which is why it is the device and not the cable that decides */
+  check('the same cable and fault, so the device is what decided it',
+    w16m.maxT / w16.maxT, 5);
+  var wLI = LC.checkWithstand(wx(95, 'LI', 61.3), 61.3);
+  check('the same 95 mm² core fails against an LI unit on 5 s', wLI.ratio > 1, true);
+
+  check('parallel runs are counted together — four runs last four times as long',
+    LC.checkWithstand(wx(95, 'TM', 61.3, 4), 61.3).maxT / wTM.maxT, 4);
+  check('a low fault level is not a problem at any reasonable size',
+    LC.checkWithstand(wx(16, 'C', 4), 4).ratio <= 1, true);
+  check('no device means nothing to check against', LC.checkWithstand({ cable: { csa: 95 } }, 61.3), null);
+  check('no cable means nothing to check', LC.checkWithstand({ prot: { kind: 'mcb' } }, 61.3), null);
+  check('no fault level means nothing to check',
+    LC.checkWithstand({ cable: { csa: 95 }, prot: { kind: 'mcb' } }, 0), null);
+
+  check('msOrS reads a sub-second duration in milliseconds', LC.msOrS(0.0125), '12.5 ms');
+  check('and a longer one in seconds', LC.msOrS(2.5), '2.5 s');
+
+  /* It has to reach the audit, and the message has to lead with the two numbers
+     rather than a verdict, because both inputs are indicative. */
+  var fz = site();
+  var fp = load(fz.p, fz.pdp, 60, 0.9);
+  LC.protAll(fz.p, {});
+  /* a small core on a device with no short-time stage: the case that fails */
+  fp.cable = { csa: 25, runs: 1, cores: 4, len: 25, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
+  fp.prot = { kind: 'mccb', ir: 200, frame: 250, icu: 80, trip: 'LI', poles: 4 };
+  var fnd = LC.audit(fz.p).filter(function (x) { return /withstand/i.test(x.title); });
+  check('a core the device cannot protect shows up in the audit', fnd.length, 1);
+  check('and is reported as failing, not as marginal', fnd[0].title.slice(-5), 'fails');
+  check('and names the core it is about', /25 mm²/.test(fnd[0].title), true);
+  check('and carries both figures in the detail', /ms/.test(fnd[0].detail) && /kA/.test(fnd[0].detail), true);
+  check('and says the figures are indicative', /indicative/.test(fnd[0].detail), true);
+
+  /* A core that survives is not reported. Every board is checked, so a passing
+     line for each one would bury the failures. */
+  var fpz = site();
+  var gp = load(fpz.p, fpz.pdp, 60, 0.9);
+  LC.protAll(fpz.p, {});
+  gp.cable = { csa: 300, runs: 1, cores: 4, len: 25, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
+  check('a core the device clears in time says nothing',
+    LC.audit(fpz.p).filter(function (x) { return /withstand/i.test(x.title); }).length, 0);
 
   /* ------------------------------------------------------- everything at once */
   var z = site();
