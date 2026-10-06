@@ -55,6 +55,12 @@ SUITES = [
 # unnoticed — but they report their output instead of a tally.
 INSPECTION = {"underlay"}
 
+# Suites that fetch something. Chrome's virtual clock runs ahead of real time,
+# so the budget can expire while a request is still in flight and the DOM gets
+# captured before the page has written anything. More budget is the fix; the
+# retry below is for the rest.
+BUDGET = {"underlay": 20000}
+
 CHROME_CANDIDATES = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Chromium.app/Contents/MacOS/Chromium",
@@ -216,12 +222,19 @@ def run(chrome, port, names):
 
         url = "http://127.0.0.1:%d/test/%s" % (port, filename)
         started = time.time()
+        budget = BUDGET.get(name, 8000)
         try:
-            dom = dump_dom(chrome, url)
+            dom = dump_dom(chrome, url, budget)
         except subprocess.TimeoutExpired:
             print("  %-12s TIMED OUT after 90 s" % name)
             failed_suites.append(name)
             continue
+
+        # An empty result from a page that fetches is a timing artefact, not a
+        # failure: the virtual clock expired mid-request. One retry distinguishes
+        # the two, and a genuine empty page is still empty the second time.
+        if len(strip_tags(dom)) < 60 and name in BUDGET:
+            dom = dump_dom(chrome, url, budget * 2)
         took = time.time() - started
 
         if name in INSPECTION:

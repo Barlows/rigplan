@@ -210,7 +210,9 @@ var LS = (function () {
     spreadMargin   : 1.25,   // spread on a new board's incomer rating
     pdbMargin      : 1.10,   // TX -> PDB design margin
     zpuPerStage    : 0.06,   // indicative impedance per distribution stage
-    faultMVAFactor : 1.0     // LV fault MVA as a multiple of transformer rating
+    faultMVAFactor : 1.0,    // LV fault MVA as a multiple of transformer rating
+    pfLimit        : 0.90,   // aggregate power factor below which a board is flagged
+    thdWatch       : 15      // % harmonic distortion above which a circuit is flagged
   };
 
   /* ----------------------------------------------------------------------
@@ -350,6 +352,11 @@ var LS = (function () {
       /* single-phase circuits are fed at the phase-to-neutral voltage */
       volt: num(p.volt, String(ph) === '1' ? 230 : 400),
       start: p.start || 'DOL', contingency: num(p.contingency, 0),
+      /* Total harmonic distortion, as a percentage of the fundamental. Null
+         unless a circuit declares it: assuming harmonic content for every motor
+         would derate every cable on the project, and the great majority of
+         circuits genuinely have little. */
+      thd: p.thd === undefined || p.thd === null || p.thd === '' ? null : clamp(num(p.thd, 0), 0, 100),
       /* the panel is normally fed from a PDP; `dbId` is the sub-board within
          that PDP it sits on, if any.
 

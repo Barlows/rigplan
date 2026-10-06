@@ -265,14 +265,59 @@ var LC = (function () {
     var kva = (pn.kva !== null && pn.kva !== undefined && pn.kva !== '' && D.num(pn.kva) > 0)
       ? D.num(pn.kva) : (kw / pf);
     var dem = D.clamp(D.num(pn.demand, 1), 0, 2);
+    var kvaD = kva * dem;
+    /* kVA below kW is a power factor above 1, which does not exist. It
+       happens when a kVA override is typed in that is smaller than the load
+       it is meant to contain, and it propagates: summed over a board it makes
+       the aggregate power factor nonsense too. Flagged rather than silently
+       corrected, because the entered number is probably a typo worth seeing. */
+    var impossible = kvaD > 0 && kvaD < kw;
+    /* Reactive power falls out of kW, kVA and power factor by the
+       Pythagorean relation, so nothing needs storing: S² = P² + Q². This is
+       the number that decides whether a supply is penalised for a poor power
+       factor, and it is the number a capacitor calculation works from. */
+    var kvarD = Math.sqrt(Math.max(0, kvaD * kvaD - kw * kw));
+    if (impossible) kvarD = 0;
+    /* Total demand distortion, as a percentage of the fundamental. A circuit
+       that declares harmonics raises its own RMS current, which is what actually
+       heats a cable — the fundamental alone understates it. Left null unless the
+       circuit says so, because assuming harmonic content for every motor would
+       derate every cable on the project. */
+    var thd = pn.thd === null || pn.thd === undefined || pn.thd === '' ? null : D.clamp(D.num(pn.thd, 0), 0, 100);
+    /* RMS current with harmonics present: the fundamental plus every harmonic
+       in quadrature, which for a stated total THD is sqrt(1 + (THD/100)²) times
+       the fundamental. */
+    var harmF = thd === null ? 1 : Math.sqrt(1 + Math.pow(thd / 100, 2));
     return {
       kw: kw,
       kvaConn: kva,
-      kva: kva * dem,                       // design / diversified kVA
-      pf: pf, demand: dem,
-      amp: currentFor(kva * dem, pf, pn.phases, pn.volt),
+      kva: kvaD,                       // design / diversified kVA
+      kvar: kvarD,
+      pf: pf, demand: dem, thd: thd, impossible: impossible,
+      amp: currentFor(kvaD, pf, pn.phases, pn.volt),
+      /* what actually flows in the cable */
+      ampHarm: currentFor(kvaD, pf, pn.phases, pn.volt) * harmF,
+      harmFactor: harmF,
       phases: pn.phases
     };
+  }
+
+  /* The power factor a board sees, and the reactive power that arrives at it.
+
+     Summing kW and kVA gives the aggregate power factor, which is lower than
+     the average of the individual factors — a board of good circuits and one
+     bad circuit is judged on the arithmetic, not on the best of them. */
+  function reactive(p, panels) {
+    var kw = 0, kva = 0;
+    panels.forEach(function (pn) {
+      var d = panelDemand(p, pn);
+      kw += d.kw; kva += d.kva;
+    });
+    var kvar = Math.sqrt(Math.max(0, kva * kva - kw * kw));
+    /* A kVA total below the kW total cannot happen in a real installation, and
+       reporting a power factor of 2.3 is worse than reporting nothing. Clamped
+       here, and the offending circuits are named separately by the audit. */
+    return { kw: kw, kva: kva, kvar: kvar, pf: kva > 0 ? D.clamp(kw / kva, 0, 1) : 1 };
   }
   function currentFor(kva, pf, phases, volt) {
     var v = D.num(volt, 400) || 400;
@@ -695,8 +740,19 @@ var LC = (function () {
     var waysKnown = kind === 'db' ? (item.ways !== undefined && item.ways !== null && item.ways > 0)
                   : kind === 'pdp' ? (item.ways !== undefined && item.ways !== null && item.ways > 0)
                   : false;
+    var rq = reactive(p, sort);
+    var thdMax = 0, thdPanels = [];
+    sort.forEach(function (pn) {
+      var t = D.num(pn.thd, 0);
+      if (pn.thd === null || pn.thd === undefined || pn.thd === '') return;
+      if (t > thdMax) thdMax = t;
+      thdPanels.push(pn);
+    });
     return {
-      panels: sort, kw: kw, kva: kva, amp: amp, ampSum: ampSum,
+      panels: sort, kw: kw, kva: kva, kvar: rq.kvar, pf: rq.pf, amp: amp, ampSum: ampSum,
+      /* the worst declared harmonic content on the board, and how many circuits
+         declare any at all */
+      thdMax: thdPanels.length ? thdMax : null, thdPanels: thdPanels.length,
       phaseKva: phaseKva, phaseAmp: phaseAmp,
       rating: rating, util: util, dev: dev, spareUsed: spareUsed,
       spare: kind === 'pdp' ? D.num(item.spareWays, 0) : kind === 'db' ? D.num(item.ways, D.num(item.spareWays, 0)) : 0,
@@ -849,7 +905,91 @@ var LC = (function () {
         'withstand', 0);
     }
 
-      function checkProt(p, item, kind, loadA, cableA, faultKA) {
+      /* ---------------------------------------------------- reactive & harmonics --
+     Two things that a schedule expressed only in kW cannot show.
+
+     Reactive power is not a separate decision — it falls out of the kW, the kVA
+     and the power factor already entered — but it is a separate *consequence*.
+     A supply at 0.8 power factor draws the same current as one at 1.0 with a
+     fifth more load on it, and utility tariffs penalise it. Reporting it here
+     turns a number nobody looks at into a number with a consequence attached.
+
+     Harmonic content is different: it is not in the load schedule at all, and
+     the cable size that follows from the fundamental current understates what
+     actually heats the conductor. Only circuits that declare it are affected,
+     which is why nothing is assumed for the rest. */
+    function checkReactive(p, item, kind, st) {
+      if (st.panels.length < 2 || st.kva <= 0) return;
+      var lim = num(p.design.pfLimit, 0.9);
+      if (!(st.pf < lim)) return;
+      /* The correction. Real power stays fixed and the reactive falls, so the
+         target is the reactive the same kW would draw at the wanted power
+         factor — and the capacitor has to supply the *difference*, which is
+         larger than it looks, not smaller. Q_target = √(S² − P²) with
+         S = P / limit, and the capacitor covers Q − Q_target.
+
+           Getting this sign wrong reported "0 kvar of correction" on a board
+           carrying 122 kvar, which is exactly backwards. */
+      var target = Math.sqrt(Math.max(0, Math.pow(st.kw / lim, 2) - st.kw * st.kw));
+      var need = Math.max(0, st.kvar - target);
+      add('warn', kind, item.id,
+        item.tag + ' power factor ' + st.pf.toFixed(2) + ' — ' + st.kvar.toFixed(0) + ' kvar of it is reactive',
+        'This board sums to ' + st.kw.toFixed(0) + ' kW in ' + st.kva.toFixed(0) + ' kVA, which is a power ' +
+        'factor of ' + st.pf.toFixed(2) + '. Below ' + lim.toFixed(2) + ' the same kW needs more current, ' +
+        'and most supply tariffs charge for it. About ' + need.toFixed(0) + ' kvar of correction would bring ' +
+        'it to ' + lim.toFixed(2) + '. No capacitor is modelled here, so this is the size of the question ' +
+        'rather than a proposal.', 'power-factor', st.kvar);
+    }
+
+    /* A circuit that declares harmonic content raises its own RMS current, and
+       the cable is sized on the fundamental. The relationship is on the
+       conductor's thermal limit, not the fault limit, so this is an overload
+       question rather than a withstand one. */
+    function checkHarmonics(p, pn, kind) {
+      if (pn.thd === null || pn.thd === undefined || pn.thd === '') return;
+      var thd = num(pn.thd, 0);
+      if (thd < num(p.design.thdWatch, 15)) return;
+      var d = panelDemand(p, pn);
+      if (d.harmFactor <= 1.001) return;
+      var cab = pn.cable;
+      if (!cab || !cab.csa) return;
+      var r = cableRating(cab);
+      if (!r.ok) return;
+      var ampHarm = d.ampHarm;
+      /* Conductor heating goes as I², so the rise is the square of the current
+         rise. Quoting the current factor as though it were the heat understates
+         it by half — at 45% THD, 10% more current is 20% more heat. */
+      var heat = (d.harmFactor * d.harmFactor - 1) * 100;
+      add(ampHarm > r.derated ? 'bad' : 'warn', kind, pn.id,
+        pn.tag + ' carries ' + thg(thd) + ' harmonic content',
+        'Stated at ' + thg(thd) + ' total harmonic distortion, which raises the RMS current from ' +
+        d.amp.toFixed(1) + ' A to ' + ampHarm.toFixed(1) + ' A — ' +
+        ((d.harmFactor - 1) * 100).toFixed(0) + '% more current, and about ' + heat.toFixed(0) +
+        '% more heat in the same conductor because heating goes as the square of the current. The feeder is sized for ' +
+        r.derated.toFixed(0) + ' A' +
+        (ampHarm > r.derated
+          ? ', so at this load it is ' + ((ampHarm / r.derated - 1) * 100).toFixed(0) + '% overloaded once the harmonics are counted.'
+          : ', which covers it with ' + ((1 - ampHarm / r.derated) * 100).toFixed(0) + '% to spare — but only while the declared distortion holds.') +
+        ' Harmonic content is only checked where a circuit declares it; nothing is assumed for the others.',
+        'harmonics', d.kw);
+    }
+
+    /* kVA below kW is a power factor above 1, which does not exist. Caught here
+       because it is invisible downstream: the current comes out right, the
+       reactive comes out zero, and only the ratio looks wrong. */
+    function checkImpossiblePf(p, pn) {
+      var d = panelDemand(p, pn);
+      if (!d.impossible) return;
+      add('warn', 'panel', pn.id, pn.tag + ' is entered with less kVA than kW',
+        d.kw.toFixed(1) + ' kW cannot fit inside ' + d.kva.toFixed(1) + ' kVA \u2014 that is a power factor of ' +
+        (d.kw / d.kva).toFixed(2) + ', which does not exist. The reactive power has been taken as zero and '
+        + 'the current is unaffected, so nothing downstream is wrong, but one of the two figures is a typo. '
+        + 'Leave the kVA override blank to derive it from kW and the power factor.', 'bad-kva', d.kw);
+    }
+
+    function thg(t) { return (Math.round(t * 10) / 10) + '%'; }
+
+    function checkProt(p, item, kind, loadA, cableA, faultKA) {
       var d = item.prot;
       if (!d) { add('warn', kind, item.id, item.tag + ' has no protective device',
         'Nothing is interrupting this supply. Use Propose, or enter the device by hand.'); return; }
@@ -926,26 +1066,31 @@ var LC = (function () {
       var cab = b.cable && b.cable.csa ? cableRating(b.cable) : null;
       checkProt(p, b, 'pdb', st.amp, cab && cab.derated, st.faultKA);
       checkWithstandFinding(p, b, 'pdb', st.faultKA);
+      checkReactive(p, b, 'pdb', st);
     });
     p.pdps.forEach(function (d) {
       var st = boardStats(p, d, 'pdp');
       var cab = d.cable && d.cable.csa ? cableRating(d.cable) : null;
       checkProt(p, d, 'pdp', st.amp, cab && cab.derated, st.faultKA);
       checkWithstandFinding(p, d, 'pdp', st.faultKA);
+      checkReactive(p, d, 'pdp', st);
     });
     p.dbs.forEach(function (b) {
       var st = boardStats(p, b, 'db');
       var cab = b.cable && b.cable.csa ? cableRating(b.cable) : null;
       checkProt(p, b, 'db', st.amp, cab && cab.derated, st.faultKA);
       checkWithstandFinding(p, b, 'db', st.faultKA);
+      checkReactive(p, b, 'db', st);
     });
     p.panels.forEach(function (pn) {
       if (!pn.pdpId && !pn.pdbId) return;
       var d = panelDemand(p, pn);
       var cab = pn.cable && pn.cable.csa ? cableRating(pn.cable) : null;
       var f = faultAt(p, pn, 'panel');
-      checkProt(p, pn, 'panel', d.amp, cab && cab.derated, f);
+      checkProt(p, pn, 'panel', d.ampHarm, cab && cab.derated, f);
       checkWithstandFinding(p, pn, 'panel', f);
+      checkHarmonics(p, pn, 'panel');
+      checkImpossiblePf(p, pn);
     });
 
     /* Coordination across a supply chain: the device downstream must be able to
@@ -1327,6 +1472,9 @@ function selectivityBand(s) {
   function groupTitle(key, w) {
     if (key === 'dol-start') return 'large DOL starting load';
     if (key === 'withstand') return 'cable that cannot survive the fault';
+  if (key === 'power-factor') return 'board below the power factor limit';
+  if (key === 'harmonics') return 'circuit carrying harmonic content';
+  if (key === 'bad-kva') return 'circuit entered with less kVA than kW';
     return key;
   }
 
@@ -2026,7 +2174,7 @@ function selectivityBand(s) {
     mccbFrameFor, icuFor, mcbRatingFor, tripFor, deviceRatingFor, proposeProt, applyProt, protAll, hasDownstream,
     withstandI2t, clearingTimeS, checkWithstand, msOrS, WITHSTAND_K,
     groupFindings, worstLevel, groupTitle, boardTagOf, MIN_GROUP, MAX_LIST,
-    clearingTimeAt, selectivity, selectivityMessage, selectivityBand, selectivityLadder,
+    clearingTimeAt, selectivity, selectivityMessage, selectivityBand, selectivityLadder, reactive,
     SELECTIVITY_STEPS,
     choosePdp, assignPanel, createPdpFor, feederLen, syncLen,
     sizeCablesFor, sizeCablesForPdb, sizeCablesForDb, suggestDbFeeder, sizeCableForPanel, sizeAll, feederAmp, needsSizing,

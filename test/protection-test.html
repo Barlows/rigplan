@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=127"></script>
-<script src="../js/calc.js?v=127"></script>
+<script src="../js/data.js?v=133"></script>
+<script src="../js/calc.js?v=133"></script>
 <script>
 (function () {
   var results = [];
@@ -54,8 +54,12 @@
     LC.applyNumbering(p);
     return { p: p, tx: tx, pdb: pdb, pdp: pdp, db: db };
   }
-  function load(p, board, kw, pf) {
-    var pn = LS.newPanel({ tag: 'L-' + (p.panels.length + 1), kw: kw, pf: pf || 0.9, pdpId: board.id, autoAssign: false });
+  /* `extra` is merged into the panel, so a test can set a field the factory
+     does not take directly (a kVA override, a cable, a harmonic figure). */
+  function load(p, board, kw, pf, extra) {
+    var pn = LS.newPanel(Object.assign({
+      tag: 'L-' + (p.panels.length + 1), kw: kw, pf: pf || 0.9, pdpId: board.id, autoAssign: false
+    }, extra || {}));
     pn.__kind = 'panel';
     p.panels.push(pn);
     return pn;
@@ -390,6 +394,106 @@
     /^L-\d+ not selectively graded against \S+/.test(gsel[0].title), true);
   check('and says the curves are the conventional ones, not the manufacturer\'s',
     /not the manufacturer/.test(gsel[0].detail), true);
+
+  /* ----------------------------------------------- reactive power & harmonics */
+  /* Reactive power is not a separate input — it falls out of the kW, the kVA
+     and the power factor already entered, by S² = P² + Q². What matters is that
+     the arithmetic is right and that the consequence is reported. */
+
+  var qp = site();
+  var poor = load(qp.p, qp.pdp, 100, 0.75);
+  var good = load(qp.p, qp.pdp, 100, 1.0);
+  var pd1 = LC.panelDemand(qp.p, poor), pd2 = LC.panelDemand(qp.p, good);
+  check('reactive power falls out of kW, kVA and power factor',
+    pd1.kvar.toFixed(1), (100 / 0.75 * Math.sqrt(1 - 0.75 * 0.75)).toFixed(1));
+  check('and is zero at unity power factor', pd2.kvar.toFixed(3), '0.000');
+  /* On its own site, so the two-circuit sums below stay two circuits. */
+  var op = site();
+  var over = load(op.p, op.pdp, 100, 0.5, { kva: 200 });
+  check('a circuit with a kVA override uses it rather than deriving one',
+    LC.panelDemand(op.p, over).kva, 200);
+  check('and the reactive follows the override, not the power factor',
+    LC.panelDemand(op.p, over).kvar.toFixed(1), '173.2');
+
+  /* The aggregate factor of a board is not the average of its circuits' — a
+     board of good circuits and one bad circuit is judged on the arithmetic. */
+  var rq = LC.reactive(qp.p, [poor, good]);
+  check('a board sums its kW and kVA, not its power factors',
+    rq.kw, 200);
+  check('and its aggregate power factor follows from those two sums',
+    rq.pf.toFixed(3), (200 / (133.3 + 100)).toFixed(3));
+  /* Equal kW, so the aggregate sits between the two circuits rather than below
+     the worse one — the point is that it is neither of them, and not their
+     average either. */
+  check('the aggregate is neither circuit\'s own factor', rq.pf > 0.75 && rq.pf < 1, true);
+  check('nor the mean of them', Math.abs(rq.pf - 0.875) > 0.01, true);
+
+  var bp = LC.boardStats(qp.p, qp.pdp, 'pdp');
+  check('the board carries the reactive through to its stats', Math.round(bp.kvar), Math.round(rq.kvar));
+  check('and its power factor', bp.pf.toFixed(3), rq.pf.toFixed(3));
+
+  /* The correction. Real power stays fixed and the reactive falls, so the
+     capacitor covers the difference between what is there and what the wanted
+     power factor needs. */
+  var pfq = LC.audit(qp.p).filter(function (x) { return /power factor/.test(x.title); });
+  check('a board below the limit is flagged', pfq.length > 0, true);
+  check('with a correction that is positive and in the right direction',
+    /About (\d+) kvar/.test(pfq[0].detail) && parseInt(RegExp.$1, 10) > 0, true);
+  /* 200 kW at 0.90 needs S = 222 kVA, so Q = 94 kvar against the 87 present —
+     the sign is the whole point, and getting it backwards reported zero */
+  /* 200 kW at 0.90 wants S = 222 kVA, so Q = 94 kvar against the 120 present:
+     26 kvar of capacitor. The sign is the whole point — the wrong way round
+     reported zero on a board carrying 120 kvar. */
+  check('and of about the right size', /About 2[0-9] kvar/.test(pfq[0].detail), true);
+  check('which is exactly the difference between the two reactives',
+    Math.round(rq.kvar - Math.sqrt(Math.pow(200 / 0.9, 2) - 200 * 200)), 23);
+
+  var goodp = site();
+  load(goodp.p, goodp.pdp, 100, 0.95);
+  load(goodp.p, goodp.pdp, 100, 0.95);
+  check('a board at a good power factor says nothing',
+    LC.audit(goodp.p).filter(function (x) { return /power factor/.test(x.title); }).length, 0);
+
+  /* kVA below kW is a power factor above 1, which does not exist. It is
+     invisible downstream — the current is right and the reactive comes out
+     zero — so it is only findable by looking for it. */
+  var bad = site();
+  var bp2 = load(bad.p, bad.pdp, 100, 0.9);
+  bp2.kva = 50;
+  check('kVA below kW is recognised', LC.panelDemand(bad.p, bp2).impossible, true);
+  check('and the reactive is taken as zero rather than going imaginary',
+    LC.panelDemand(bad.p, bp2).kvar, 0);
+  check('a normal circuit is not flagged', LC.panelDemand(bad.p, load(bad.p, bad.pdp, 10, 0.9)).impossible, false);
+  var bi = LC.audit(bad.p).filter(function (x) { return /less kVA than kW/.test(x.title); });
+  check('and the audit names it', bi.length, 1);
+  check('saying which way round it is wrong',
+    /100\.0 kW cannot fit inside 50\.0 kVA/.test(bi[0].detail), true);
+
+  /* Harmonics. Nothing is assumed — a circuit that says nothing is untouched. */
+  var hp = site();
+  var h1 = load(hp.p, hp.pdp, 60, 0.9);
+  h1.cable = { csa: 25, runs: 1, cores: 4, len: 20, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
+  check('a circuit that declares nothing has no harmonic factor',
+    LC.panelDemand(hp.p, h1).harmFactor, 1);
+  check('so its current is the fundamental', LC.panelDemand(hp.p, h1).ampHarm, LC.panelDemand(hp.p, h1).amp);
+  check('and the audit says nothing about it',
+    LC.audit(hp.p).filter(function (x) { return /harmonic/i.test(x.title); }).length, 0);
+
+  h1.thd = 45;
+  var hd = LC.panelDemand(hp.p, h1);
+  check('a declared 45% gives √(1 + 0.45²) = 1.0966 times the fundamental current',
+    hd.harmFactor.toFixed(4), '1.0966');
+  check('and the current actually in the cable rises with it',
+    (hd.ampHarm / hd.amp).toFixed(4), '1.0966');
+  /* The point of the whole thing: a cable sized on the fundamental is sized on
+     the wrong number, and the audit has to say so. */
+  var hf = LC.audit(hp.p).filter(function (x) { return /harmonic/i.test(x.title); });
+  check('the audit flags the declared content', hf.length, 1);
+  check('and quotes the current rise and the heat, which is the square of it',
+    /10% more current/.test(hf[0].detail) && /20% more heat/.test(hf[0].detail), true);
+  h1.thd = 5;
+  check('below the threshold it is not worth a line',
+    LC.audit(hp.p).filter(function (x) { return /harmonic/i.test(x.title); }).length, 0);
 
   /* ---------------------------------------------------- grouped findings */
   /* Folding repeats is what makes the list readable, so the shape of the fold

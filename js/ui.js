@@ -308,6 +308,10 @@
     el('topStats').innerHTML =
       stat('Connected', t.kw.toFixed(0) + ' <small>kW</small>') +
       stat('Design load', t.kva.toFixed(0) + ' <small>kVA</small>') +
+      /* Clamped, because a kVA total below the kW total can only come from a
+         circuit with a bad kVA override, and reporting a power factor of 2.3
+         reads as a bug in the app rather than as the data entry it is. */
+      stat('Reactive', (function () { var q = Math.sqrt(Math.max(0, t.kva * t.kva - t.kw * t.kw)); return q.toFixed(0) + ' <small>kvar</small> · ' + (t.kva > 0 ? Math.min(1, t.kw / t.kva).toFixed(2) : '—') + ' pf</small>'; })()) +
       stat('TX installed', t.txKva.toFixed(0) + ' <small>kVA</small>') +
       stat('TX loading', '<span style="color:' + (t.txUtil > 100 ? '#fca5a5' : t.txUtil > 90 ? '#fcd34d' : '#86efac') + '">' + t.txUtil.toFixed(0) + '%</span>') +
       stat('Phase imbalance', '<span style="color:' + (t.dev > 25 ? '#fca5a5' : t.dev > 15 ? '#fcd34d' : '#86efac') + '">' + t.dev.toFixed(0) + '%</span>') +
@@ -429,7 +433,7 @@
         if (collapsed[b.id]) return;
         onBoard.forEach(function (pn) {
           var dm = LC.panelDemand(S, pn);
-          h += node('panel', pn, null, null, dm.kva.toFixed(1) + ' kVA', '');
+          h += node('panel', pn, null, null, dm.kva.toFixed(1) + ' kVA · ' + dm.kvar.toFixed(1) + ' kvar', '');
         });
         pdps.forEach(function (d) {
           var sd = LC.boardStats(S, d, 'pdp');
@@ -455,14 +459,14 @@
             if (collapsed[b2.id]) return;
             onIt.forEach(function (pn) {
               var dm = LC.panelDemand(S, pn);
-              h += node('panel', pn, null, null, dm.kva.toFixed(1) + ' kVA', '');
+              h += node('panel', pn, null, null, dm.kva.toFixed(1) + ' kVA · ' + dm.kvar.toFixed(1) + ' kvar', '');
             });
           });
           if (loose.length) {
             h += '<div class="tkids"><div class="tw-empty" style="text-align:left;padding:2px 4px">fed directly from ' + esc(d.tag) + '</div></div>';
             loose.forEach(function (pn) {
               var dm = LC.panelDemand(S, pn);
-              h += node('panel', pn, null, null, dm.kva.toFixed(1) + ' kVA', '');
+              h += node('panel', pn, null, null, dm.kva.toFixed(1) + ' kVA · ' + dm.kvar.toFixed(1) + ' kvar', '');
             });
           }
         });
@@ -708,6 +712,7 @@
       return '<div class="stats">' +
         st('Load', d.kw.toFixed(1) + ' <small>kW</small>') +
         st('Design kVA', d.kva.toFixed(1)) +
+        st('Reactive', d.kvar.toFixed(1) + ' <small>kvar</small>') +
         st('Full-load I', d.amp.toFixed(1) + ' <small>A</small>') +
         st('Phase', o.phases + (o.phases === '1' ? '-ph' : ' N→N')) +
         (cab ? st('Cable rating', cab.derated.toFixed(0) + ' <small>A</small>') : st('Cable rating', '—')) +
@@ -727,6 +732,7 @@
       '<div class="stats">' +
       st('Connected', stt.kw.toFixed(0) + ' <small>kW</small>') +
       st('Design load', stt.kva.toFixed(0) + ' <small>kVA</small>') +
+      st('Reactive', stt.kvar.toFixed(0) + ' <small>kvar</small> · ' + stt.pf.toFixed(2) + ' pf</small>') +
       st('Load current', stt.amp.toFixed(0) + ' <small>A</small>') +
       st('Sum of circuit I', stt.ampSum.toFixed(0) + ' <small>A</small>') +
       st('Circuits', String(stt.panels.length) +
@@ -933,7 +939,19 @@
       fRow('Voltage', '<span class="unit">' + selIn('panel', o.id, 'volt', o.volt, LS.VOLT_LV, function (v) { return v + ' V'; }) + '</span>') +
       fRow('Starting', selIn('panel', o.id, 'start', o.start, ['DOL', 'Star-delta', 'Soft starter', 'VFD', 'Static'], function (v) { return v; })) +
       fRow('Future / conting.', '<span class="unit">' + nIn('panel', o.id, 'contingency', o.contingency, { step: 1, unit: '%' }) + '<span class="u">%</span></span>') +
-      '<div class="hint">Design kVA = kW ÷ pf, multiplied by the demand factor. Leave kVA blank to derive it.</div>' +
+      /* Reactive power is derived, not entered — S² = P² + Q² — so it is shown
+         rather than typed. Entering it would give two numbers that can disagree
+         with each other, and the one that gets used silently would be the wrong
+         one. */
+      (function () {
+        var d = LC.panelDemand(S, o);
+        return fRow('Reactive', '<span class="mono" style="color:var(--fg-dim)">' +
+          d.kvar.toFixed(1) + ' kvar &nbsp;·&nbsp; apparent ' + d.kva.toFixed(1) + ' kVA</span>');
+      })() +
+      fRow('Harmonics (THD)', '<span class="unit">' + nIn('panel', o.id, 'thd', o.thd, { step: 1, placeholder: 'not stated' }) + '<span class="u">%</span></span>') +
+      '<div class="hint">Design kVA = kW ÷ pf, multiplied by the demand factor. Leave kVA blank to derive it. ' +
+      '<b>Harmonics</b> is total harmonic distortion as a percentage of the fundamental — leave it blank unless the equipment ' +
+      'has significant non-linear load, because a declared figure raises this circuit\'s own RMS current and can leave its cable undersized.</div>' +
       '</div>' +
       '<div class="fieldset"><h4>Assignment</h4>' +
       fRow('Main board (PDB)', '<select class="sel" data-bind="item" data-kind="panel" data-id="' + o.id + '" data-f="pdbId"><option value="">— none —</option>' +
@@ -1059,14 +1077,14 @@
 
     h += '<table class="grid"><thead><tr>' +
       th('tag', 'Ref', 'l') + th('', 'Board', 'l') + th('', 'Description', 'l') + th('', 'kW') + th('kva', 'kVA') +
-      th('', 'pf') + th('', 'Ph') + th('', 'I (A)') + th('', 'Device') + th('', 'Icu') + th('', 'Cable mm²') + th('', 'Rated A') + th('', '%') +
+      th('', 'kvar') + th('', 'pf') + th('', 'Ph') + th('', 'I (A)') + th('', 'Device') + th('', 'Icu') + th('', 'Cable mm²') + th('', 'Rated A') + th('', '%') +
       th('', 'Drop %') + th('pos', 'Grid ref', 'l') + th('', 'Status') + '</tr></thead><tbody>';
 
     groups.forEach(function (g) {
       var sd = LC.boardStats(S, g.pdp, 'pdp');
       h += '<tr class="grp clickable" data-select="' + g.pdp.id + '" data-kind="pdp">' +
         '<td class="l" colspan="3">▤ ' + esc(g.pdp.tag) + ' — ' + esc(g.pdp.name) + '</td>' +
-        '<td>' + sd.kw.toFixed(0) + '</td><td>' + sd.kva.toFixed(1) + '</td><td></td><td>' + g.pdp.phases + '</td>' +
+        '<td>' + sd.kw.toFixed(0) + '</td><td>' + sd.kva.toFixed(1) + '</td><td>' + sd.kvar.toFixed(0) + '</td><td>' + sd.pf.toFixed(2) + '</td><td>' + g.pdp.phases + '</td>' +
         '<td>' + sd.amp.toFixed(0) + '</td><td colspan="3">incomer ' + g.pdp.incomerA + ' A</td><td colspan="2">E' + LS.r1(g.pdp.pos.x).toFixed(1) + ' N' + LS.r1(g.pdp.pos.y).toFixed(1) + '</td>' +
         '<td>' + utilBadge(sd.util) + '</td></tr>';
 
@@ -1078,7 +1096,7 @@
         h += '<tr class="grp clickable" data-select="' + b.id + '" data-kind="db">' +
           '<td class="l" colspan="3" style="padding-left:22px">▥ ' + esc(b.tag) + ' — ' + esc(b.name) +
           (b.enclosure ? ' <span style="color:var(--fg-mute)">(' + esc(b.enclosure) + ')</span>' : '') + '</td>' +
-          '<td>' + sb.kw.toFixed(1) + '</td><td>' + sb.kva.toFixed(1) + '</td><td></td><td>' + b.phases + '</td>' +
+          '<td>' + sb.kw.toFixed(1) + '</td><td>' + sb.kva.toFixed(1) + '</td><td>' + sb.kvar.toFixed(0) + '</td><td>' + sb.pf.toFixed(2) + '</td><td>' + b.phases + '</td>' +
           '<td>' + sb.amp.toFixed(1) + '</td><td colspan="3">' + b.incomerA + ' A · ' + sb.panels.length + '/' + sb.spare + ' ways</td><td colspan="2">E' + LS.r1(b.pos.x).toFixed(1) + ' N' + LS.r1(b.pos.y).toFixed(1) + '</td>' +
           '<td>' + utilBadge(sb.util) + '</td></tr>';
         on.forEach(function (pn) { h += panelRow(pn, b); });
@@ -1087,16 +1105,16 @@
       var direct = g.panels.filter(function (pn) { return !pn.dbId || !LC.get(S, 'db', pn.dbId); });
       if (direct.length) {
         h += '<tr class="grp"><td class="l" colspan="3" style="padding-left:22px;color:var(--fg-mute)">fed directly from ' + esc(g.pdp.tag) + '</td>' +
-          '<td colspan="14"></td></tr>';
+          '<td colspan="15"></td></tr>';
         direct.forEach(function (pn) { h += panelRow(pn, g.pdp); });
       }
 
-      h += '<tr class="sub"><td class="l" colspan="3">subtotal · ' + g.panels.length + ' circuits</td><td>' + sd.kw.toFixed(1) + '</td><td>' + sd.kva.toFixed(1) + '</td><td colspan="3"></td>' +
+      h += '<tr class="sub"><td class="l" colspan="3">subtotal · ' + g.panels.length + ' circuits</td><td>' + sd.kw.toFixed(1) + '</td><td>' + sd.kva.toFixed(1) + '</td><td>' + sd.kvar.toFixed(1) + '</td><td>' + sd.pf.toFixed(2) + '</td><td></td>' +
         '<td>' + sd.amp.toFixed(1) + '</td><td colspan="3"></td><td></td><td>' + utilBadge(sd.util) + '</td></tr>';
     });
 
     if (un.length) {
-      h += '<tr class="grp"><td class="l" colspan="14">⚠ Unassigned control panels — no PDP selected</td></tr>';
+      h += '<tr class="grp"><td class="l" colspan="15">⚠ Unassigned control panels — no PDP selected</td></tr>';
       un.forEach(function (pn) { h += panelRow(pn, null); });
     }
 
@@ -1105,7 +1123,7 @@
       var s = LC.boardStats(S, tx, 'tx');
       var u = s.kva / Math.max(1, num(tx.kva, 1)) * 100;
       h += '<tr class="total clickable" data-select="' + tx.id + '" data-kind="tx"><td class="l" colspan="3">◆ ' + esc(tx.tag) + ' — ' + esc(tx.name) + '</td>' +
-        '<td>' + s.kw.toFixed(0) + '</td><td>' + s.kva.toFixed(0) + '</td><td></td><td>3</td><td>' + s.amp.toFixed(0) + '</td>' +
+        '<td>' + s.kw.toFixed(0) + '</td><td>' + s.kva.toFixed(0) + '</td><td>' + s.kvar.toFixed(0) + '</td><td>' + s.pf.toFixed(2) + '</td><td>3</td><td>' + s.amp.toFixed(0) + '</td>' +
         '<td colspan="3">transformer ' + tx.kva + ' kVA · ' + tx.kvIn + '/' + tx.kvOut + ' kV</td><td colspan="2"></td><td>' + utilBadge(u) + '</td></tr>';
     });
     h += '<tr class="total"><td class="l" colspan="3">SITE TOTAL</td><td>' + t.kw.toFixed(0) + '</td><td>' + t.kva.toFixed(0) + '</td><td></td><td></td><td>' + t.amp.toFixed(0) + '</td>' +
@@ -1136,9 +1154,13 @@
       '<td class="l"><div class="cellwrap">' + esc(pn.name) + (pn.description ? '<br><span style="color:var(--fg-mute);font-size:10.5px">' + esc(pn.description) + '</span>' : '') + '</div></td>' +
       '<td>' + d.kw.toFixed(1) + '</td>' +
       '<td>' + d.kva.toFixed(1) + '</td>' +
+      '<td>' + d.kvar.toFixed(1) + '</td>' +
       '<td>' + d.pf.toFixed(2) + '</td>' +
       '<td>' + pn.phases + '</td>' +
-      '<td class="' + (cab && d.amp > cab.derated ? 'num-bad' : '') + '">' + d.amp.toFixed(1) + '</td>' +
+      /* the current shown is the one that actually heats the cable, which is
+         the harmonic-raised figure where a circuit declares distortion */
+      '<td class="' + (cab && d.ampHarm > cab.derated ? 'num-bad' : '') + '">' + d.ampHarm.toFixed(1) +
+        (d.harmFactor > 1.001 ? '<br><span style="font-size:10px;color:var(--fg-mute)">' + d.amp.toFixed(1) + ' A 1st</span>' : '') + '</td>' +
       '<td class="l" style="white-space:nowrap">' + esc(protCell(pn)) + '</td>' +
       '<td>' + (pn.prot && num(pn.prot.icu, 0) ? num(pn.prot.icu) + ' kA' : '—') + '</td>' +
       '<td>' + (cab ? ((cab.runs > 1 ? cab.runs + '×' : '') + cab.csa) : '—') + '</td>' +
@@ -2646,7 +2668,7 @@
     L.push(csvRow([S.name])); L.push(csvRow(['Client', S.client, 'Project', S.ref, 'Designer', S.designer, 'Date', S.date]));
     L.push('');
     L.push(csvRow(['LOAD SCHEDULE']));
-    L.push(csvRow(['Reference', 'Board', 'Board description', 'Description', 'Type', 'Connected kW', 'Design kVA', 'pf', 'Demand', 'Phases', 'Voltage V', 'Current A', 'Protective device', 'Device frame A', 'Breaking capacity kA', 'Trip unit', 'Feeder runs', 'Feeder mm2', 'Cores', 'Length m', 'Installation', 'Rated A', 'Utilisation %', 'Volt drop %', 'Grid ref E', 'Grid ref N', 'Status']));
+    L.push(csvRow(['Reference', 'Board', 'Board description', 'Description', 'Type', 'Connected kW', 'Design kVA', 'kvar', 'pf', 'Demand', 'Phases', 'Voltage V', 'Current A', 'THD %', 'Protective device', 'Device frame A', 'Breaking capacity kA', 'Trip unit', 'Feeder runs', 'Feeder mm2', 'Cores', 'Length m', 'Installation', 'Rated A', 'Utilisation %', 'Volt drop %', 'Grid ref E', 'Grid ref N', 'Status']));
     var un = [];
     /* One row per circuit, wherever it is fed from. Declared up here because
        the main-board circuits are written before the distribution boards. */
@@ -2658,7 +2680,8 @@
       var stt = (dm.amp <= (cab ? cab.derated : 0)) && (vd ? vd.pct <= num(S.design.vdropLimitLv, 3) : true) ? 'OK' : 'CHECK';
       var pr = pn.prot || null;
       L.push(csvRow([pn.tag, board.tag, board.name, pn.name, LS.PANEL_TYPES[pn.type] ? LS.PANEL_TYPES[pn.type].name : pn.type,
-        dm.kw.toFixed(1), dm.kva.toFixed(1), dm.pf, pn.demand, pn.phases, pn.volt, dm.amp.toFixed(1),
+        dm.kw.toFixed(1), dm.kva.toFixed(1), dm.kvar.toFixed(1), dm.pf, pn.demand, pn.phases, pn.volt, dm.ampHarm.toFixed(1),
+        pn.thd === null || pn.thd === undefined || pn.thd === '' ? '' : pn.thd,
         pr ? (pr.kind === 'mcb' ? 'MCB' : 'MCCB') : '',
         pr && num(pr.ir, 0) ? num(pr.ir) : '',
         pr && num(pr.frame, 0) ? num(pr.frame) : '',

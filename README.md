@@ -442,6 +442,47 @@ declines rather than being wrong.
 Both inputs are indicative — the fault level rests on the assumed transformer
 impedance — so check against the manufacturer's data before sizing on it.
 
+### Reactive power and harmonics
+
+Two things a schedule expressed only in kW cannot show.
+
+**Reactive power is derived, not entered.** It falls out of the kW, the kVA and
+the power factor already there, by `S² = P² + Q²`. Typing it in would give two
+numbers that can disagree with each other and one of them would be used
+silently. It appears in the load schedule, the board schedule, the CSV, the
+print report and the top bar.
+
+A board whose **aggregate** power factor falls below the limit is flagged, with
+the correction that would fix it. The aggregate is not the average of the
+circuits' factors — it comes from the sum of kW against the sum of kVA, so a
+board of good circuits and one bad one is judged on the arithmetic.
+
+The correction is `Q − Q_target`, where `Q_target = √(S² − P²)` for
+`S = P / limit`. Real power stays fixed and the reactive falls, so the
+capacitor covers the difference — which is *larger* than it looks. Getting the
+sign wrong reports "0 kvar of correction" on a board carrying 120 kvar.
+
+No capacitor is modelled, so the figure is the size of the question rather than
+a proposal. The limit is `design.pfLimit`, 0.90 by default.
+
+**Harmonic content is entered per circuit, and only where it is known.** A
+`THD %` field raises that circuit's own RMS current by `√(1 + (THD/100)²)`,
+which is what actually heats a cable — the fundamental alone understates it.
+Above `design.thdWatch` (15%) the audit says so, and reports both the current
+rise and the heat, because heating goes as the square of the current and
+quoting the current factor as the heat understates it by half.
+
+Nothing is assumed for circuits that say nothing. Assuming harmonic content for
+every motor would derate every cable on the project, and most circuits
+genuinely have very little.
+
+**kVA below kW is caught.** That is a power factor above 1, which does not
+exist, and it is invisible downstream — the current comes out right, the
+reactive comes out zero, and only the ratio looks wrong. On the imported
+project 78 of 97 circuits carry a kVA figure smaller than their kW, which is a
+data-entry problem in that schedule rather than a modelling one; it now shows as
+one grouped finding rather than 78 rows.
+
 ### Fault levels
 
 The fault level at a board comes from the transformer's **impedance**, not its
@@ -692,8 +733,9 @@ test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        36 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
-test/protection-test.html 84 checks on fault levels, device proposals, cable
-                          thermal withstand and the protection audit
+test/protection-test.html 146 checks on fault levels, device proposals, cable
+                          thermal withstand, selectivity from trip curves, reactive
+                          power, harmonics and the protection audit
 test/underlay-test.html   image/DXF/DWG loading and scale handling
 ```
 
