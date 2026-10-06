@@ -257,17 +257,74 @@ isolates it.
 
 ### What the audit checks
 
-Three failures, checked separately because they are separate:
+Four failures, checked separately because they are separate:
 
 - **Breaking capacity below the fault level** — the device would fail to
   interrupt. Reports the next catalogue size to order.
 - **Setting below the load** — it will nuisance-trip.
 - **Setting above the cable** — the cable overheats before the device trips.
+- **Cable cannot survive the fault** — the conductor reaches its temperature
+  limit before the device clears. See [cable thermal
+  withstand](#cable-thermal-withstand).
 
 Plus **selectivity** between a board and the one feeding it, and a note when a
 device cannot be protected by any cable. That last one matters: above about
 4,000 A no number of parallel cables is enough, and the audit says **busbar**
 rather than sending someone off to add another core.
+
+#### Repeated findings are folded together
+
+A check that fires on every large motor, or on every circuit whose device is too
+slow, produces one finding per item and the list stops being readable. On the
+imported project, 37 of 120 rows were the same note about motors and 56 were the
+same withstand failure. Findings that carry the same group key are folded into
+one row carrying the **count**, the **boards involved** and the **total load
+between them**, with the first eight items listed. The real project goes from
+120 rows to 26.
+
+**Show every finding** in the audit toolbar undoes the fold. The CSV export and
+the print report always carry the full list either way, so this only changes
+what is on screen.
+
+Two of a kind is left unfolded — two findings are usually two separate problems,
+and folding them hides that. Severities are never merged either: a warning and
+an error that happen to share a key are two different problems.
+
+### Cable thermal withstand
+
+The ampacity checks ask whether a cable can carry its load all day. This asks
+whether it can carry sixty times its load for the fraction of a second the
+protection takes to react, which is a different question and a different answer.
+
+```
+I²t = k² S² / t        k = 143 for XLPE, 115 for PVC
+```
+
+The finding reports how long the core actually lasts at the calculated fault
+level against how long the device takes to clear, and what the fix would be — a
+larger core, a lower fault level, or a faster device.
+
+Two things about it are worth knowing:
+
+**Clearing time is the whole check, and it is a band.** An MCB on its magnetic
+trip clears in single-digit milliseconds; a thermal-magnetic MCCB in tens of
+milliseconds including the arc; a short-time stage around 0.3 s; an LI unit with
+no short-time stage on seconds, because the long-time element is all it has.
+Each band is set toward the slow end of its published range so the check reports
+a problem rather than missing one, and without the manufacturer's curves it is a
+band rather than a value — which the finding says.
+
+The 0.5 s that IEC 60898 uses when testing an MCB's magnetic release is **not**
+the design figure. It is a bound the device must pass with no manometer fitted,
+and using it overstates the clearing time by two orders of magnitude — it fails
+every cable on the project including 400 mm².
+
+**Aluminium is reported as unchecked.** A factor of 0.5 is the usual
+approximation and it is not accurate enough to size a cable on, so the check
+declines rather than being wrong.
+
+Both inputs are indicative — the fault level rests on the assumed transformer
+impedance — so check against the manufacturer's data before sizing on it.
 
 ### Fault levels
 
@@ -382,6 +439,33 @@ identical references.
    A3 landscape document (board schedule, load schedule, cable schedule, warnings
    and the basis of design).
 
+### Undo
+
+`↶ Undo` in the toolbar, or **Ctrl+Z** anywhere in the app, with **Ctrl+Shift+Z**
+to redo. Twenty-five levels.
+
+The button that most needs this is **↔ Across main boards** in the balance
+group, which re-homes circuits right across the installation — before undo
+existed there was no way back from it except the saved file. Adding a board,
+dragging one, deleting anything (a transformer cascades), auto-assign,
+auto-sizing, auto-balancing, proposing protection, splitting an overloaded
+board, and every property edit are all undoable.
+
+It is **snapshot** undo rather than command reversal. Reversing an operation
+means knowing exactly what each of a dozen places did to which object, and
+remembering every one of them forever; a snapshot needs no knowledge of any of
+them.
+
+Three details that matter in practice:
+
+- **Typing coalesces per field over 1.5 s**, so one undo reverts a whole edit
+  rather than walking back through a word one letter at a time. A dropdown is a
+  deliberate choice and always gets its own step.
+- **A cancelled or no-op operation leaves the stack alone**, so undo never
+  appears to do something and not do it.
+- **The site map is kept** in undo snapshots, where an export deliberately drops
+  it. Losing the background because you undid a rename would be a poor trade.
+
 ---
 
 ## How assignment works
@@ -480,18 +564,48 @@ tools/xlsx_read.py        minimal spreadsheet reader, standard library only
 tools/roeslein_import.py  vendor load schedule → project file
 tools/add_protection.py   vendor switchgear schedule → circuit devices
 tools/wxm-line5.json      the Roeslein Line 5 & Auxiliaries project, ready to import
+test/run.py               headless runner — serves the directory, drives Chrome,
+                          reads the results back out of the DOM
 test/parser-test.html     35 checks against a synthetic DXF with known geometry
 test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        24 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
-test/protection-test.html 34 checks on fault levels, device proposals and the
-                          protection audit
+test/protection-test.html 84 checks on fault levels, device proposals, cable
+                          thermal withstand and the protection audit
 test/underlay-test.html   image/DXF/DWG loading and scale handling
 ```
 
-Open a `test/*.html` page in a browser after changing the matching module — each
-prints a pass/fail list. If you edit the JavaScript while testing over HTTP and the
+### Running the tests
+
+```
+python3 test/run.py                  # every suite
+python3 test/run.py numbering db     # only the named ones
+python3 test/run.py --list
+```
+
+The whole run takes about seven seconds and needs nothing installed — no
+`npm install`, no node, no browser window. The test pages are ordinary HTML that
+load the app's own scripts, so all that is needed is a headless browser to
+render them and something to read the results back out. `test/run.py` uses
+whatever Chrome or Chromium it can find; point at a specific binary with
+`--chrome /path/to/binary`.
+
+It exits non-zero on any failure and prints the got/want pair for each failing
+check, which is what tells you which of two possible mistakes was made. If no
+browser is found it exits **2** with a message saying so, because "no tests ran"
+must never look like "all tests passed".
+
+The two `inspection` suites — `sld` and `underlay` — render a diagram and read a
+file rather than counting pass/fail cases, so they are only checked for having
+produced output at all. A throw leaves the body empty, which is what the runner
+catches.
+
+`.github/workflows/tests.yml` runs the same command on every push, plus a parse
+check on each script and a grep for client identifiers in the app files.
+
+Open a `test/*.html` page in a browser to see the results while working on the
+matching module. If you edit the JavaScript while testing over HTTP and the
 browser serves a cached copy, bump the `?v=` query string in `index.html`.
 
 ## Single line diagram

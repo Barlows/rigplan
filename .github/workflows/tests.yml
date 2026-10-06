@@ -1,0 +1,64 @@
+name: tests
+
+# The app is static files opened straight from disk, so there is nothing to
+# build and nothing to install. The whole pipeline is: serve the directory,
+# point a headless browser at each test page, read the results out of the DOM.
+# That is what test/run.py does, and this workflow only supplies a browser.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # The runner is written to find a browser on the usual macOS and Linux
+      # paths. Chrome is preinstalled here, so this step is only naming it.
+      - name: run the browser test suites
+        run: python3 test/run.py
+
+      # A syntax error in one script kills every suite that loads it, and the
+      # only symptom is a page that renders nothing. Say it plainly.
+      - name: every app script must parse
+        run: |
+          for f in js/*.js; do
+            node --check "$f" 2>/dev/null || {
+              echo "::error file=$f::does not parse"
+              exit 1
+            }
+          done
+          echo "all scripts parse"
+
+      # The app itself must never carry a client or project name. It is the
+      # part that gets copied around, opened from disk and shown to people, and
+      # a stray project reference in a comment outlives everything else in the
+      # repository. The importer and the README are allowed to mention the
+      # project they were built from — that is what they are documentation of,
+      # and the repository is private.
+      - name: no client identifiers in the app
+        run: |
+          if git grep -I -n -i -E 'roeslein|wxm[- ]?line' -- index.html js css test; then
+            echo "::error::a client identifier has reached the app files"
+            exit 1
+          fi
+          echo "app files clean"
+
+  size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: nothing in the app should get large unnoticed
+        run: |
+          echo "largest files:"
+          git ls-files -z | xargs -0 du -k | sort -rn | head -10

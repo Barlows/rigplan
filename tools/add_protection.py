@@ -18,7 +18,7 @@ Matching is by the sheet row number the importer recorded on each circuit
 the app still finds its device.
 
 Usage:
-    python3 tools/add_protection.py tools/wxm-line5.json [sheet.xlsx]
+    python3 tools/add_protection.py tools/project.json [sheet.xlsx]
 """
 
 import json

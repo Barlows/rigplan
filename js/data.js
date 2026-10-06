@@ -76,7 +76,7 @@ var LS = (function () {
      250 A frame exists so the 200 A one can be set up to its rating.
 
      The frame list and the current list are the Compact NS / Acti9 families,
-     which is what a Roeslein-class installation uses. They are indicative —
+     which is what most industrial installations use. They are indicative —
      any manufacturer whose ranges differ can be typed in by hand.          */
 
   /* MCCB frames, in amps. A device rating above its frame does not exist. */
