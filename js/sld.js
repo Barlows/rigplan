@@ -26,6 +26,7 @@ var SLD = (function () {
     boardW: 104,       // width of a board's symbol
     maxRowW: 1180,     // circuits wrap onto a new run past this width
     rowGap: 34,        // extra gap between runs
+    subRow: 154,       // vertical step when a row runs out of width and drops
     blockGap: 52       // gap between one transformer's block and the next
   };
   var KIND = {
@@ -76,8 +77,37 @@ var SLD = (function () {
     var nodes = [], links = [];
     var blockX = M.pad, blockW = 0;
     var tiersUsed = 0;
+    /* Extra vertical offset for the current sub-row.
 
-    function tierY(tier) { return M.supplyY + tier * M.band; }
+       The diagram is a tree, so its natural shape is wide and short: every
+       circuit under a board sits on the same line, and a board with twenty
+       circuits makes that line enormous. The real project came out 10,158 px
+       wide, which no printer will take and no reader will hold.
+
+       So past maxRowW the layout stops going right and starts going down.
+       `rowShift` is that offset: it is added to every tier's y, so a board and
+       the circuits beneath it stay together on the same sub-row whatever row
+       the board landed on. The sheet's width stays bounded and its height
+       grows, which is what a page break is for. */
+    var rowShift = 0, maxRowShift = 0;
+
+    function tierY(tier) { return M.supplyY + tier * M.band + rowShift; }
+
+    /* Start a new sub-row: down the sheet, back to the left margin.
+
+       The step is deliberately not a whole band. A band is the gap between one
+       tier and the next, so advancing by exactly one put every fourth sub-row's
+       board on the same line as a circuit two sub-rows earlier — three symbols
+       at one coordinate, which is how the duplicate-position bug appeared.
+       Advancing by a band and a half keeps tiers and sub-rows in different
+       phases and they cannot line up however many rows there are. */
+    function newRow() {
+      rowShift += M.subRow;
+      if (rowShift > maxRowShift) maxRowShift = rowShift;
+      blockX = M.pad;
+    }
+    /* Would reserving `w` here run off the sheet? */
+    function wouldOverflow(w) { return blockX + w > M.pad + M.maxRowW; }
 
     /* Reserve a span of `w` and return its centre. */
     function take(w) {
@@ -119,6 +149,7 @@ var SLD = (function () {
       var bn = [], bl = [];
       blockX = M.pad;
       tiersUsed = 0;
+      rowShift = 0; maxRowShift = 0;
 
       function emit(n, parentId) {
         bn.push(n);
@@ -139,7 +170,12 @@ var SLD = (function () {
          distribution board with twenty outgoing circuits would otherwise make
          the sheet absurdly wide, and a wide sheet is unreadable on screen and
          unusable on paper. Sub-boards always start their own row, so each
-         board's circuits sit together under it. */
+         board's circuits sit together under it.
+
+         Boards are wrapped on the same rule as circuits. On the real project
+         six distribution boards off one main board were laid out in one line
+         and their circuit rows beneath inherited that width, so wrapping the
+         circuits but not the boards bought nothing. */
       function placeChildren(kids) {
         /* group into rows: a sub-board starts a new row so its circuits stay
            together beneath it, and a run of circuits wraps at maxRowW */
@@ -156,13 +192,33 @@ var SLD = (function () {
         });
         if (cur.length) rows.push(cur);
 
-        /* Rows run left to right rather than stacking, so a block's depth stays
-           equal to its number of tiers and the whole thing fits a page. */
+        /* Each item's y is read fresh, so an item that had to drop to a new
+           sub-row lands below the one before it rather than on top of it.
+           Reading y once per row put the second half of a wrapped run exactly
+           on top of the first. */
         var centres = [];
-        var y = tierY(KIND.panel.tier);
+        var prevRowHadBoard = false;
         rows.forEach(function (r) {
-          if (blockX > M.pad) blockX += M.rowGap;
-          r.forEach(function (k, i) { if (i) gap(); centres.push(placeL(k, y)); });
+          var placed = 0;
+          var rowHasBoard = r.some(function (k) { return k.kind !== 'panel'; });
+          /* Two boards never share a line. A board's symbol is centred over the
+             span of everything it feeds, and that span can be a whole row of
+             circuits wide — so a second board on the same line lands inside the
+             first one's span, and the two symbols overlap. Saving a band of
+             height is not worth a diagram that cannot be read. */
+          if (rowHasBoard && prevRowHadBoard && blockX > M.pad) newRow();
+          r.forEach(function (k) {
+            var w = k.kind === 'panel' ? M.panelW : M.boardW;
+            if (placed === 0 && blockX > M.pad) blockX += M.colGap;
+            /* the overflow test applies to the first item of a row too: it sits
+               wherever the previous row finished, which may already be past the
+               edge */
+            if (blockX > M.pad && wouldOverflow(w)) newRow();
+            else if (placed) gap();
+            centres.push(placeL(k, tierY(KIND.panel.tier)));
+            placed++;
+          });
+          prevRowHadBoard = rowHasBoard;
         });
         return centres;
       }
@@ -171,7 +227,12 @@ var SLD = (function () {
         tiersUsed = Math.max(tiersUsed, KIND[kind].tier);
         var kids = children(p, o, kind);
         var cx;
+        /* The board's own y is fixed on entry, before its circuits are laid
+           out. Reading it afterwards lets a wrap during placement drop the
+           board below the circuits it feeds. */
+        var y = tierY(KIND[kind].tier);
         if (!kids.length) {
+          if (wouldOverflow(M.boardW)) newRow();
           cx = take(M.boardW);
         } else {
           var s = blockX;
@@ -182,25 +243,30 @@ var SLD = (function () {
         }
         return emit({
           id: o.id, kind: kind, o: o, st: LC.boardStats(p, o, kind),
-          x: cx, y: tierY(KIND[kind].tier), w: M.boardW
+          x: cx, y: y, w: M.boardW
         }, parentId);
       }
 
       /* lay the main boards out, then centre the transformer over them */
       var kids = children(p, t, 'tx');
-      var txCx;
+      var txCx, txY;
       if (!kids.length) {
         txCx = take(M.boardW);
+        txY = tierY(KIND.tx.tier);
       } else {
         var s = blockX;
-        kids.forEach(function (k, i) { if (i) gap(); placeL(k); });
+        var txY0 = tierY(KIND.tx.tier);
+        /* Two main boards cannot share a sub-row: each one's circuit rows may
+           use the full width, so the second always starts below the first. */
+        kids.forEach(function (k, i) { if (i) newRow(); placeL(k); });
         txCx = s + (blockX - s) / 2;
+        txY = txY0;
       }
-      var txNode = { id: t.id, kind: 'tx', o: t, st: LC.boardStats(p, t, 'tx'), x: txCx, y: tierY(KIND.tx.tier), w: M.boardW };
+      var txNode = { id: t.id, kind: 'tx', o: t, st: LC.boardStats(p, t, 'tx'), x: txCx, y: txY, w: M.boardW };
       bn.push(txNode);
       /* placeL already emitted a link from the transformer down to each of its
          main boards — adding them again here drew the feeder twice */
-      bn.push({ id: 'supply:' + t.id, kind: 'supply', o: t, x: txCx, y: M.supplyY, w: M.boardW });
+      bn.push({ id: 'supply:' + t.id, kind: 'supply', o: t, x: txCx, y: txY - M.band, w: M.boardW });
       bl.push({ from: 'supply:' + t.id, to: t.id });
 
       /* shift the block down the sheet and add it to the drawing */
@@ -210,7 +276,9 @@ var SLD = (function () {
       links = links.concat(bl);
 
       maxBlockW = Math.max(maxBlockW, blockX - M.pad);
-      yCursor += M.supplyY + tiersUsed * M.band + 78 + M.blockGap;
+      /* the block is as deep as its tiers plus however many sub-rows the width
+         forced it into */
+      yCursor += M.supplyY + tiersUsed * M.band + maxRowShift + 78 + M.blockGap;
     });
 
     /* a project with no transformers yet still needs a sheet */

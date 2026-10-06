@@ -50,10 +50,10 @@ SUITES = [
     ("underlay", "underlay-test.html"),
 ]
 
-# Suites that render a diagram or read a file and print their findings as text
-# rather than as pass/fail cases. They are still run — a crash in them would
-# otherwise go unnoticed — but they report what they saw instead of a tally.
-INSPECTION = {"sld", "underlay"}
+# Suites that read a file and print what they saw as text rather than as
+# pass/fail cases. They are still run — a crash in them would otherwise go
+# unnoticed — but they report their output instead of a tally.
+INSPECTION = {"underlay"}
 
 CHROME_CANDIDATES = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -120,6 +120,10 @@ def dump_dom(chrome, url, budget=8000):
 
 
 def strip_tags(html):
+    # Script and style content is text between tags, not markup, so it survives
+    # a tag strip and ends up read as if it were the page's own words. The
+    # failing-check names were then followed by the whole test program.
+    html = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", html, flags=re.S | re.I)
     html = re.sub(r"<[^>]+>", " ", html)
     for a, b in (("&times;", "x"), ("&mdash;", "-"), ("&nbsp;", " "), ("&amp;", "&"),
                  ("&lt;", "<"), ("&gt;", ">"), ("&#39;", "'"), ("&rsquo;", "'"),
@@ -134,10 +138,15 @@ def summary_of(dom):
 
 
 def failures_of(dom):
-    """The failing case names and the values they got.
+    """The failing case names and, where the page reports them, the values.
 
     A count of failures alone is not enough to act on; the got/want pair is
     what tells you which of two possible mistakes was made.
+
+    Two page formats are handled: the `.case` blocks the other suites use, and
+    the plain "✕ name — detail" lines the diagram suite prints. Both exist
+    because both were written for reading by eye in a browser, and a runner that
+    only understood one of them would report "nothing failed" on the other.
     """
     out = []
     for block in re.findall(r'<div class="case fail">(.*?)</div>\s*(?:</div>|<div class="case)', dom, re.S):
@@ -145,6 +154,26 @@ def failures_of(dom):
         detail = re.search(r'<div class="detail">(.*?)</div>', block, re.S)
         out.append((strip_tags(name.group(1)) if name else "?",
                     strip_tags(detail.group(1)) if detail else ""))
+    if out:
+        return out
+    text = strip_tags(dom)
+    # Split on the tick marks and keep the pieces that follow a cross. Splitting
+    # on the marks rather than matching around them means a name containing
+    # punctuation, a digit run or a stray cross cannot truncate the list.
+    pieces = re.split(r"[✓✔✕✗]", text)
+    if len(pieces) < 3:
+        return out
+    marks = re.findall(r"[✓✔✕✗]", text)
+    for i, piece in enumerate(pieces[1:]):
+        if marks[i] not in "✕✗":
+            continue
+        piece = piece.strip()
+        if not piece:
+            continue
+        name, _, detail = piece.partition(" — ")
+        # drop anything after the tally, which follows the last check
+        name = re.split(r"\d+\s*/\s*\d+\s*checks passed", name)[0].strip()
+        out.append((name, detail.strip()))
     return out
 
 
@@ -208,17 +237,24 @@ def run(chrome, port, names):
                 print("  %-12s inspected, %d chars of output  (%.1fs)" % (name, len(body), took))
             continue
 
-        summary = summary_of(dom)
-        if summary is None or "running…" in summary:
+        # The tally lives in #summary on most suites and at the end of the
+        # output on the rest, so it is read from the whole document. A page
+        # still saying "running…" threw before writing anything.
+        body = strip_tags(dom)
+        if len(body) < 60:
+            print("  %-12s RENDERED NOTHING (%d chars) — the page threw" % (name, len(body)))
+            failed_suites.append(name)
+            continue
+        if "running…" in body:
             print("  %-12s DID NOT FINISH — the page threw before writing its results" % name)
             failed_suites.append(name)
             continue
 
         fails = failures_of(dom)
 
-        m = re.match(r"(\d+)\s*/\s*(\d+)\s*checks passed", summary or "")
+        m = re.search(r"(\d+)\s*/\s*(\d+)\s*checks passed", body)
         if not m:
-            print("  %-12s UNREADABLE SUMMARY %r" % (name, summary))
+            print("  %-12s UNREADABLE — no tally found in the page" % ())
             failed_suites.append(name)
             continue
 

@@ -690,7 +690,7 @@ test/run.py               headless runner — serves the directory, drives Chrom
 test/parser-test.html     35 checks against a synthetic DXF with known geometry
 test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
-test/sld-test.html        24 checks on the single line diagram layout and symbols
+test/sld-test.html        36 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
 test/protection-test.html 84 checks on fault levels, device proposals, cable
                           thermal withstand and the protection audit
@@ -747,6 +747,32 @@ The **Single line diagram** tab draws the whole supply as a schematic, using IEC
 incomer protective device, a rectangle with a line through it for a final-circuit
 fuse, three decreasing bars for earth, and a plain rectangle for a board. The
 **Legend** button shows the key — an SLD without a symbol key is just shapes.
+
+#### The sheet is bounded, not merely scaled
+
+The diagram is a tree, so its natural shape is wide and short: every circuit
+under a board sits on the same line. On the real project six distribution boards
+off one main board were laid out in one line, their circuit rows inherited that
+width, and the sheet came out **10,158 px** wide — which no printer takes and no
+reader holds.
+
+Past `maxRowW` (1,180 px) the layout now **drops to a new sub-row** instead of
+continuing to the right. The width stays bounded by construction and the height
+grows, which is what a page break is for. The real project is now 1,200 × 3,704.
+
+Four things this exposed, each of which is now a check:
+
+- **A sub-row advances by a band and a half, not a whole band.** A band is the
+  gap between one tier and the next, so advancing by exactly one put every
+  fourth sub-row's board on the same line as a circuit two sub-rows earlier —
+  three symbols at one coordinate.
+- **Two boards never share a line.** A board's symbol is centred over the span of
+  everything it feeds, and that span can be a whole row of circuits wide, so a
+  second board on the same line lands inside the first one's span.
+- **A board's y is fixed before its circuits are laid out.** Read afterwards, a
+  wrap during placement drops the board below the circuits it feeds.
+- **Each item's y is read fresh.** Reading it once per row put the second half
+  of a wrapped run exactly on top of the first.
 
 The vertical order is the supply order — utility → transformer → main board →
 distribution board → sub-board → control panel — and every branch is labelled with

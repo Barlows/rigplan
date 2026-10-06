@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Single line diagram — render test</title>
-<link rel="stylesheet" href="../css/styles.css?v=121">
+<link rel="stylesheet" href="../css/styles.css?v=127">
 <style>
   body{background:#0f1216;color:#dfe7ee;margin:0;padding:16px;font:13px ui-monospace,Menlo,monospace}
   h1{font-size:15px;margin:0 0 4px}
@@ -32,9 +32,9 @@
 <div class="sheet" id="sheet"></div>
 <div id="out"></div>
 
-<script src="../js/data.js?v=121"></script>
-<script src="../js/calc.js?v=121"></script>
-<script src="../js/sld.js?v=121"></script>
+<script src="../js/data.js?v=127"></script>
+<script src="../js/calc.js?v=127"></script>
+<script src="../js/sld.js?v=127"></script>
 <script>
 (function () {
   var checks = [];
@@ -161,24 +161,36 @@
     (r.svg.match(/<g><rect/g) || []).length + ' for ' + assigned.length + ' circuits');
 
   /* The sheet scales to fit, so absolute pixels are not the constraint — the
-     aspect ratio is. A single line diagram for a whole site is legitimately
-     wide; what must not happen is it becoming a long thin strip, which is
-     unreadable both on screen and on paper. */
+     aspect ratio is, and the width is bounded by construction now that the
+     layout drops to a new sub-row instead of running off the edge. */
   check('the drawing is a usable sheet shape',
-    r.width / r.height < 6 && r.height <= 1600,
-    r.width + '×' + r.height + ' = ' + (r.width / r.height).toFixed(1) + ':1');
-  /* One block per transformer, stacked. The depth is therefore set by the
-     number of transformers and the tiers, not by the number of circuits —
-     which is the property that keeps the drawing on a page. */
-  var band = SLD.M.band, supplyY = SLD.M.supplyY, blockGap = SLD.M.blockGap;
-  /* the last block is not followed by another, and the sheet ends just below
-     its deepest node rather than a full block's worth of padding */
-  var block = supplyY + 5 * band + 78 + blockGap;
-  var expected = (p.txs.length - 1) * block + supplyY + 5 * band + 104;
-  check('depth is set by the transformers, not the circuit count',
-    Math.abs(r.height - expected) < 4, r.height + ' vs expected ' + Math.round(expected));
-  check('a circuit count of this size still fits one sheet', r.height <= 1600,
-    r.height + ' for ' + assigned.length + ' circuits');
+    r.width / r.height < 2 && r.height <= 4200,
+    r.width + '×' + r.height + ' = ' + (r.width / r.height).toFixed(2) + ':1');
+  check('and the sheet stays inside the printable width',
+    r.width <= 28 + SLD.M.maxRowW + 60,
+    r.width + ' against a limit of ' + (28 + SLD.M.maxRowW + 60));
+
+  /* Depth is no longer set by the transformers alone: a row that runs out of
+     width drops a sub-row, so the height grows with the circuit count while the
+     width stays put. What must hold is that each transformer's block is still a
+     separate band and does not overlap the next. */
+  var band = SLD.M.band, supplyY = SLD.M.supplyY;
+  check('each transformer block is still its own band of the sheet',
+    (function () {
+      var ids = {};
+      L.forEach(function (n) { ids[n.id] = n; });
+      var tx = L.filter(function (n) { return n.kind === 'tx'; })
+                 .sort(function (a, b) { return a.y - b.y; });
+      for (var i = 1; i < tx.length; i++) {
+        /* nothing belonging to the upper transformer may sit below the lower
+           one's symbol */
+        var upperNodes = L.filter(function (n) { return blockOf(n) === blockOf(tx[i - 1]); });
+        if (upperNodes.some(function (n) { return n.y > tx[i].y; })) return false;
+      }
+      return true;
+    })());
+  check('a circuit count of this size still reads as a drawing rather than a strip',
+    r.height <= 4200, r.height + ' for ' + assigned.length + ' circuits');
   check('every circuit label is inside the sheet', L.every(function (n) {
     return n.x - 70 > 0 && n.x + 140 < r.width;
   }));
@@ -194,6 +206,94 @@
     });
     return clash === 0;
   })());
+
+  /* ------------------------------------------------- the width is bounded --
+     The layout is a tree, so its natural shape is wide and short. The real
+     project came out 10,158 px wide, which no printer takes and no reader
+     holds. Past maxRowW the layout now drops to a new sub-row instead of
+     continuing right, so the sheet's width is bounded by construction and its
+     height grows — which is what a page break is for.
+
+     These are the checks that would have caught it, and each names the mistake
+     it is there to prevent. */
+  function collisions(list) {
+    var dup = 0, clash = 0;
+    var seen = {};
+    list.forEach(function (n) {
+      var k = Math.round(n.x) + ',' + Math.round(n.y);
+      if (seen[k]) dup++;
+      seen[k] = n;
+    });
+    for (var i = 0; i < list.length; i++) {
+      for (var j = i + 1; j < list.length; j++) {
+        var a = list[i], b = list[j];
+        if (a.kind === 'supply' || b.kind === 'supply') continue;
+        var aw = a.kind === 'panel' ? 132 : 104, bw = b.kind === 'panel' ? 132 : 104;
+        /* two symbols on one line must not overlap each other */
+        if (Math.abs(a.y - b.y) < 44 && Math.abs(a.x - b.x) < (aw + bw) / 2 - 2) clash++;
+      }
+    }
+    return { dup: dup, clash: clash };
+  }
+
+  /* A board with far more circuits than fit on one line, so the wrap has to
+     happen and everything above it is exercised. */
+  var wide = LS.newProject({ site: { w: 400, h: 200 } });
+  var wtx = LS.newTx({ kva: 2500, num: 1 }); wide.txs.push(wtx);
+  var wpdb = LS.newPdb({ txId: wtx.id, incomerA: 2500 }); wide.pdbs.push(wpdb);
+  var wpdp = LS.newPdp({ pdbId: wpdb.id, incomerA: 1250, ways: 60 }); wide.pdps.push(wpdp);
+  for (var w = 0; w < 48; w++) {
+    var pn = LS.newPanel({ tag: 'C' + w, name: 'circuit ' + w, kw: 15, pdpId: wpdp.id });
+    pn.__kind = 'panel';
+    wide.panels.push(pn);
+  }
+  LC.applyNumbering(wide);
+  var wr = SLD.layout(wide);
+  var wl = SLD.layout ? wr.nodes : [];
+  var wc = collisions(wl);
+  check('a board with 48 circuits still lays out', wl.length === 48 + 4,
+    wl.length + ' nodes for 48 circuits, 2 boards and a transformer');
+  check('and the sheet stays inside the printable width', wr.width <= 28 + SLD.M.maxRowW + 60,
+    Math.round(wr.width) + ' against a limit of ' + (28 + SLD.M.maxRowW + 60));
+  check('nothing lands on the same coordinate twice', wc.dup === 0, wc.dup + ' duplicates');
+  check('and nothing overlaps', wc.clash === 0, wc.clash + ' overlaps');
+
+  /* Several boards, which is where the overlap was: a board's symbol is
+     centred over the span of everything it feeds, so a second board on the
+     same line lands inside the first one's span. */
+  var many = LS.newProject({ site: { w: 400, h: 200 } });
+  var mtx = LS.newTx({ kva: 2500, num: 1 }); many.txs.push(mtx);
+  var mpdb = LS.newPdb({ txId: mtx.id, incomerA: 2500 }); many.pdbs.push(mpdb);
+  for (var d = 0; d < 6; d++) {
+    var mpdp = LS.newPdp({ pdbId: mpdb.id, incomerA: 630, ways: 30 }); many.pdps.push(mpdp);
+    for (var c2 = 0; c2 < 7; c2++) {
+      var q = LS.newPanel({ tag: 'P' + d + '-' + c2, name: 'load', kw: 10, pdpId: mpdp.id });
+      q.__kind = 'panel';
+      many.panels.push(q);
+    }
+  }
+  LC.applyNumbering(many);
+  var mr = SLD.layout(many);
+  var mc = collisions(mr.nodes);
+  check('six boards of seven circuits each lay out', mr.nodes.length === 6 * 8 + 3,
+    mr.nodes.length + ' nodes');
+  check('and stay inside the printable width', mr.width <= 28 + SLD.M.maxRowW + 60,
+    Math.round(mr.width) + ' against a limit of ' + (28 + SLD.M.maxRowW + 60));
+  check('nothing lands on the same coordinate twice', mc.dup === 0, mc.dup + ' duplicates');
+  check('and nothing overlaps', mc.clash === 0, mc.clash + ' overlaps');
+  var ids2 = {};
+  mr.nodes.forEach(function (n) { ids2[n.id] = n; });
+  var orphans = mr.links.filter(function (l) { return !ids2[l.from] || !ids2[l.to]; });
+  check('every link has both ends', orphans.length === 0, orphans.length + ' dangling');
+  /* A parent below its child is a diagram that reads backwards. */
+  var upward = mr.links.filter(function (l) {
+    return ids2[l.from] && ids2[l.to] && ids2[l.to].y <= ids2[l.from].y;
+  });
+  check('no link points upward', upward.length === 0, upward.length + ' pointing up');
+  var off = mr.nodes.filter(function (n) {
+    return n.x < 0 || n.x > mr.width || n.y < 0 || n.y > mr.height;
+  });
+  check('and every symbol is on the sheet', off.length === 0, off.length + ' off the sheet');
 
   document.getElementById('out').innerHTML = checks.map(function (c) {
     return (c.ok ? '✓ ' : '✕ ') + c.name + (c.ok ? '' : ' — ' + c.detail);
