@@ -759,10 +759,29 @@ check, which is what tells you which of two possible mistakes was made. If no
 browser is found it exits **2** with a message saying so, because "no tests ran"
 must never look like "all tests passed".
 
-The two `inspection` suites — `sld` and `underlay` — render a diagram and read a
-file rather than counting pass/fail cases, so they are only checked for having
-produced output at all. A throw leaves the body empty, which is what the runner
-catches.
+Two of the suites — `sld` and `underlay` — render or read rather than counting
+pass/fail cases, so they are only checked for having produced output. `sld` counts
+them; `underlay` is inspection-only, because what it exercises is rejection paths
+rather than results.
+
+**A test page that reads a sibling file fails on a fresh clone and nowhere
+else.** This is not hypothetical. The underlay suite fetched `test/fixture.dxf`,
+which `.gitignore` was excluding with a blanket `test/*.dxf`. It passed on every
+local run for as long as the file happened to be lying on disk — which is also
+how it worked when it was first written — and failed the moment it was run
+somewhere clean. The file is now inlined in the page as a
+`<script type="application/dxf">` block, so the suite needs nothing but itself.
+
+`run.py` checks for that before rendering anything: it lists the files git
+tracks and fails if a test page fetches a path that is not among them. The check
+is in the runner rather than only in CI so it fires on the machine where the file
+was last edited, which is the machine where the mistake was made.
+
+**Pages say what happened to them.** A suite may carry `<pre id="state">`, set to
+`running` at the start and `done` or `error` at the end, and a global handler
+writes any escape into the page. Without it an empty result is ambiguous: threw,
+hung, and never started all leave a placeholder, and the runner can only guess
+between them. With it, a failure prints its own stack.
 
 `.github/workflows/tests.yml` runs the same command on every push, plus a parse
 check on each script and a grep for client identifiers in the app files.
