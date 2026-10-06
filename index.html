@@ -102,6 +102,8 @@
       </div>
 
       <div class="tb-group right">
+        <button class="btn" id="btnUndo" disabled title="Nothing to undo (Ctrl+Z)">↶ Undo</button>
+        <button class="btn" id="btnRedo" disabled title="Nothing to redo (Ctrl+Shift+Z)">↷</button>
         <button class="btn warn" id="btnRebalance" title="Level the loading of the distribution boards feeding from each main board">Balance</button>
         <button class="btn" id="btnRebalanceTx" title="Also move circuits between main boards / transformers — this changes the supply topology">Balance ↔ TX</button>
         <button class="btn" id="btnProtect" title="Propose a protective device for every supply: MCCB on the main and distribution boards, MCB on the sub-boards, MCB on the final circuits">Propose protection</button>
@@ -156,6 +158,6 @@
 <script src="js/underlay.js?v=5"></script>
 <script src="js/plan.js?v=78"></script>
 <script src="js/sld.js?v=78"></script>
-<script src="js/ui.js?v=82"></script>
+<script src="js/ui.js?v=92"></script>
 </body>
 </html>

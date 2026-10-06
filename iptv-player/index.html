@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IPTV Player</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- login                                                              -->
+<!-- ------------------------------------------------------------------ -->
+<section id="login" class="login">
+  <form id="login-form" class="card">
+    <h1>IPTV Player</h1>
+    <p class="sub">Sign in with the credentials from your provider.</p>
+
+    <label for="server">Server address</label>
+    <input id="server" name="server" type="text" inputmode="url" autocomplete="off"
+           placeholder="http://your-server.com:8080" required>
+    <p class="hint">The <em>http://</em> and the port number are both usually required.</p>
+
+    <label for="username">Username</label>
+    <input id="username" name="username" type="text" autocomplete="off" required>
+
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+    <button type="submit" id="login-button">Connect</button>
+
+    <p id="login-error" class="error" role="alert" hidden></p>
+    <p class="foot">Your credentials stay on this computer. They are held in memory only,
+      never written to disk, and never sent anywhere but your provider.</p>
+  </form>
+</section>
+
+<!-- ------------------------------------------------------------------ -->
+<!-- app                                                                -->
+<!-- ------------------------------------------------------------------ -->
+<section id="app" hidden>
+  <header class="topbar">
+    <button id="menu-toggle" class="icon-button" title="Channels" aria-label="Show channels">☰</button>
+    <div class="search-wrap">
+      <input id="search" type="search" placeholder="Search channels, movies and series" autocomplete="off">
+    </div>
+    <button id="logout" class="ghost" title="Sign out">Sign out</button>
+  </header>
+
+  <div class="layout">
+    <aside id="sidebar">
+      <nav class="sources">
+        <button class="source is-active" data-source="live">Live TV</button>
+        <button class="source" data-source="movie">Movies</button>
+        <button class="source" data-source="series">Series</button>
+        <button class="source" data-source="favourites">Saved</button>
+      </nav>
+      <div id="category-title" class="sidebar-heading"></div>
+      <div id="categories" class="categories"></div>
+    </aside>
+
+    <main>
+      <div id="player-panel">
+        <div class="video-wrap">
+          <video id="video" playsinline controls preload="none"></video>
+          <div id="video-spinner" class="spinner" hidden></div>
+        </div>
+        <div id="now-playing" class="now-playing" hidden>
+          <div class="np-head">
+            <strong id="np-title"></strong>
+            <button id="np-close" class="icon-button" aria-label="Close player">✕</button>
+          </div>
+          <p id="np-subtitle" class="np-subtitle"></p>
+          <details id="np-guide">
+            <summary>Programme guide</summary>
+            <div id="np-guide-list" class="guide"></div>
+          </details>
+        </div>
+      </div>
+
+      <div id="notice" class="notice" hidden></div>
+      <div id="listing" class="listing"></div>
+      <p id="status" class="status"></p>
+    </main>
+  </div>
+</section>
+
+<script src="/app.js"></script>
+</body>
+</html>

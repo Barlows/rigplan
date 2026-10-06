@@ -10,6 +10,107 @@
   var sort = { col: null, dir: 1 };
   var filter = { q: '', unassigned: false, noCable: false };
   var store = 'eload-sched-v1';
+
+  /* ------------------------------------------------------------------ undo --
+     Snapshot undo rather than command reversal. Reversing an operation means
+     knowing exactly what each of a dozen places did to which object, and every
+     one of those places has to be remembered forever. A snapshot needs no
+     knowledge of any of them: it is the state before, and restoring it is
+     assigning it back.
+
+     The cost is memory — each entry is the whole project as JSON — so the stack
+     is kept short and each entry is a string, not an object graph, which keeps
+     it compact and makes the restore a single parse. */
+  var UNDO_MAX = 25;
+  var undoStack = [], redoStack = [];
+  var undoPending = null;
+
+  /* Call this immediately before anything mutates the design. Deep-copy through
+     JSON so later edits cannot reach back into the snapshot, and label it so
+     the toast can say what is being put back.
+
+     Typing in a field is coalesced: every keystroke would otherwise make its own
+     undo step, so undo would walk back through a word one letter at a time. The
+     first keystroke on a given field takes the snapshot; the rest update its
+     label and keep that same snapshot, so one undo removes the whole edit. The
+     window is short enough that two separate visits to the same field still get
+     their own steps. */
+  var UNDO_COALESCE_MS = 1500;
+  /* Survives commitUndo(), because every keystroke commits. Without this the
+     pending snapshot is cleared between keystrokes and each one becomes its own
+     undo step. */
+  var lastCoalesce = { key: null, at: 0 };
+  function pushUndo(label, coalesceKey) {
+    var now = Date.now();
+    if (coalesceKey && lastCoalesce.key === coalesceKey && now - lastCoalesce.at < UNDO_COALESCE_MS) {
+      /* a continued edit on the same field: keep the snapshot taken when the
+         field was first touched, so one undo reverts the whole edit */
+      lastCoalesce.at = now;
+      if (undoPending) undoPending.label = label || undoPending.label;
+      return;
+    }
+    try {
+      undoPending = { label: label || 'change', key: coalesceKey || null, at: now, state: snapshot() };
+    } catch (e) { undoPending = null; }
+    lastCoalesce = { key: coalesceKey, at: now };
+  }
+  /* Commit the pending snapshot. Separate from pushUndo because an operation can
+     be abandoned after the snapshot was taken — a cancelled modal, a click that
+     hit a full board — and committing those would fill the stack with no-ops
+     that undo would appear to do but not. */
+  function commitUndo() {
+    if (!undoPending) return;
+    undoStack.push(undoPending);
+    while (undoStack.length > UNDO_MAX) undoStack.shift();
+    redoStack.length = 0;
+    undoPending = null;
+    /* the coalesce window is deliberately not reset here: a continued edit on
+       the same field must still fold into the step it started */
+    syncUndoUi();
+  }
+  /* An operation that decided not to happen — a cancelled modal, a click that
+     found the board full — must leave the stack alone, or undo would appear to
+     do something and not do it. */
+  function discardUndo() { undoPending = null; }
+
+  function restore(snap) {
+    var p;
+    try { p = JSON.parse(snap.state); } catch (e) { return false; }
+    S = LS.newProject(p);
+    bootstrap(S);
+    PLAN.setProject(S);
+    /* a restored project may reference items that no longer exist */
+    if (sel && !LC.allItems(S).some(function (o) { return o.id === sel.id; })) sel = null;
+    syncToolbar();
+    commit(true);
+    return true;
+  }
+  function doUndo() {
+    if (!undoStack.length) { toast('Nothing to undo', ''); return; }
+    var entry = undoStack.pop();
+    redoStack.push({ label: entry.label, state: snapshot() });
+    if (!restore(entry)) { toast('Could not restore that — the project file may be damaged', 'bad'); return; }
+    toast('Undid <b>' + esc(entry.label) + '</b>', '');
+    /* the coalesce window closes with the step, so undoing then typing again in
+       the same field starts a fresh step rather than folding into the one just
+       taken back */
+    lastCoalesce = { key: null, at: 0 };
+    syncUndoUi();
+  }
+  function doRedo() {
+    if (!redoStack.length) { toast('Nothing to redo', ''); return; }
+    var entry = redoStack.pop();
+    undoStack.push({ label: entry.label, state: snapshot() });
+    if (!restore(entry)) { toast('Could not restore that', 'bad'); return; }
+    toast('Redid <b>' + esc(entry.label) + '</b>', '');
+    lastCoalesce = { key: null, at: 0 };
+    syncUndoUi();
+  }
+  function syncUndoUi() {
+    var u = el('btnUndo'), r = el('btnRedo');
+    if (u) { u.disabled = !undoStack.length; u.title = undoStack.length ? 'Undo ' + esc(undoStack[undoStack.length - 1].label) + ' (' + undoStack.length + ' available)' : 'Nothing to undo'; }
+    if (r) { r.disabled = !redoStack.length; r.title = redoStack.length ? 'Redo ' + esc(redoStack[redoStack.length - 1].label) : 'Nothing to redo'; }
+  }
   /* Which board rows are folded in the supply hierarchy. Declared here rather
      than beside the tree code because bootstrap() reads it during startup,
      before anything else has run. */
@@ -166,6 +267,18 @@
     return out;
   }
 
+  /* A snapshot for undo keeps the site map, where an export deliberately drops
+     it — losing the background because you undid a rename would be a poor trade.
+     The <img> element is dropped because it is not serialisable, but its dataUrl
+     is what rebuilds it, and restoreUnderlay() does that on load. */
+  function snapshot() {
+    var out = JSON.parse(JSON.stringify(Object.assign({}, S, {
+      txs: S.txs, pdbs: S.pdbs, pdps: S.pdps, dbs: S.dbs, panels: S.panels
+    })));
+    if (out.underlay) { delete out.underlay.img; delete out.underlay.srcText; }
+    return JSON.stringify(out);
+  }
+
   /* ------------------------------------------------------------- rendering */
   function renderAll(structural) {
     renderTop(); renderTree(); renderTabs(); renderTab();
@@ -173,6 +286,7 @@
     PLAN.draw();
   }
   function commit(structural) {
+    commitUndo();
     save();
     renderTop(); renderTree(); renderTabs(); renderTab();
     if (structural) renderProps(); else refreshDyn();
@@ -1409,9 +1523,26 @@
   }
 
   /* ------------------------------------------------------------- mutations */
+  /* Every field edit is undoable. Text inputs coalesce per field so a word is one
+     step rather than one per keystroke; a select is a deliberate choice, so it
+     always gets its own. */
+  function undoLabel(kind, id, f) {
+    var o = itemById(id);
+    var what = (o && (o.tag || o.name)) || 'item';
+    var field = { kw: 'load', kva: 'kVA', pf: 'power factor', demand: 'demand factor',
+      volt: 'voltage', phases: 'phases', start: 'starting method', csa: 'core size',
+      incomerA: 'incomer', ways: 'ways', spareWays: 'spare ways', num: 'number',
+      pdpId: 'supply', pdbId: 'supply', dbId: 'sub-board', ir: 'device rating',
+      icu: 'breaking capacity', frame: 'device frame', trip: 'trip unit',
+      contingency: 'future load' }[f];
+    return (field ? what + ' ' + field : what + ' ' + f);
+  }
   function applyField(t) {
     var b = t.dataset.bind, kind = t.dataset.kind, id = t.dataset.id, f = t.dataset.f;
     var v = t.type === 'checkbox' ? t.checked : t.value;
+    /* a checkbox or a select fires on change; a text input on every keystroke */
+    var discrete = t.type === 'checkbox' || t.tagName === 'SELECT';
+    pushUndo(undoLabel(kind, id, f), discrete ? null : kind + ':' + id + ':' + f);
     if (b === 'design') { S.design[f] = num(v); }
     else if (b === 'meta') { S[f] = v; }
     else if (b === 'site') { S.site[f] = num(v); }
@@ -1550,6 +1681,7 @@
     return 'CP-' + (n < 10 ? '0' + n : n);
   }
   function addTx(pos) {
+    pushUndo('add transformer');
     var n = S.txs.length + 1;
     var t = LS.newTx({ tag: 'TX-' + n, name: 'Transformer ' + n, kva: 1000, pos: pos, num: nextTxNumber() });
     t.__kind = 'tx'; S.txs.push(t);
@@ -1567,6 +1699,7 @@
   }
   function addPdb(pos, txId) {
     if (!S.txs.length) { toast('Add a transformer first', 'bad'); return; }
+    pushUndo('add main board');
     var best = txId ? LC.get(S, 'tx', txId) : nearest(S.txs, pos, 'tx');
     var kva = num(best.kva, 1000);
     var b = LS.newPdb({
@@ -1582,6 +1715,7 @@
   }
   function addPdp(pos, pdbId) {
     if (!S.pdbs.length) { toast('Add a main board (PDB) first', 'bad'); return; }
+    pushUndo('add distribution board');
     var parent = pdbId ? LC.get(S, 'pdb', pdbId) : nearest(S.pdbs, pos, 'pdb');
     var siblings = LC.pdpOfPdb(S, parent.id);
     var d = LS.newPdp({ tag: 'PDP', name: 'Distribution board ' + (siblings.length + 1), pdbId: parent.id, incomerA: 250, spareWays: 4, pos: pos });
@@ -1597,6 +1731,7 @@
      than one on the same PDP is fine when a board needs a second area. */
   function addDb(pos, pdpId) {
     if (!S.pdps.length) { toast('Add a distribution board (PDP) first', 'bad'); return; }
+    pushUndo('add sub-board');
     var parent = pdpId ? LC.get(S, 'pdp', pdpId) : nearest(S.pdps, pos, 'pdp');
     /* leave the parent some headroom, then pick a standard sub-board size */
     var st = LC.boardStats(S, parent, 'pdp');
@@ -1654,6 +1789,9 @@
   }
   function del(id, kind) {
     var o = itemById(id); if (!o) return;
+    /* deleting a transformer cascades, so the snapshot is taken once at the top
+       and the recursive calls must not each push their own */
+    if (!undoPending) pushUndo('delete ' + o.tag);
     var msg = 'Delete ' + o.tag + '?';
     if (kind === 'tx') { var c = LC.pdbOfTx(S, id).length; if (c) msg += ' — ' + c + ' main board(s) and everything below will be removed.'; }
     if (kind === 'pdb') { var c2 = LC.pdpOfPdb(S, id).length; if (c2) msg += ' — ' + c2 + ' distribution board(s) and their panels will be removed.'; }
@@ -1710,6 +1848,7 @@
     if (!total) { toast('Nothing to protect — add some boards and circuits first', 'bad'); return; }
 
     function run(replace) {
+      pushUndo(replace ? 'propose all protection' : 'fill in missing protection');
       var r = LC.protAll(S, { replace: replace });
       renumber();
       commit(true);
@@ -1740,6 +1879,7 @@
     var o = itemById(id); if (!o) return;
     var kind = o.__kind || LC.kindOf(o);
     if (act === 'protpropose') {
+      pushUndo('propose device for ' + o.tag);
       var res = LC.applyProt(S, o, kind, true);
       renumber();
       renderProps();
@@ -1748,6 +1888,7 @@
       return;
     }
     if (act === 'protclear') {
+      pushUndo('clear device on ' + o.tag);
       o.prot = null;
       renderProps();
       commit(true);
@@ -1768,6 +1909,7 @@
       return addDb(LC.nextPracticalPos(S, { anchor: host.pos, offset: num(offset(), 2), clear: num(clearance(), 1.5), w: LS.SHAPE.db.w, h: LS.SHAPE.db.h, step: num(snap(), 1), exclude: host }), pdpId);
     }
     if (act === 'assign') {
+      pushUndo('assign ' + o.tag);
       var log = LC.assignPanel(S, o, { offset: num(offset(), 2), clear: num(clearance(), 1.5) });
       autoLen(o);
       renumber();
@@ -1776,6 +1918,7 @@
       return commit(true);
     }
     if (act === 'autosize') {
+      pushUndo('auto-size ' + o.tag);
       /* size the incomer from what the board actually carries — for a
          sub-board that is only the circuits sitting on it */
       var boardKind = kind === 'pdp' || kind === 'db' ? kind : 'pdp';
@@ -1799,6 +1942,7 @@
     }
     if (act === 'balance-here') {
       var scope = kind === 'pdb' ? id : (LC.get(S, 'pdb', o.pdbId) || {}).id;
+      pushUndo('level the boards on this main board');
       var moves = LC.autoBalance(S, { crossPdb: false, pdbId: scope, tolerance: 12 });
       toast(moves.length ? moves.length + ' circuit(s) moved to level the boards: ' + moves.map(function (m) { return m.panel + ' ' + m.from + '→' + m.to; }).join(', ') : 'Boards on this main board are already level', moves.length ? 'good' : '');
       return commit(false);
@@ -1808,6 +1952,7 @@
          case the relief is a new sub-board beside it */
       var st3 = LC.boardStats(S, o, kind === 'db' ? 'db' : 'pdp');
       if (st3.util <= 100) { toast(o.tag + ' is at ' + st3.util.toFixed(0) + '% — nothing to split', ''); return; }
+      pushUndo('split ' + o.tag);
       var loose2 = st3.panels.filter(function (pn) { return !pn.dbId; });
       var worst2 = loose2.slice().sort(function (a, b) { return LC.panelDemand(S, b).amp - LC.panelDemand(S, a).amp; })[0];
       if (!worst2) {
@@ -1836,6 +1981,7 @@
   function addPanelAt(board, pdpId) {
     var anchor = board || LC.get(S, 'pdp', pdpId);
     if (!anchor) { toast('Add a distribution board (PDP) first', 'bad'); return; }
+    pushUndo('add control panel');
     var pos = LC.nextPracticalPos(S, { anchor: anchor.pos, offset: 3, clear: num(clearance(), 1.5), w: LS.SHAPE.panel.w, h: LS.SHAPE.panel.h, step: num(snap(), 1), exclude: anchor });
     panelModal(pos, anchor.__kind === 'db' ? anchor.pdpId : anchor.id, anchor.id);
   }
@@ -1845,6 +1991,7 @@
      board-chooser. */
   function addPanelOnPdb(pdb) {
     if (!pdb) { toast('Add a main board first', 'bad'); return; }
+    pushUndo('add circuit on ' + pdb.tag);
     var pos = LC.nextPracticalPos(S, { anchor: pdb.pos, offset: 3, clear: num(clearance(), 1.5), w: LS.SHAPE.panel.w, h: LS.SHAPE.panel.h, step: num(snap(), 1), exclude: pdb });
     var types = Object.keys(LS.PANEL_TYPES);
     modal('Add a circuit fed from ' + pdb.tag + ' at E' + pos.x.toFixed(1) + ' / N' + pos.y.toFixed(1),
@@ -1962,6 +2109,7 @@
   function syncToolbar() {
     el('snap').value = String(S.place && S.place.snap ? S.place.snap : 1);
     el('projName').value = S.name;
+    syncUndoUi();
   }
   /* On open: place anything unassigned, tie feeder lengths to the drawn
      geometry and fill in blank cable sizes. Existing assignments are never
@@ -2323,6 +2471,8 @@
     el('btnZoomOut').onclick = function () { PLAN.zoomAt(200, 200, 1 / 1.25); };
     el('btnRebalance').onclick = function () { globalAction('balance'); };
     el('btnRebalanceTx').onclick = function () { globalAction('balance-tx'); };
+    el('btnUndo').onclick = function () { doUndo(); };
+    el('btnRedo').onclick = function () { doRedo(); };
     el('btnAudit').onclick = function () { tab = 'audit'; syncTabs(); renderTab(); toast(LC.audit(S).length + ' design checks evaluated', ''); };
     el('btnProtect').onclick = function () { globalAction('protect'); };
     el('btnCsv').onclick = exportCsv;
@@ -2357,6 +2507,14 @@
     };
     document.addEventListener('keydown', function (e) {
       if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
+      /* Ctrl+Z / Ctrl+Shift+Z. Held for the whole app rather than per-panel so
+         it works wherever the focus happens to be. */
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        if (e.shiftKey) doRedo(); else doUndo();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'y' || e.key === 'Y')) { e.preventDefault(); doRedo(); return; }
       if (e.key === 'Escape') { setMode('none'); closeModal(); sel = null; commit(true); }
       if (e.key === 'f' || e.key === 'F') PLAN.fit();
       if (e.key === '1') setMode('panel');
@@ -2419,6 +2577,9 @@
     if (a === 'protect-keep') return proposeAllProt(true);
     if (a === 'balance' || a === 'balance-tx') {
       var cross = a === 'balance-tx';
+      /* this is the button that can re-home circuits right across the
+         installation, so it is the one that most needs to be undoable */
+      pushUndo(cross ? 're-balance across main boards' : 're-balance boards');
       var mv = LC.autoBalance(S, { crossPdb: cross, allowLongRuns: cross, tolerance: 12 });
       renumber(true);   // circuits moved board, so their references change
       toast(mv.length ? mv.length + ' circuit(s) re-assigned' + (cross ? ' across main boards' : '') + ': ' + mv.map(function (m) { return m.panel + ' ' + m.from + '→' + m.to; }).slice(0, 4).join(', ') + (mv.length > 4 ? '…' : '')
@@ -2426,6 +2587,7 @@
       return commit(false);
     }
     if (a === 'autocables') {
+      pushUndo('re-size all cables');
       /* lengths follow the drawn geometry, then every core is re-suggested */
       S.panels.forEach(autoLen); S.dbs.forEach(autoLen); S.pdps.forEach(autoLen); S.pdbs.forEach(autoLen);
       S.panels.forEach(function (pn) {
@@ -2453,6 +2615,7 @@
       return commit(false);
     }
     if (a === 'autosizeall') {
+      pushUndo('re-size all incomers');
       S.pdps.forEach(function (d) {
         var stt = LC.boardStats(S, d, 'pdp');
         var inc = LC.suggestIncomer(stt.amp || 160, num(S.design.designMargin, 1.15));
@@ -2550,6 +2713,22 @@
     },
     moved: function (item, orig, preview) {
       if (preview && preview.bumped) toast('Occupied cell — settled at the next practical reference E' + item.pos.x.toFixed(1) + ' N' + item.pos.y.toFixed(1), '');
+      /* `orig` is where the drag started. The current position is already the moved
+         one by the time this is called, so the snapshot has the original
+         coordinates written back into it — otherwise undo would put the item
+         exactly where it already is and appear to do nothing. */
+      if (orig) {
+        try {
+          var snap = serialise();
+          /* find this item in the snapshot and put its old position back */
+          ['txs', 'pdbs', 'pdps', 'dbs', 'panels'].forEach(function (k) {
+            (snap[k] || []).forEach(function (o) {
+              if (o.id === item.id) { o.pos = { x: orig.x, y: orig.y }; }
+            });
+          });
+          undoPending = { label: 'move ' + (item.tag || 'item'), key: 'move:' + item.id, at: Date.now(), state: JSON.stringify(snap) };
+        } catch (e2) { undoPending = null; }
+      }
       if (item.__kind === 'panel') { item.autoAssign = onMoved(item); return; }
       autoLen(item);
       commit(false);
