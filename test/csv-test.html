@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CSV import — tests</title>
+<style>
+  body{font:13px/1.6 ui-monospace,Menlo,monospace;background:#0f1216;color:#dfe7ee;padding:20px;margin:0}
+  h1{font-size:16px;margin:0 0 4px}
+  p.sub{color:#8fa3b3;margin:0 0 16px;font-size:12px;max-width:70ch}
+  .case{margin:6px 0;padding:7px 10px;border-radius:6px;background:#151a20;border-left:3px solid #3a4855}
+  .pass{border-left-color:#22c55e}
+  .fail{border-left-color:#ef4444;background:#2a1414}
+  .name{font-weight:700}
+  .fail .name{color:#fca5a5}
+  .detail{color:#8fa3b3;font-size:12px;margin-top:2px}
+  #summary{margin-top:16px;padding:10px;border-radius:8px;font-weight:700}
+</style>
+</head>
+<body>
+<h1>CSV import</h1>
+<p class="sub">
+  Reading someone else's load schedule. The parser has to survive the awkward
+  cases, the column mapper has to recognise the usual names and refuse to guess
+  when a name fits two fields, and the value readers have to cope with units,
+  thousands separators and a decimal comma.
+</p>
+<div id="cases"></div>
+<div id="summary">running…</div>
+
+<script src="../js/data.js"></script>
+<script src="../js/csv.js?v=11"></script>
+<script>
+(function () {
+  var results = [];
+  function check(name, got, want) {
+    results.push({ name: name, ok: JSON.stringify(got) === JSON.stringify(want), got: got, want: want });
+  }
+
+  /* ------------------------------------------------------------- parsing */
+  check('a plain file parses to rows of cells',
+    CSVC.parse('a,b\n1,2').rows, [['a', 'b'], ['1', '2']]);
+
+  check('a quoted cell may contain the delimiter',
+    CSVC.parse('a,b\n"x,y",2').rows[1], ['x,y', '2']);
+  check('and a newline',
+    CSVC.parse('a,b\n"line\none",2').rows[1], ['line\none', '2']);
+  check('and "" is one literal quote, not the end of the cell',
+    CSVC.parse('a\n"say ""hi"""').rows[1], ['say "hi"']);
+  check('a quoted cell may start mid-row',
+    CSVC.parse('a,b,c\n1,"x,y",3').rows[1], ['1', 'x,y', '3']);
+
+  check('CRLF line endings do not leave a stray carriage return',
+    CSVC.parse('a,b\r\n1,2\r\n').rows, [['a', 'b'], ['1', '2']]);
+  check('a trailing newline does not add an empty row',
+    CSVC.parse('a,b\n1,2\n').rows.length, 2);
+  check('and a file with no trailing newline keeps its last row',
+    CSVC.parse('a,b\n1,2').rows.length, 2);
+
+  check('a byte-order mark is not part of the first header name',
+    CSVC.parse('\uFEFFBoard,kW').rows[0], ['Board', 'kW']);
+
+  check('a short row is padded, not shifted left',
+    CSVC.parse('a,b,c\n1,2\n3,4,5').rows[1], ['1', '2', '']);
+  check('which keeps every row the same width',
+    CSVC.parse('a,b,c\n1,2\n3,4,5').rows.map(function (r) { return r.length; }), [3, 3, 3]);
+
+  check('cells are trimmed, because a trailing space in a header is not a different column',
+    CSVC.parse('Board , kW \n1,2').rows[0], ['Board', 'kW']);
+
+  /* ---- delimiter sniffing */
+  check('comma is found',
+    CSVC.sniff('a,b,c\n1,2,3'), ',');
+  check('a semicolon, which is what a European export uses',
+    CSVC.sniff('Board;kW;kVA\n1;2;3'), ';');
+  check('a tab, which is what a spreadsheet paste gives',
+    CSVC.sniff('Board\tkW\tkVA\n1\t2\t3'), '\t');
+  check('a comma file is not outvoted by a comma in one description',
+    CSVC.sniff('Board,kW,Description\n1,2,pump, motor, big\n3,4,x, y, z'), ',');
+  /* A vendor file starts with the project title and the revision, and neither
+     contains the delimiter. A first-line test rejects every one of them. */
+  check('a title and revision above the header do not hide the delimiter',
+    CSVC.sniff('ACME - Line 5\nRev C, 2025-03-04\n\nFeeder ID;kW;Description\nX-1;10;pump\nX-2;20;fan'), ';');
+  check('and the same file with commas everywhere reads as a comma file',
+    CSVC.sniff('ACME - Line 5\nRev C\n\nFeeder ID,kW,Description\nX-1,10,pump\nX-2,20,fan'), ',');
+
+  /* -------------------------------------------------------- header mapping */
+  function mapped(headers) {
+    var m = CSVC.mapHeaders(headers);
+    var out = {};
+    m.forEach(function (c) { if (c.field) out[c.header] = c.field; });
+    return out;
+  }
+  check('the app\'s own column names are recognised',
+    mapped(['Reference', 'Board', 'Description', 'Connected kW', 'pf', 'Phases', 'Voltage V']),
+    { 'Reference': 'tag', 'Board': 'board', 'Description': 'description', 'Connected kW': 'kw', 'pf': 'pf', 'Phases': 'phases', 'Voltage V': 'volt' });
+
+  check('a vendor\'s names for the same things are recognised',
+    mapped(['Tag', 'Fed From', 'Equipment', 'kW', 'Power Factor', 'No. of Phases', 'Cable Size', 'Cross Section']),
+    { 'Tag': 'tag', 'Fed From': 'board', 'Equipment': 'description', 'kW': 'kw', 'Power Factor': 'pf', 'No. of Phases': 'phases', 'Cable Size': 'csa' });
+  /* "Cross Section" names the same field as "Cable Size", and only one column
+     may claim a field — so it is left unmapped rather than shadowing the other,
+     and the dialog offers it as a choice. */
+  check('a second column naming an already-claimed field is left for the user',
+    mapped(['Cable Size', 'Cross Section']).hasOwnProperty('Cross Section'), false);
+
+  check('folding ignores case, spaces and punctuation, so a unit suffix is the same column',
+    mapped(['FEEDER mm²', 'Grid Ref E']), { 'FEEDER mm²': 'csa', 'Grid Ref E': 'easting' });
+
+  /* One field, one column. Two columns claiming the same field would leave one
+     of them silently shadowed, and a shadowed column is data that vanishes
+     without a word. */
+  check('a field is claimed by one column only',
+    mapped(['kW', 'Load kW']), { 'kW': 'kw' });
+
+  /* A name that fits two fields is left alone rather than guessed either way. */
+  check('a column that could be two fields is not mapped',
+    mapped(['Distribution board rating']).hasOwnProperty('Distribution board rating'), false);
+  check('and it is reported with the candidates it could have been',
+    CSVC.mapHeaders(['Distribution board rating'])[0].candidates.length > 1, true);
+
+  check('an unrecognised column is reported rather than dropped',
+    mapped(['Ref', 'kW', 'Colour code']).hasOwnProperty('Colour code'), false);
+
+  /* ------------------------------------------------------- value readers */
+  check('a plain number', CSVC.num('1600'), 1600);
+  check('a number with a unit', CSVC.num('1600 A'), 1600);
+  check('a decimal point', CSVC.num('12.75'), 12.75);
+  check('a decimal comma, as a European export writes it', CSVC.num('12,75'), 12.75);
+  check('thousands separators', CSVC.num('3 963.5'), 3963.5);
+  check('and a comma as a thousands separator', CSVC.num('3,963.5'), 3963.5);
+  check('a negative number', CSVC.num('-12.5'), -12.5);
+  check('a pair, taking the larger, which is the one that has to fit',
+    CSVC.num('2 x 95'), 95);
+  check('a sum, same reason', CSVC.num('70 + 50'), 70);
+  check('no number at all returns null, which is not zero',
+    CSVC.num('to be confirmed'), null);
+  check('an empty cell returns null', CSVC.num(''), null);
+
+  check('phases from a number', CSVC.phases('3'), '3');
+  check('phases from a notation', CSVC.phases('3~'), '3');
+  check('phases from a phrase', CSVC.phases('single phase'), '1');
+  check('phases from 1', CSVC.phases('1'), '1');
+  /* The important one: a 230 V circuit stated as single phase must not come
+     out as three-phase, which would read three times its real current. */
+  check('a 230 V single-phase circuit reads as one phase', CSVC.phases('1'), '1');
+  check('and anything unstated is left to the caller, not assumed', CSVC.phases('tbd'), null);
+
+  check('volts', CSVC.volt('400V'), 400);
+  check('volts with a space', CSVC.volt('230 V'), 230);
+  check('kilovolts are scaled', CSVC.volt('0.4 kV'), 400);
+  check('a line-to-line / line-to-neutral pair takes the line-to-line figure',
+    CSVC.volt('400/230 V'), 400);
+
+  check('a position from two columns', CSVC.pos('12.5', '30'), { x: 12.5, y: 30 });
+  check('a position from one combined column, as the app writes it',
+    CSVC.pos('', '', 'E12.5 N30'), { x: 12.5, y: 30 });
+  check('no position returns null', CSVC.pos('', '', ''), null);
+
+  /* ------------------------------------------------------ device reading */
+  check('a thermal-magnetic device', CSVC.device('TM 200A'),
+    { raw: 'TM 200A', ir: 200, trip: 'TM', kind: 'mccb' });
+  check('an LI device', CSVC.device('200 A LI'),
+    { raw: '200 A LI', ir: 200, trip: 'LI', kind: 'mccb' });
+  check('a breaking capacity is picked out of the text',
+    CSVC.device('NSX 250 3P 50kA').icu, 50);
+  check('poles come out as a pole count, not a phase count',
+    CSVC.device('200 A 4P').poles, 4);
+  check('an MCB is recognised from its curve letter', CSVC.device('C63').kind, 'mcb');
+  check('and from the word itself', CSVC.device('MCB 40A').ir, 40);
+  /* below 160 A with no MCCB marker is an MCB, because there is no MCCB there */
+  check('a small device with no marker is an MCB', CSVC.device('125').kind, 'mcb');
+  check('a cell that says nothing usable is flagged rather than invented',
+    CSVC.device('see drawing').unparsed, true);
+
+  /* --------------------------------------------------- starting method */
+  check('DOL', CSVC.start('DOL'), 'DOL');
+  check('spelled out', CSVC.start('Direct on line'), 'DOL');
+  check('a VFD', CSVC.start('VFD'), 'VFD');
+  check('spelled out', CSVC.start('Variable Speed Drive'), 'VFD');
+  check('a soft starter', CSVC.start('soft starter'), 'Soft starter');
+  check('star delta', CSVC.start('Star/Delta'), 'Star-delta');
+  /* A wrong starting method changes the cable and the protection, so an
+     unrecognised one is asked about rather than assumed to be DOL. */
+  check('an unrecognised method is left null', CSVC.start('phase converter'), null);
+
+  /* ------------------------------------------------------ install method */
+  check('a table reference is passed through', CSVC.method('XL-A1'), 'XL-A1');
+  check('a plain table letter', CSVC.method('C'), 'C');
+  check('a word for the same thing', CSVC.method('clipped'), 'A1');
+  check('an unknown method is left alone', CSVC.method('on a pedestal'), null);
+
+  /* ------------------------------------------------- the app's own export */
+  var appCsv = [
+    'Line 5 load schedule',
+    'Client,ACME,Project,L5,Designer,J Bloggs,Date,2025-01-01',
+    '',
+    'LOAD SCHEDULE',
+    'Reference,Board,Board description,Description,Type,Connected kW,Design kVA,pf,Demand,Phases,Voltage V,Current A,Protective device,Device frame A,Breaking capacity kA,Trip unit,Feeder runs,Feeder mm2,Cores,Length m,Installation,Rated A,Utilisation %,Volt drop %,Grid ref E,Grid ref N,Status',
+    'MCC-01,PDP7-1,Distribution board,Pump duty,Fire pump,45,52.6,0.85,1,3,400,77,MCB 80A,80,25,C,1,16,4,14,XL-A1,138,56%,0.42%,12,8,',
+    'MCC-01 SUBTOTAL,PDP7-1,,,,45.0,52.6,,,,,,,,,,,,,,,,,,,',
+    'CUP-01,PDP7-2,Distribution board,Cup filler,Misc,120,130,0.92,1,1,230,614,MCB 630A,630,25,C,1,185,3,22,XL-A1,250,100%,1.2%,18,8,',
+    '',
+    'BOARD SCHEDULE',
+    'Board,Equipment ref,Description,Fed from,Rating'
+  ].join('\n');
+  var appParsed = CSVC.parse(appCsv);
+  check('the app\'s own export is recognised', CSVC.looksLikeAppExport(appCsv), true);
+  check('and its load schedule header is found past the preamble',
+    (function () {
+      var at = -1;
+      for (var i = 0; i < appParsed.rows.length; i++) {
+        if (/^"?LOAD SCHEDULE"?$/i.test(String(appParsed.rows[i][0] || '').trim())) { at = CSVC.headerAfter(appParsed.rows, i + 1, 8); break; }
+      }
+      return at;
+    })(), 4);
+  var appMap = CSVC.mapHeaders(appParsed.rows[4]);
+  check('and the circuits are read as circuits, not as the subtotal rows',
+    appParsed.rows.filter(function (r, i) { return i > 4 && !CSVC.isSummaryRow(r, appMap); }).length, 3);
+  check('the section labels are not mistaken for circuits',
+    CSVC.isSummaryRow(appParsed.rows[6], appMap), true);
+  check('and neither is the blank line', CSVC.isSummaryRow([''], appMap), true);
+  check('a circuit is not mistaken for either',
+    CSVC.isSummaryRow(appParsed.rows[5], appMap), false);
+  /* The board schedule's own header row looks exactly like this section's
+     header row, so the boundary has to be the section label rather than any
+     property of the row. */
+  check('a section label is recognised by name',
+    CSVC.isSectionLabel(appParsed.rows[9]), true);
+  check('and the section stops there, before the next table\'s header',
+    CSVC.sectionRows(appParsed.rows, 5).length, 4);
+  check('which leaves the two circuits and the subtotal',
+    CSVC.sectionRows(appParsed.rows, 5).filter(function (r) { return !CSVC.isSummaryRow(r, appMap); }).length, 2);
+
+  /* --------------------------------------------------- end-to-end import */
+  var vendor = [
+    'Feeder ID;Supplied From;Item Description;Connected Load (kW);Design kVA;Power Factor;No. of Phases;Voltage;Protective Device;Fitted Cable;Cable Route Length;Starting Method;Easting;Northing',
+    'CH-01;PDP-1;Chiller duty 1;180;196;0.92;3;415;MCCB 250A LI;2 x 95;45;VFD;20;10',
+    'CH-02;PDP-1;Chiller duty 2;175;190;0.92;3;415;MCCB 250A LI;2 x 95;48;VFD;26;10',
+    'PUMP-3;PDP-1;Duty pump 3;30;33;0.85;3;400;MCB 63A;1 x 25;18;DOL;32;10',
+    'LX-1;DB-1;Boiler aux lighting;4;4.5;0.9;1;230;MCB 16A;1 x 2.5;9;;38;10',
+    'SPARE-1;;Spare way;;;;;;;;;;'
+  ].join('\r\n');
+  var vParsed = CSVC.parse(vendor);
+  check('a semicolon file with a decimal comma still parses',
+    vParsed.rows.length, 6);
+  check('and the delimiter is semicolon', vParsed.delim, ';');
+  var vMap = CSVC.mapHeaders(vParsed.rows[0]);
+  var vIdx = {};
+  vMap.forEach(function (c) { if (c.field && vIdx[c.field] === undefined) vIdx[c.field] = c.index; });
+  var r0 = readRowLocal(vParsed.rows[1], vIdx);
+  check('a reference is read', r0.tag, 'CH-01');
+  check('a board is read', r0.board, 'PDP-1');
+  check('a description is read', r0.description, 'Chiller duty 1');
+  check('a kW is read from a column with a unit in its name', r0.kw, 180);
+  check('a kVA is read', r0.kva, 196);
+  check('phases are read', r0.phases, '3');
+  check('a voltage is read', r0.volt, 415);
+  check('a device is read with its kind and trip', r0.prot.kind + '/' + r0.prot.trip, 'mccb/LI');
+  check('a device rating is read', r0.prot.ir, 250);
+  check('a cable cell carrying its own run count is split into size and runs',
+    [r0.cablePair.csa, r0.cablePair.runs], [95, 2]);
+  check('the run count wins over the single-run default, or the feeder is four times too small',
+    CSVC.runsAndCsa('4 x 240'), { csa: 240, runs: 4 });
+  check('and the other way round is read too', CSVC.runsAndCsa('240 x 4'), { csa: 240, runs: 4 });
+  check('a size on its own is not mistaken for a pair', CSVC.runsAndCsa('95'), null);
+  check('and a single run is not a pair, so the default of one run stands',
+    CSVC.runsAndCsa('1 x 95'), null);
+  /* "1 x 95" must not come back as 95 runs of 1 mm², which is the reading that
+     a naive "smaller number is the count" rule would give. */
+  check('and it is certainly not read as ninety-five runs of one',
+    CSVC.runsAndCsa('1 x 95'), null);
+  check('a starting method is read', r0.start, 'VFD');
+  check('a grid position is read', [r0.pos.x, r0.pos.y], [20, 10]);
+  var r3 = readRowLocal(vParsed.rows[4], vIdx);
+  check('a single-phase 230 V circuit reads as one phase, not three',
+    r3.phases, '1');
+  check('and its voltage is 230', r3.volt, 230);
+  /* A row with a reference and a description but no load is a reserved
+     circuit, and importing it is right — it is a way held back, which the
+     schedule should show. A row with nothing at all is not. */
+  check('a reserved circuit with a reference is still read',
+    readRowLocal(vParsed.rows[5], vIdx).tag, 'SPARE-1');
+  check('and it has no load rather than a load of zero',
+    readRowLocal(vParsed.rows[5], vIdx).kw, null);
+  check('a row with nothing in it at all is not',
+    readRowLocal(['', '', '', '', '', '', '', '', '', '', '', '', '', ''], vIdx), null);
+
+  /* The same reader, as the dialog uses it. */
+  function readRowLocal(row, idx) {
+    function g(f) { return idx[f] === undefined ? '' : (row[idx[f]] || ''); }
+    var kw = CSVC.num(g('kw'));
+    var tag = String(g('tag') || '').trim();
+    var desc = String(g('description') || '').trim();
+    if (!kw && !desc && !tag) return null;
+    return {
+      tag: tag, board: String(g('board') || '').trim(), description: desc || tag,
+      kw: kw, kva: CSVC.num(g('kva')), pf: CSVC.num(g('pf')),
+      phases: CSVC.phases(g('phases')), volt: CSVC.volt(g('volt')),
+      prot: CSVC.device(g('prot')), start: CSVC.start(g('start')),
+      csa: CSVC.num(g('csa')), runs: CSVC.num(g('runs')), cablePair: CSVC.runsAndCsa(g('csa')),
+      pos: CSVC.pos(g('easting'), g('northing'), g('grid'))
+    };
+  }
+
+  var done = results.filter(function (r) { return r.ok; }).length;
+  document.getElementById('cases').innerHTML = results.map(function (r) {
+    return '<div class="case ' + (r.ok ? 'pass' : 'fail') + '"><div class="name">' +
+      (r.ok ? '✓ ' : '✕ ') + r.name + '</div>' +
+      (r.ok ? '' : '<div class="detail">got ' + JSON.stringify(r.got) + ' · want ' + JSON.stringify(r.want) + '</div>') +
+      '</div>';
+  }).join('');
+  document.getElementById('summary').textContent =
+    done + ' / ' + results.length + ' checks passed' + (done === results.length ? '' : ' — ' + (results.length - done) + ' FAILED');
+  document.getElementById('summary').style.background = done === results.length ? '#12301f' : '#3a1414';
+})();
+</script>
+</body>
+</html>

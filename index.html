@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Load Schedule &amp; LV Distribution Plan — Electrical</title>
-<link rel="stylesheet" href="css/styles.css?v=78">
+<link rel="stylesheet" href="css/styles.css?v=80">
 </head>
 <body>
 
@@ -25,8 +25,10 @@
     <button class="btn" id="btnJson">Export JSON</button>
     <button class="btn" id="btnImport">Import JSON</button>
     <button class="btn" id="btnCsv">Export CSV</button>
+    <button class="btn" id="btnImportCsv" title="Read a load schedule from a spreadsheet — any column names, mapped by hand if needed">Import CSV</button>
     <button class="btn primary" id="btnPrint">Print report</button>
     <input type="file" id="fileJson" accept=".json,application/json" hidden>
+    <input type="file" id="fileCsv" accept=".csv,.txt,text/csv" hidden>
   </div>
 </header>
 
@@ -153,11 +155,12 @@
 </div>
 
 <script src="js/data.js?v=78"></script>
+<script src="js/csv.js?v=11"></script>
 <script src="js/calc.js?v=102"></script>
 <script src="js/dxf.js?v=5"></script>
 <script src="js/underlay.js?v=5"></script>
 <script src="js/plan.js?v=78"></script>
 <script src="js/sld.js?v=78"></script>
-<script src="js/ui.js?v=104"></script>
+<script src="js/ui.js?v=110"></script>
 </body>
 </html>

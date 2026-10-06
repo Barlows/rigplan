@@ -405,6 +405,24 @@ td.num-ok{color:#86efac} td.num-warn{color:#fcd34d} td.num-bad{color:#fca5a5;fon
 .modal-f{padding:11px 15px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px}
 .modal table.grid td{padding:5px 8px}
 
+/* ---------------- CSV import mapping ----------------
+   The import dialog is a mapping table, and its job is to make a decision
+   visible: which column is going where, on what evidence, and what the first
+   few rows come out as. So the evidence column stays on screen and the
+   unrecognised rows are called out by colour rather than quietly dropped. */
+table.csvmap{border-collapse:collapse;width:100%;font-size:11.5px}
+table.csvmap th{
+  text-align:left;padding:5px 8px;color:var(--fg-dim);font-weight:600;font-size:10.5px;
+  text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid var(--line-2);position:sticky;top:0;
+  background:var(--bg-2)
+}
+table.csvmap td{padding:4px 8px;border-bottom:1px solid #1c242c;vertical-align:middle}
+table.csvmap tr.unmapped td:first-child{color:#fbbf24}
+table.csvmap td.dim{color:var(--fg-dim);font-size:10.5px;white-space:nowrap}
+table.csvmap select.sel{width:100%;min-width:110px}
+.csvscroll{max-height:34vh;overflow:auto;border:1px solid var(--line);border-radius:8px}
+.csvscroll table.csvmap th{position:sticky;top:0;background:var(--bg-2);z-index:1}
+
 /* ---------------- print ---------------- */
 @media print{
   @page{size:A3 landscape;margin:10mm}

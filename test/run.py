@@ -44,6 +44,8 @@ SUITES = [
     ("db", "db-test.html"),
     ("mainboard", "mainboard-test.html"),
     ("protection", "protection-test.html"),
+    ("csv", "csv-test.html"),
+    ("csvrt", "csv-roundtrip-test.html"),
     ("sld", "sld-test.html"),
     ("underlay", "underlay-test.html"),
 ]

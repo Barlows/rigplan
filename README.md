@@ -161,6 +161,55 @@ directly for the circuit; on a distribution board it offers the board chooser.
 
 ---
 
+## Reading a spreadsheet
+
+**Import CSV** in the toolbar. The dialog shows what it found before anything is
+imported, and nothing is guessed.
+
+The file is parsed, then every column is matched against a list of known names
+for each field — `Reference` / `Tag` / `Feeder ID` / `Circuit` all mean the same
+thing, and so do `Connected Load (kW)`, `Connected KW` and `Load Power`. The
+result is a **dropdown per column**, and changing one re-runs the preview
+immediately, so a mapping decision is visible before it is committed. A column
+the importer cannot place is listed in the dialog in warning colour rather than
+dropped, because a silently ignored column is a silently wrong schedule.
+
+A column whose name fits two fields is left unmapped and says which two it could
+have been. Picking either silently would put a number in the wrong field, and the
+error would not show until the schedule was wrong.
+
+Then it reads the values the way a person would write them:
+
+| In the file | Read as |
+|---|---|
+| `2 x 95`, `2×95mm²`, `95 x 2` | two runs of 95 mm² |
+| `3,963.5` / `3 963,5` / `3,963.5` | 3963.5 — a decimal comma or a thousands separator, whichever the number makes unambiguous |
+| `single phase`, `1~`, `1` | one phase |
+| `400/230 V` | 400 V, the line-to-line figure |
+| `TM 200A`, `200 A LI`, `NSX 250 3P 50kA`, `C63` | a device with its kind, rating, trip unit, poles and breaking capacity |
+| `Direct on line`, `VFD`, `soft starter` | a starting method |
+| `E12.5 N30` | a grid position |
+
+**Replace project** starts from empty, which is what importing a whole vendor
+schedule normally means. **Add to project** puts the circuits into what is
+already there, for when one area's schedule arrives separately.
+
+Delimifiers are sniffed rather than assumed, by looking at how many lines agree
+on a column count — so a comma inside one description does not turn a
+semicolon file into a single-column one, and a title and revision above the
+header do not hide the delimiter. The app's own export is recognised as a
+four-table file and only the load schedule is read back; the round trip is
+tested both ways.
+
+The importer builds the boards a schedule names: a `PDB…` name becomes a main
+board, `DB…` a sub-board, anything else a distribution board. That is the only
+signal available in a bare column of names, so the result stays editable
+afterwards.
+
+Imported circuits are laid out on the plan by the same search the auto-assigner
+uses, so they land on the grid, clear of everything else, rather than on top of
+the board they are fed from.
+
 ## Importing a vendor's load schedule
 
 `tools/roeslein_import.py` converts the Roeslein **AG230-25** spreadsheet into a
@@ -564,6 +613,10 @@ tools/xlsx_read.py        minimal spreadsheet reader, standard library only
 tools/roeslein_import.py  vendor load schedule → project file
 tools/add_protection.py   vendor switchgear schedule → circuit devices
 tools/wxm-line5.json      the Roeslein Line 5 & Auxiliaries project, ready to import
+test/csv-test.html         102 checks on the CSV parser, the column mapper and
+                          the value readers
+test/csv-roundtrip-test.html 26 checks on reading the app's own export back,
+                          and a vendor file with a title and revision above it
 test/run.py               headless runner — serves the directory, drives Chrome,
                           reads the results back out of the DOM
 test/parser-test.html     35 checks against a synthetic DXF with known geometry

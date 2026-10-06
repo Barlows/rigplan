@@ -1940,7 +1940,7 @@
       var pdpId = kind === 'pdp' ? id : o.pdpId;
       var host = LC.get(S, 'pdp', pdpId);
       if (!host) { toast('A sub-board is fed from a distribution board (PDP)', 'bad'); return; }
-      return addDb(LC.nextPracticalPos(S, { anchor: host.pos, offset: num(offset(), 2), clear: num(clearance(), 1.5), w: LS.SHAPE.db.w, h: LS.SHAPE.db.h, step: num(snap(), 1), exclude: host }), pdpId);
+      return addDb(LC.nextPracticalPos(S, { anchor: host.pos, offset: num(offset(), 2), clear: num(clearance(), 1.5), w: LS.SHAPE.db.w, h: LS.SHAPE.db.h, step: num(snap(), 1) }), pdpId);
     }
     if (act === 'assign') {
       pushUndo('assign ' + o.tag);
@@ -2016,7 +2016,11 @@
     var anchor = board || LC.get(S, 'pdp', pdpId);
     if (!anchor) { toast('Add a distribution board (PDP) first', 'bad'); return; }
     pushUndo('add control panel');
-    var pos = LC.nextPracticalPos(S, { anchor: anchor.pos, offset: 3, clear: num(clearance(), 1.5), w: LS.SHAPE.panel.w, h: LS.SHAPE.panel.h, step: num(snap(), 1), exclude: anchor });
+    /* The board is not excluded from the clash test: `exclude` means "this item
+       is being replaced", and a panel is a new item beside its board, not a
+       replacement for it. Excluding it frees the board's own cell and the
+       panel lands on top of it. */
+    var pos = LC.nextPracticalPos(S, { anchor: anchor.pos, offset: 3, clear: num(clearance(), 1.5), w: LS.SHAPE.panel.w, h: LS.SHAPE.panel.h, step: num(snap(), 1) });
     panelModal(pos, anchor.__kind === 'db' ? anchor.pdpId : anchor.id, anchor.id);
   }
   /* A circuit fed straight off a main board: one way on the MSB for a large
@@ -2026,7 +2030,7 @@
   function addPanelOnPdb(pdb) {
     if (!pdb) { toast('Add a main board first', 'bad'); return; }
     pushUndo('add circuit on ' + pdb.tag);
-    var pos = LC.nextPracticalPos(S, { anchor: pdb.pos, offset: 3, clear: num(clearance(), 1.5), w: LS.SHAPE.panel.w, h: LS.SHAPE.panel.h, step: num(snap(), 1), exclude: pdb });
+    var pos = LC.nextPracticalPos(S, { anchor: pdb.pos, offset: 3, clear: num(clearance(), 1.5), w: LS.SHAPE.panel.w, h: LS.SHAPE.panel.h, step: num(snap(), 1) });
     var types = Object.keys(LS.PANEL_TYPES);
     modal('Add a circuit fed from ' + pdb.tag + ' at E' + pos.x.toFixed(1) + ' / N' + pos.y.toFixed(1),
       '<div class="two">' +
@@ -2187,6 +2191,455 @@
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }
   function csvRow(a) { return a.map(csvCell).join(','); }
+  /* ==================================================== CSV import ========
+     Reading someone else's load schedule.
+
+     The hard part of any spreadsheet import is not parsing — CSV is a small
+     format and js/csv.js does that — it is working out which column is which.
+     Every vendor names them differently and several of them name three
+     different things "Rating".
+
+     So nothing is guessed. The file is parsed, every column is matched against
+     a list of known aliases, and the result is shown with a dropdown per
+     column so the mapping can be corrected before anything is imported. A
+     column the importer cannot place is reported rather than dropped, because
+     a silently ignored column is a silently wrong schedule.
+     */
+  var csvMap = null;      // the mapping for the file currently loaded
+  var csvParsed = null;
+
+  /* Which fields the importer needs to produce a usable circuit. Missing any
+     of these is not fatal — a schedule with no load is still a schedule of
+     reserved circuits — but they are what the preview is judged on. */
+  var CSV_REQUIRED = ['tag', 'kw'];
+
+  function openCsvFile(file) {
+    var r = new FileReader();
+    r.onload = function () {
+      try {
+        var text = String(r.result);
+        csvParsed = CSVC.parse(text);
+        csvMap = detectCsvShape(csvParsed, file.name);
+        csvDialog(file.name);
+      } catch (err) {
+        toast('Could not read that file: ' + err.message, 'bad');
+      }
+    };
+    r.onerror = function () { toast('Could not read that file', 'bad'); };
+    /* Latin-1 is read as UTF-8 by default and a byte-order mark is stripped by
+       the parser, but an accented character in a description would otherwise
+       come through as mojibake. Nothing is lost by decoding as UTF-8 first
+       and falling back only if it does not decode. */
+    r.readAsText(file, 'utf-8');
+  }
+
+  /* Find the header row and map it.
+
+     A load schedule exported from a spreadsheet often has the client's name
+     and project title in the first rows before the column headings, so the
+     header is not always row zero. It is found as the first row that has more
+     populated cells than the one after it and is not a title — the test that
+     distinguishes a heading from the data beneath it. */
+  function detectCsvShape(parsed, fileName) {
+    var rows = parsed.rows;
+    var headerAt = -1;
+    if (CSVC.looksLikeAppExport(rows.map(function (r) { return r.join(parsed.delim); }).join('\n'))) {
+      /* the app's own export: skip the two preamble rows and the section label */
+      for (var i = 0; i < Math.min(rows.length, 20); i++) {
+        if (/^"?LOAD SCHEDULE"?$/i.test(String(rows[i][0] || '').trim())) {
+          headerAt = CSVC.headerAfter(rows, i + 1, 8);
+          break;
+        }
+      }
+    }
+    if (headerAt < 0) {
+      /* Not a table from row one. Score each of the first 20 rows on how many
+         populated cells it has relative to the rows after it, and take the
+         best — a heading row is full where the title rows are not. */
+      var best = 0, bestScore = -1;
+      for (var h = 0; h < Math.min(rows.length - 1, 20); h++) {
+        var r = rows[h];
+        if (!r || r.length < 2) continue;
+        var here = r.filter(function (c) { return c !== ''; }).length;
+        if (here < 2) continue;
+        var next = rows[h + 1].filter(function (c) { return c !== ''; }).length;
+        /* a header has more populated cells than the row under it */
+        var score = here - next * 0.5;
+        /* and it is text, not figures. A data row is as wide as its header and
+           scores the same on width alone, so the figures have to be what
+           separates them — weighted enough to beat any plausible difference in
+           filled cells, because picking a data row as the header produces a
+           schedule with no columns at all. */
+        var numeric = r.filter(function (c) { return c !== '' && CSVC.num(c) !== null; }).length;
+        score -= numeric * 1.5;
+        if (score > bestScore) { bestScore = score; best = h; }
+      }
+      headerAt = best;
+    }
+
+    var headers = rows[headerAt] || [];
+    var mapped = CSVC.mapHeaders(headers);
+    return {
+      fileName: fileName, rows: rows, headerAt: headerAt, headers: headers,
+      map: mapped, delim: parsed.delim,
+      /* anything the mapping did not claim, so the dialog can name it */
+      unmapped: mapped.filter(function (m) { return !m.field; })
+    };
+  }
+
+  /* One dropdown per column. Every column is offered every field, so a
+     deliberately unmapped column can be set back to "ignore" — that is the
+     difference between correcting the importer and being stuck with it. */
+  function mappingTable(m) {
+    var mapped = m.map;
+    /* The current choice has to be marked selected, not merely present as an
+       option — a select with no selected option shows the first one, so every
+       column would read "ignore" and the dialog would tell the user their
+       mapping had been thrown away. */
+    function optsFor(field) {
+      return ['<option value=""' + (field ? '' : ' selected') + '>— ignore —</option>'].concat(
+        LC_CSV_FIELDS.map(function (f) {
+          return '<option value="' + f[0] + '"' + (field === f[0] ? ' selected' : '') + '>' + f[0] + '</option>';
+        })
+      ).join('');
+    }
+    return '<table class="csvmap"><thead><tr><th>Column in the file</th><th>First values</th><th>Read as</th><th>How</th></tr></thead><tbody>' +
+      mapped.map(function (c) {
+        var sample = [];
+        for (var r = m.headerAt + 1; r < m.rows.length && sample.length < 3; r++) {
+          var v = m.rows[r][c.index];
+          if (v !== undefined && v !== '' && !CSVC.isSummaryRow(m.rows[r], m.map)) sample.push(v);
+        }
+        var how = c.field ? (c.how === 'exact' ? 'exact' : c.how === 'alias' ? 'known name' : c.how === 'fuzzy' ? 'close' : '') : '';
+        /* A column with no match is shown in the warning colour, because it is
+           the one most likely to be a field that is being silently dropped. */
+        return '<tr class="' + (c.field ? '' : 'unmapped') + '">' +
+          '<td class="mono">' + esc(c.header || '(column ' + (c.index + 1) + ')') + '</td>' +
+          '<td class="mono dim">' + esc(sample.join(' · ').slice(0, 60)) + '</td>' +
+          '<td><select class="sel" data-mapidx="' + c.index + '">' + optsFor(c.field) + '</select></td>' +
+          '<td class="dim">' + how + '</td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+
+  /* The field list, built once from the importer's own table so the dropdowns
+     cannot drift from what it can actually read. */
+  var LC_CSV_FIELDS = CSVC.FIELDS;
+
+  /* Read the mapping straight off the current project so a value can be
+     computed for every circuit without going through the app's own panel
+     factory — the importer sets fields itself. */
+  function previewRows(m, limit) {
+    var idx = {};
+    m.map.forEach(function (c) { if (c.field && idx[c.field] === undefined) idx[c.field] = c.index; });
+    var out = [], skipped = 0;
+    for (var r = m.headerAt + 1; r < m.rows.length; r++) {
+      var row = m.rows[r];
+      if (CSVC.isSummaryRow(row, m.map)) { skipped++; continue; }
+      var rec = readRow(row, idx);
+      if (rec) out.push(rec);
+      if (out.length >= (limit || 8)) break;
+    }
+    return { rows: out, skipped: skipped, total: countImportable(m.rows, m) };
+  }
+
+  function countImportable(rows, m) {
+    var n = 0;
+    for (var r = m.headerAt + 1; r < rows.length; r++) {
+      if (!CSVC.isSummaryRow(rows[r], m.map)) n++;
+    }
+    return n;
+  }
+
+  /* One spreadsheet row as an object keyed by field name. This is the only
+     place a cell becomes a number, so a wrong mapping shows up here and
+     nowhere else. */
+  function readRow(row, idx) {
+    function g(f) { return idx[f] === undefined ? '' : (row[idx[f]] || ''); }
+    var kw = CSVC.num(g('kw'));
+    var tag = String(g('tag') || '').trim();
+    var desc = String(g('description') || '').trim();
+    if (!kw && !desc && !tag) return null;
+    return {
+      tag: tag, board: String(g('board') || '').trim(),
+      description: desc || tag,
+      type: String(g('type') || '').trim(),
+      kw: kw, kva: CSVC.num(g('kva')), pf: CSVC.num(g('pf')),
+      demand: CSVC.num(g('demand')),
+      phases: CSVC.phases(g('phases')), volt: CSVC.volt(g('volt')),
+      prot: CSVC.device(g('prot')), start: CSVC.start(g('start')),
+      csa: CSVC.num(g('csa')), runs: CSVC.num(g('runs')), cores: CSVC.num(g('cores')),
+      /* A cable cell may carry its own run count, which has to win over the
+         single-run default or the feeder comes in four times too small. */
+      cablePair: CSVC.runsAndCsa(g('csa')),
+      len: CSVC.num(g('len')), method: CSVC.method(g('method')),
+      ref: String(g('ref') || '').trim(),
+      pos: CSVC.pos(g('easting'), g('northing'), g('grid'))
+    };
+  }
+
+  function csvDialog(fileName) {
+    var m = csvMap;
+    var prev = previewRows(m, 8);
+    var missing = CSV_REQUIRED.filter(function (f) {
+      return !m.map.some(function (c) { return c.field === f; });
+    });
+
+    var body =
+      '<div class="hint" style="margin-bottom:10px">' +
+        'Read <b>' + esc(fileName) + '</b> — ' + m.rows.length + ' rows, ' + m.headers.length + ' columns, ' +
+        'delimiter <span class="mono">' + esc(m.delim === '\t' ? 'tab' : m.delim) + '</span>' +
+        (CSVC.looksLikeAppExport ? '' : '') + ', header on row ' + (m.headerAt + 1) + '. ' +
+        '<b>' + prev.total + '</b> row' + (prev.total === 1 ? '' : 's') + ' look like circuits' +
+        (prev.skipped ? ', ' + prev.skipped + ' skipped as headings or totals' : '') + '.' +
+      '</div>' +
+      (missing.length
+        ? '<div class="audit-item" style="margin-bottom:10px"><div class="lv"><span class="badge warn">CHECK</span></div>' +
+          '<div class="audit-body"><div class="t">No column mapped to ' + missing.join(' or ') + '</div>' +
+          '<div class="d">Without a reference every circuit will be given a placeholder tag, and without a load the schedule will be empty. ' +
+          'Pick the right column below if the file has one.</div></div></div>'
+        : '') +
+      (m.unmapped.length
+        ? '<div class="hint" style="margin-bottom:8px"><b>' + m.unmapped.length + ' column' +
+          (m.unmapped.length === 1 ? '' : 's') + ' not recognised:</b> ' +
+          esc(m.unmapped.map(function (c) { return c.header || '(unnamed)'; }).join(', ')) +
+          '. They will be ignored unless mapped below.</div>'
+        : '') +
+      '<div class="csvscroll">' + mappingTable(m) + '</div>' +
+      '<h5 style="margin:12px 0 6px">How the first rows will be read</h5>' +
+      '<table class="csvmap"><thead><tr><th>Reference</th><th>Board</th><th>Description</th><th>kW</th><th>kVA</th><th>Ph</th><th>V</th><th>Device</th><th>Cable</th></tr></thead><tbody>' +
+      prev.rows.map(function (r) {
+        return '<tr><td class="mono">' + esc(r.tag || '—') + '</td>' +
+          '<td class="mono">' + esc(r.board || '—') + '</td>' +
+          '<td>' + esc(r.description || '—') + '</td>' +
+          '<td class="mono">' + (r.kw === null ? '—' : r.kw) + '</td>' +
+          '<td class="mono">' + (r.kva === null ? '—' : r.kva) + '</td>' +
+          '<td class="mono">' + esc(r.phases || '—') + '</td>' +
+          '<td class="mono">' + (r.volt === null ? '—' : r.volt) + '</td>' +
+          '<td class="mono">' + esc(r.prot ? (r.prot.kind + ' ' + (r.prot.ir || '') + ' ' + (r.prot.trip || '') + (r.prot.icu || '')).trim() : '—') + '</td>' +
+          '<td class="mono">' + (r.csa === null ? '—'
+            : (r.cablePair ? r.cablePair.runs + '×' : (r.runs > 1 ? r.runs + '×' : '')) + r.csa + 'mm²') + '</td></tr>';
+      }).join('') + '</tbody></table>' +
+      (prev.rows.length === 0 ? '<div class="empty">Nothing readable yet — map a column to <b>kW</b> or <b>Description</b> and the preview fills in.</div>' : '');
+
+    modal('Import load schedule — ' + fileName, body, [
+      { label: 'Cancel' },
+      { label: 'Replace project', cls: '', fn: function () { runCsvImport(true); } },
+      { label: 'Add to project', cls: 'primary', fn: function () { runCsvImport(false); } }
+    ]);
+
+    /* Every change re-runs the preview, so the effect of a mapping decision is
+       visible before it is committed. */
+    el('modalB').addEventListener('change', function (e) {
+      var i = e.target.dataset.mapidx;
+      if (i === undefined) return;
+      var c = csvMap.map[+i];
+      c.field = e.target.value || null;
+      c.how = e.target.value ? 'manual' : null;
+      closeModal(); csvDialog(fileName);
+    });
+  }
+
+  /* Turn the mapped rows into a project.
+
+     `replace` starts from an empty project, which is what importing a whole
+     vendor schedule normally means. Otherwise the circuits are added to what
+     is already there — useful when a new area's schedule arrives separately. */
+  function runCsvImport(replace) {
+    var m = csvMap;
+    var idx = {};
+    m.map.forEach(function (c) { if (c.field && idx[c.field] === undefined) idx[c.field] = c.index; });
+
+    pushUndo('import ' + m.fileName);
+
+    if (replace) {
+      S = LS.newProject({ name: m.fileName.replace(/\.(csv|txt)$/i, '') });
+      S.dbs = [];
+    }
+    if (!S.txs.length) {
+      /* a schedule with no supply still needs somewhere to hang, or every
+         circuit lands as unassigned and the totals read zero */
+      S.txs.push(LS.newTx({ tag: 'TX-1', name: 'Supply 1', kva: 1000, num: nextTxNumber(), pos: { x: 4, y: 8 } }));
+      S.pdbs.push(LS.newPdb({ tag: 'PDB', name: 'Main LV board', txId: S.txs[0].id, pos: { x: 12, y: 8 } }));
+    }
+
+    var made = { boards: 0, boardNames: [], circuits: 0, skipped: 0, unassigned: 0 };
+    var boardCache = {};
+
+    for (var r = m.headerAt + 1; r < m.rows.length; r++) {
+      var row = m.rows[r];
+      if (CSVC.isSummaryRow(row, m.map)) { made.skipped++; continue; }
+      var rec = readRow(row, idx);
+      if (!rec) { made.skipped++; continue; }
+      var board = resolveBoard(rec.board, boardCache);
+      if (!board) { made.unassigned++; continue; }
+      /* The cache is keyed inside resolveBoard, so a board is created once however
+         many rows name it. This line only counts them for the toast. */
+      if (board.created) {
+        /* count distinct, not rows — resolveBoard marks `created` on every
+           row that names a new board, because the cache hit carries the flag */
+        if (made.boardNames.indexOf(rec.board) < 0) { made.boardNames.push(rec.board); made.boards++; }
+      }
+
+      var pn = LS.newPanel({
+        tag: rec.tag || ('C' + (made.circuits + 1)), name: rec.description,
+        type: matchPanelType(rec.type, rec.description),
+        kw: rec.kw || 0, kva: rec.kva || null, pf: rec.pf || 0.9,
+        demand: rec.demand || 1, volt: rec.volt || 400,
+        phases: rec.phases || '3', start: rec.start || 'DOL',
+        ref: rec.ref || '', pdbId: null, pdpId: null, dbId: null
+      });
+      pn.__kind = 'panel';
+      /* The feeder position comes from the plan, not from a grid reference that
+         a spreadsheet column may or may not have; the board's own placement is
+         searched for a free cell either way. */
+      pn.pos = rec.pos || { x: 0, y: 0 };
+      if (rec.csa) {
+        var pair = rec.cablePair;
+        pn.cable = {
+          csa: pair ? pair.csa : rec.csa,
+          runs: pair ? pair.runs : (rec.runs || 1),
+          cores: rec.cores || (rec.phases === '1' ? 3 : 4),
+          len: rec.len || 0, method: rec.method || 'XL-A1',
+          group: 1, ambient: num(S.design.ambientC, 40), sheathed: true
+        };
+      } else {
+        /* The factory's placeholder cable carries no size but does carry a run
+           count of null, which reads as a cable of an unknown size rather than
+           as no cable. A blank column means the size is still to be decided,
+           and the audit should say so in those words. */
+        pn.cable = { csa: null, runs: 1, cores: rec.cores || 4, len: rec.len || 0,
+                     method: rec.method || 'XL-A1', group: 1,
+                     ambient: num(S.design.ambientC, 40), sheathed: true };
+      }
+      if (rec.prot && !rec.prot.unparsed) {
+        pn.prot = LS.newProt({
+          kind: rec.prot.kind || 'mcb', ir: rec.prot.ir || null,
+          frame: rec.prot.frame || rec.prot.ir || null, icu: rec.prot.icu || null,
+          trip: rec.prot.trip || (rec.prot.kind === 'mcb' ? 'C' : 'TM'),
+          poles: rec.prot.poles || (rec.phases === '1' ? 2 : 4),
+          notes: 'From ' + m.fileName + ': ' + rec.prot.raw
+        });
+      } else {
+        pn.prot = null;
+      }
+      /* A board named PDB… is a main board, DB… a sub-board, anything else a
+         distribution board. The prefix is the only signal available in a bare
+         column of names, so it is used and the result stays editable.
+
+         A circuit on a sub-board keeps its PDP as well. That is how the app
+         models the chain everywhere else — a board and its sub-boards are both
+         downstream of the same PDP — and leaving it out here would make every
+         imported circuit read as unassigned in the totals and the audit. */
+      pn.pdbId = board.kind === 'pdb' ? board.o.id : null;
+      pn.pdpId = board.kind === 'pdp' ? board.o.id
+        : board.kind === 'db' ? ((LC.get(S, 'pdp', board.o.pdpId) || {}).id || null)
+        : null;
+      pn.dbId = board.kind === 'db' ? board.o.id : null;
+      pn.pos = nextFreePosFor(pn, board.o);
+      S.panels.push(pn);
+      made.circuits++;
+    }
+
+    /* Numbering last, so every board exists before the tags are derived. */
+    renumber(true);
+    /* A circuit placed by position rather than by the auto-assigner still needs
+       its feeder length measured, or the cable schedule reads zero. */
+    autoLenForAll();
+    sel = null;
+    PLAN.setProject(S);
+    syncToolbar();
+    commit(true);
+
+    var msg = 'Imported ' + made.circuits + ' circuit' + (made.circuits === 1 ? '' : 's');
+    if (made.boards) msg += ', ' + made.boards + ' board' + (made.boards === 1 ? '' : 's') + ' created';
+    if (made.skipped) msg += ' · ' + made.skipped + ' rows skipped';
+    if (made.unassigned) msg += ' · ' + made.unassigned + ' had no board';
+    toast(msg, made.circuits ? 'good' : 'bad');
+  }
+
+  /* Find the board a row names, creating it if this is the first time it has
+     been seen. Matching is by tag first and then by name, because the column
+     may hold either depending on who wrote the file. */
+  function resolveBoard(name, cache) {
+    var key = String(name || '').trim();
+    if (!key) return null;
+    /* What a name resolves to: { kind, o, created }. The same shape whether the
+     board already existed or was just created, because the caller uses
+     `kind` and `o` on every row and a cache hit has to be interchangeable
+     with a miss. Returning the raw board from one path and a wrapper from the
+     other means the second row naming a new board reads `board.o` as
+     undefined and places the circuit nowhere. */
+    if (cache[key]) return cache[key];
+    var found = LC.boardList(S).filter(function (b) {
+      return (b.o.tag || '').toLowerCase() === key.toLowerCase() ||
+             (b.o.name || '').toLowerCase() === key.toLowerCase();
+    })[0];
+    if (found) { cache[key] = { kind: found.kind, o: found.o, created: false }; return cache[key]; }
+
+    var kind = /^PDB\b/i.test(key) ? 'pdb' : /^DB\b/i.test(key) ? 'db' : 'pdp';
+    var entry;
+    if (kind === 'db') {
+      var hostpdp = LC.boardList(S).filter(function (b) { return b.kind === 'pdp'; })[0];
+      if (!hostpdp) return null;
+      var db = LS.newDb({ tag: key, name: key, pdpId: hostpdp.o.id, pos: nextBoardPos() });
+      S.dbs.push(db);
+      entry = { kind: 'db', o: db, created: true };
+    } else {
+      var pdb = LC.boardList(S).filter(function (b) { return b.kind === 'pdb'; })[0];
+      if (!pdb) return null;
+      var b2 = kind === 'pdb'
+        ? LS.newPdb({ tag: key, name: key, txId: pdb.o.txId, pos: nextBoardPos() })
+        : LS.newPdp({ tag: key, name: key, pdbId: pdb.o.id, pos: nextBoardPos() });
+      if (kind === 'pdb') S.pdbs.push(b2); else S.pdps.push(b2);
+      entry = { kind: kind, o: b2, created: true };
+    }
+    cache[key] = entry;
+    return entry;
+  }
+
+  /* A free cell beside its board, on the snap grid, respecting the clearance
+     from every other footprint. nextPracticalPos is the same search the
+     auto-assigner uses, so imported circuits land where the app's own would. */
+  function nextBoardPos() {
+    return LC.nextPracticalPos(S, {
+      anchor: (S.pdbs[0] || S.pdps[0] || S.txs[0]).pos,
+      offset: num(offset(), 2), clear: num(clearance(), 1.5),
+      w: LS.SHAPE.pdp.w, h: LS.SHAPE.pdp.h, step: num(snap(), 1),
+      exclude: null
+    });
+  }
+  function nextFreePosFor(pn, board) {
+    /* No `exclude`, for the reason given at addPanelAt: the board's own cell is
+       occupied, not available for the circuit being placed on it. */
+    return LC.nextPracticalPos(S, {
+      anchor: board.pos, offset: 3, clear: num(clearance(), 1.5),
+      w: LS.SHAPE.panel.w, h: LS.SHAPE.panel.h, step: num(snap(), 1)
+    });
+  }
+
+  /* A load type that matches what the spreadsheet said, or one that matches
+     the description. Anything unrecognised is left as a plain load rather than
+     forced into a category that would put the wrong phases or power factor on
+     it. */
+  function matchPanelType(said, description) {
+    if (said) {
+      var k = String(said).toLowerCase().trim();
+      var t = Object.keys(LS.PANEL_TYPES).filter(function (name) {
+        return name.toLowerCase() === k || LS.PANEL_TYPES[name].name.toLowerCase() === k;
+      })[0];
+      if (t) return t;
+    }
+    var d = String(description || '').toLowerCase();
+    var guess = Object.keys(LS.PANEL_TYPES).filter(function (name) {
+      return d.indexOf(LS.PANEL_TYPES[name].name.toLowerCase()) >= 0;
+    })[0];
+    return guess || null;
+  }
+
+  function autoLenForAll() {
+    S.panels.forEach(function (pn) { if (!pn.cable) return; autoLen(pn); });
+  }
+
   function exportCsv() {
     var L = [];
     L.push(csvRow([S.name])); L.push(csvRow(['Client', S.client, 'Project', S.ref, 'Designer', S.designer, 'Date', S.date]));
@@ -2524,6 +2977,12 @@
       PLAN.setProject(S); sel = null; syncToolbar(); commit(true); toast('New project — add a transformer to begin', '');
     };
     el('btnImport').onclick = function () { el('fileJson').click(); };
+    el('btnImportCsv').onclick = function () { el('fileCsv').click(); };
+    el('fileCsv').onchange = function (e) {
+      var f = e.target.files[0]; if (!f) return;
+      openCsvFile(f);
+      e.target.value = '';
+    };
     el('fileJson').onchange = function (e) {
       var f = e.target.files[0]; if (!f) return;
       var r = new FileReader();
@@ -2787,6 +3246,30 @@
     snap: snap, offset: offset, clearance: clearance,
     quickEdit: function (h) { select(h.id, h.kind); }
   };
+  /* The CSV importer's front half, exposed so the round trip can be tested
+     without going through a file input and a download dialog. The import
+     itself stays behind the UI, because it is a decision the user makes from a
+     dialog — but "which row is the header, and what does this column mean" is
+     a pure function of the file and is worth testing directly. */
+  App.csvProbe = function (text, fileName) {
+    var parsed = CSVC.parse(text);
+    var shape = detectCsvShape(parsed, fileName || 'probe.csv');
+    var prev = previewRows(shape, 200);
+    return {
+      delim: parsed.delim,
+      rows: parsed.rows.length,
+      headerAt: shape.headerAt,
+      headerRow: shape.headerAt + 1,
+      headers: shape.headers,
+      map: shape.map,
+      unmapped: shape.unmapped.map(function (c) { return c.header; }),
+      circuits: prev.total,
+      skipped: prev.skipped,
+      first: prev.rows.slice(0, 3),
+      isAppExport: CSVC.looksLikeAppExport(text)
+    };
+  };
+
   window.App = App;
   document.addEventListener('DOMContentLoaded', init);
 })();

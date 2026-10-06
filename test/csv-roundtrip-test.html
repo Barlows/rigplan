@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CSV round trip — tests</title>
+<style>
+  body{font:13px/1.6 ui-monospace,Menlo,monospace;background:#0f1216;color:#dfe7ee;padding:20px;margin:0}
+  h1{font-size:16px;margin:0 0 4px}
+  p.sub{color:#8fa3b3;margin:0 0 16px;font-size:12px;max-width:74ch}
+  .case{margin:6px 0;padding:7px 10px;border-radius:6px;background:#151a20;border-left:3px solid #3a4855}
+  .pass{border-left-color:#22c55e}
+  .fail{border-left-color:#ef4444;background:#2a1414}
+  .name{font-weight:700}
+  .fail .name{color:#fca5a5}
+  .detail{color:#8fa3b3;font-size:12px;margin-top:2px}
+  #summary{margin-top:16px;padding:10px;border-radius:8px;font-weight:700}
+</style>
+</head>
+<body>
+<h1>CSV round trip</h1>
+<p class="sub">
+  The importer's front half is a pure function of the file text: which row is
+  the header, which column is which field, and which rows are circuits. It is
+  exercised here against files shaped the way the app itself writes them and the
+  way vendors write them, including the preamble rows that sit above the column
+  headings.
+</p>
+<div id="cases"></div>
+<div id="summary">running…</div>
+
+<script src="../js/data.js"></script>
+<script src="../js/csv.js"></script>
+<script>
+(function () {
+  var results = [];
+  function check(name, got, want) {
+    results.push({ name: name, ok: JSON.stringify(got) === JSON.stringify(want), got: got, want: want });
+  }
+
+  /* ---- a file shaped the way a vendor writes one: title, revision, blank --- */
+  var CRLF = String.fromCharCode(13, 10);
+  var vendor = [
+    'ACME Ltd - Line 5 load schedule',
+    'Rev C, issued 2025-03-04',
+    '',
+    'Feeder ID;Supplied From;Item Description;Connected Load (kW);Design kVA;Power Factor;No. of Phases;Voltage;Protective Device;Fitted Cable;Cable Route Length;Starting Method;Easting;Northing;Remarks',
+    'CH-01;PDP-1;Chiller duty 1;180;196;0.92;3;415;MCCB 250A LI;2 x 95;45;VFD;20;10;new 2025',
+    'CH-02;PDP-1;Chiller duty 2;175;190;0.92;3;415;MCCB 250A LI;2 x 95;48;VFD;26;10;new 2025',
+    'PUMP-3;PDP-1;Duty pump 3;30;33;0.85;3;400;MCB 63A;1 x 25;18;DOL;32;10;',
+    'FAN-1;DB-1;AHU supply fan;12;13.4;0.85;3;400;MCB 32A;1 x 10;8;Soft starter;38;10;',
+    'LX-1;DB-1;Boiler house lighting;4;4.5;0.9;1;230;MCB 16A;1 x 2.5;9;;44;10;',
+    'SPARE-1;DB-1;Spare way;;;;;;;;;;;;held',
+    ';;Colour code;;;'
+  ].join(CRLF);
+
+  function probe(text, name) {
+    /* The probe is the same code the dialog runs. It lives behind the file
+       input otherwise, and a round trip that can only be tested by clicking
+       through a download is a round trip that does not get tested. */
+    var p = CSVC.parse(text);
+    var rows = p.rows;
+    var headerAt = -1;
+    if (CSVC.looksLikeAppExport(rows.map(function (r) { return r.join(p.delim); }).join('\n'))) {
+      for (var i = 0; i < Math.min(rows.length, 20); i++) {
+        if (/^"?LOAD SCHEDULE"?$/i.test(String(rows[i][0] || '').trim())) { headerAt = CSVC.headerAfter(rows, i + 1, 8); break; }
+      }
+    }
+    if (headerAt < 0) {
+      var best = 0, bestScore = -1;
+      for (var h = 0; h < Math.min(rows.length - 1, 20); h++) {
+        var r = rows[h];
+        if (!r || r.length < 2) continue;
+        var here = r.filter(function (c) { return c !== ''; }).length;
+        if (here < 2) continue;
+        var next = rows[h + 1].filter(function (c) { return c !== ''; }).length;
+        var score = here - next * 0.5;
+        var numeric = r.filter(function (c) { return c !== '' && CSVC.num(c) !== null; }).length;
+        score -= numeric * 1.5;
+        if (score > bestScore) { bestScore = score; best = h; }
+      }
+      headerAt = best;
+    }
+    var map = CSVC.mapHeaders(rows[headerAt] || []);
+    var idx = {};
+    map.forEach(function (c) { if (c.field && idx[c.field] === undefined) idx[c.field] = c.index; });
+    var section = CSVC.sectionRows(rows, headerAt + 1);
+    var recs = [];
+    for (var q = 0; q < section.length; q++) {
+      if (CSVC.isSummaryRow(section[q], map)) continue;
+      var row = section[q];
+      function g(f) { return idx[f] === undefined ? '' : (row[idx[f]] || ''); }
+      var kw = CSVC.num(g('kw'));
+      var tag = String(g('tag') || '').trim();
+      var desc = String(g('description') || '').trim();
+      if (!kw && !desc && !tag) continue;
+      recs.push({ tag: tag, board: String(g('board') || '').trim(), kw: kw,
+                  phases: CSVC.phases(g('phases')), volt: CSVC.volt(g('volt')),
+                  cablePair: CSVC.runsAndCsa(g('csa')),
+                  start: CSVC.start(g('start')),
+                  prot: CSVC.device(g('prot')) });
+    }
+    return { delim: p.delim, headerAt: headerAt, map: map, recs: recs,
+             headers: rows[headerAt] || [] };
+  }
+
+  var v = probe(vendor, 'vendor');
+
+  check('the delimiter is found despite a title and revision above the header', v.delim, ';');
+  check('the header is the fourth row, not the first',
+    v.headerAt, 3);
+  check('every column is mapped, none left over',
+    v.map.filter(function (c) { return !c.field; }).map(function (c) { return c.header; }), []);
+  check('and mapped to the right fields',
+    v.map.map(function (c) { return c.field; }),
+    ['tag', 'board', 'description', 'kw', 'kva', 'pf', 'phases', 'volt', 'prot', 'csa', 'len', 'start', 'easting', 'northing', 'status']);
+  check('all six circuits are found', v.recs.length, 6);
+  check('the first reads as itself',
+    [v.recs[0].tag, v.recs[0].board, v.recs[0].kw], ['CH-01', 'PDP-1', 180]);
+  check('its device is classified as an MCCB on an LI unit',
+    [v.recs[0].prot.kind, v.recs[0].prot.trip, v.recs[0].prot.ir], ['mccb', 'LI', 250]);
+  check('its parallel runs are read from the cable cell',
+    [v.recs[0].cablePair.csa, v.recs[0].cablePair.runs], [95, 2]);
+  check('its starting method is read', v.recs[0].start, 'VFD');
+  check('a single-phase 230 V circuit is not read as three-phase',
+    [v.recs[4].phases, v.recs[4].volt], ['1', 230]);
+  check('a reserved circuit with a reference but no load is kept, with no load',
+    [v.recs[5].tag, v.recs[5].kw], ['SPARE-1', null]);
+  check('and the row that says only "Colour code" is not a circuit',
+    v.map.length > 0 && v.recs.length, 6);
+
+  /* ---- a file shaped the way the app itself writes one ------------------ */
+  var appCsv = [
+    'Line 5 load schedule',
+    'Client,ACME,Project,L5,Designer,J Bloggs,Date,2025-01-01',
+    '',
+    'LOAD SCHEDULE',
+    'Reference,Board,Board description,Description,Type,Connected kW,Design kVA,pf,Demand,Phases,Voltage V,Current A,Protective device,Device frame A,Breaking capacity kA,Trip unit,Feeder runs,Feeder mm2,Cores,Length m,Installation,Rated A,Utilisation %,Volt drop %,Grid ref E,Grid ref N,Status',
+    'MCC-01,PDP7-1,Distribution board,Pump duty panel,Fire pump,45,52.6,0.85,1,3,400,77,MCB 80A,80,25,C,1,16,4,14,XL-A1,138,56%,0.42%,12,8,',
+    'MCC-01 SUBTOTAL,PDP7-1,,,,45.0,52.6,,,,,,,,,,,,,,,,,,,',
+    'MCC-02,PDP7-1,Distribution board,Pump duty panel 2,Fire pump,38,44,0.85,1,3,400,65,MCB 63A,63,25,C,1,10,4,15,XL-A1,138,48%,0.50%,12,8,',
+    'CUP-01,PDP7-2,Distribution board,Cup filler,Misc,120,130,0.92,1,1,230,614,MCB 630A,630,25,C,1,185,3,22,XL-A1,250,100%,1.2%,18,8,',
+    'PDP7-1 DIRECT SUBTOTAL,PDP7-1,,,,83.0,96.6,,,,,,,,,,,,,,,,,,,',
+    '',
+    'BOARD SCHEDULE',
+    'Board,Equipment ref,Description,Fed from,Rating,Incomer A,Protective device',
+    'PDB7,PDB-7,Main LV board,TX7,2500 A,2500,MCCB 2500 LI',
+    '',
+    'CABLE / VOLT DROP SCHEDULE',
+    'From,To,Circuit,Runs,mm2,Cores,Length m',
+    'PDB7,PDP7-1,PDB to PDP,1,240,4,25',
+    '',
+    'DESIGN WARNINGS',
+    'BAD,pdp,PDP7-2 at 104% of rating,Overloaded.'
+  ].join('\n');
+
+  var a = probe(appCsv, 'app');
+  check('the app\'s own export is recognised', CSVC.looksLikeAppExport(appCsv), true);
+  check('the header is found past the preamble and the section label', a.headerAt, 4);
+  check('only the three circuits come out — the subtotals, the board schedule, '
+      + 'the cable schedule and the warnings are all excluded',
+    a.recs.length, 3);
+  check('and they are the right three',
+    a.recs.map(function (r) { return r.tag; }), ['MCC-01', 'MCC-02', 'CUP-01']);
+  check('with their loads', a.recs.map(function (r) { return r.kw; }), [45, 38, 120]);
+  check('and their boards', a.recs.map(function (r) { return r.board; }), ['PDP7-1', 'PDP7-1', 'PDP7-2']);
+  /* The app's export puts the rating in the device cell and the trip unit and
+     breaking capacity in columns of their own, so a round trip reads the
+     rating from the cell and the rest from those columns — which is why the
+     rating is all that is asserted from the cell alone. */
+  check('a device cell written by the app reads back as an MCB on its rating',
+    [a.recs[0].prot.kind, a.recs[0].prot.ir], ['mcb', 80]);
+  check('and a large one, which the MCB range does not reach',
+    [a.recs[2].prot.kind, a.recs[2].prot.ir], ['mcb', 630]);
+  check('the trip unit and breaking capacity come back from their own columns',
+    a.map.map(function (c) { return c.field; }),
+    ['tag', 'board', null, 'description', 'type', 'kw', 'kva', 'pf', 'demand', 'phases', 'volt',
+     null, 'prot', 'frame', 'icu', 'trip', 'runs', 'csa', 'cores', 'len', 'method', null, null, null,
+     'easting', 'northing', 'status']);
+  /* Four columns the app writes carry no design decision: the board's own
+     description, the circuit's computed current, and three results the audit
+     derives anyway. Reporting them as unrecognised is the right answer — it is
+     what puts them in the dialog's list of columns to look at — and none of
+     them is silently dropped, because the dialog names every one. */
+  check('and the four the app writes that hold nothing to import are named, not guessed at',
+    a.map.filter(function (c) { return !c.field; }).map(function (c) { return c.header; }),
+    ['Board description', 'Current A', 'Rated A', 'Utilisation %', 'Volt drop %']);
+  check('the single-phase 230 V circuit is still single phase after a round trip',
+    [a.recs[2].phases, a.recs[2].volt], ['1', 230]);
+  /* The export writes the size and the run count in separate columns, so there
+     is nothing for runsAndCsa to find — which is the correct outcome, not a
+     miss. Reading it as a pair here would mean a one-run feeder came back as a
+     16-run one. */
+  check('a plain size is not read as a pair of cables',
+    [CSVC.runsAndCsa('16'), CSVC.runsAndCsa('10')], [null, null]);
+
+  /* A single-circuit file, which is the smallest thing worth importing. */
+  var one = ['Circuit,Board,Description,kW\nX-1,PDP-1,Solo pump,7.5\n'].join('\n');
+  var o = probe(one, 'one');
+  check('a one-row file is read', [o.recs.length, o.recs[0].kw, o.recs[0].tag], [1, 7.5, 'X-1']);
+  check('with the header on row one', o.headerAt, 0);
+
+  var done = results.filter(function (r) { return r.ok; }).length;
+  document.getElementById('cases').innerHTML = results.map(function (r) {
+    return '<div class="case ' + (r.ok ? 'pass' : 'fail') + '"><div class="name">' +
+      (r.ok ? '✓ ' : '✕ ') + r.name + '</div>' +
+      (r.ok ? '' : '<div class="detail">got ' + JSON.stringify(r.got) + ' · want ' + JSON.stringify(r.want) + '</div>') +
+      '</div>';
+  }).join('');
+  document.getElementById('summary').textContent =
+    done + ' / ' + results.length + ' checks passed' + (done === results.length ? '' : ' — ' + (results.length - done) + ' FAILED');
+  document.getElementById('summary').style.background = done === results.length ? '#12301f' : '#3a1414';
+})();
+</script>
+</body>
+</html>
