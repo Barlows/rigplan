@@ -1344,7 +1344,8 @@
       '</ul>' +
       '<h5>Limits of this tool</h5><ul>' +
       '<li>Ampacity values are indicative — confirm against the current edition of BS 7671 / IEC 60364-5-52, the manufacturer\'s data, and local rules before issue.</li>' +
-      '<li>No selectivity, protection coordination, cable thermal-withstand, RCD discrimination, short-circuit capacity or cost checks are performed.</li>' +
+      '<li>Selectivity and cable thermal withstand are assessed on conventional envelopes (IEC 60898, IEC 60947-2 and the adiabatic relation), not on manufacturer\'s curves or let-through data. Both judge the <b>settings</b> rather than the devices.</li>' +
+      '<li>No protection coordination study, RCD discrimination, short-circuit capacity or cost checks are performed.</li>' +
       '<li>Fault levels are indicative (LV fault MVA = factor × transformer rating, stepped by an assumed impedance per stage).</li>' +
       '<li>No diversity is applied between circuits; each panel is loaded at its own demand factor.</li>' +
       '</ul></div>';

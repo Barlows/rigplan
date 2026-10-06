@@ -110,6 +110,81 @@ var LS = (function () {
      assembly with a shunt trip and an undervoltage release. */
   var MCB_MAX_A = 125;
 
+  /* ---------------------------------------------------------- trip curves --
+     Time-current characteristics, as [multiple of In, seconds] points. Read
+     left to right: the device picks up at the first multiple and has cleared by
+     the last. `null` for the time means it never clears at that multiple.
+
+     These are the conventional envelopes the standards set, not any
+     manufacturer's curves: the thermal band from IEC 60898 for MCBs and the
+     long-time and short-time bands from IEC 60947-2 for MCCBs. Where the
+     standard gives a range — the magnetic pickup between 5 and 10 In on a curve
+     C MCB, for instance — the value used is the *slow* end of it.
+
+     That direction is deliberate. On the overload side a fast pickup
+     nuisance-trips, so the slow end is the right number to design with. On the
+     short-circuit side it makes the check report a selectivity problem where a
+     particular make might not have one, which costs a note; the opposite error
+     would pass a circuit that trips the whole board.
+
+     The curves are what turn the selectivity check from a comparison of two
+     ratings into an actual study: two devices are selective at a given fault
+     level if the lower one clears first *at that level*, and a pair can be
+     selective over one range of currents and not another — which is the whole
+     point, and is invisible without the curves. */
+  var TRIP_CURVES = {
+    /* IEC 60898-1 for the thermal band: 1.13 In shall not clear within an hour,
+       1.45 In shall clear within an hour, 1.61 In within 1800 s, and the
+       magnetic release shall operate within 0.1 s at the multiple its curve
+       names. The slow end of each magnetic band is used, and the points between
+       the thermal band and the magnetic pickup are filled in by interpolation —
+       which is why they are listed rather than left as one long straight run.
+       Between 1.45 In and the magnetic multiple the standard specifies nothing,
+       and it is exactly that region that decides whether two devices overlap. */
+    'MCB_B': { points: [[1.00, 3600], [1.13, 3600], [1.45, 3600], [1.61, 1800], [2.5, 60], [3, 0.5], [4.9, 0.1], [5, 0.02]] },
+    'MCB_C': { points: [[1.00, 3600], [1.13, 3600], [1.45, 3600], [1.61, 1800], [2.5, 60], [5, 0.2], [9.9, 0.1], [10, 0.02]] },
+    'MCB_D': { points: [[1.00, 3600], [1.13, 3600], [1.45, 3600], [1.61, 1800], [2.5, 60], [10, 0.2], [19.9, 0.1], [20, 0.02]] },
+    /* Thermal-magnetic MCCB. The bimetal keeps operating well past the long-time
+       band and only hands over to the magnetic release at several times its
+       setting, which is the whole reason two of these can be graded: the lower
+       one is deep in its magnetic region while the upper one is still on its
+       thermal band. Flattening the curve between 1.45 and 6 — as a first attempt
+       did — destroys exactly that separation and reports every ordinary pair
+       as unselective. */
+    'TM': { points: [[0.70, 20], [0.85, 10], [1.00, 6], [1.20, 3], [1.45, 1.0], [2, 0.3], [3, 0.15], [6, 0.1], [9.5, 0.1], [10, 0.05]] },
+    /* Long-time + instantaneous. The long-time element is a current transformer
+       and a timer with a deliberate delay, so it stays slow well above its
+       setting — seconds at twice the setting, not tenths. The instantaneous
+       stage then picks up at 10 In, which in absolute terms is a high current
+       and is why an LI above a TM can be selective where an LI above an LI
+       cannot. */
+    'LI': { points: [[0.80, 20], [0.94, 10], [1.05, 2], [1.20, 1.2], [1.50, 0.9], [2, 0.6], [3, 0.35], [6, 0.2], [9.5, 0.2], [10, 0.06]] },
+    /* With a short-time stage: the long-time band as LI, then a deliberate
+       plateau at 0.1 s across the short-time band — the stage exists precisely
+       to hold the device back over the range where the instantaneous would
+       otherwise take the whole installation out.
+
+       The instantaneous pickup is written as a threshold, not a ramp: a point
+       at 9.5 holding the plateau and a point at 10 dropping to the
+       instantaneous time. Interpolating a long straight run between them is
+       what produced a "selective up to 7 kA" answer for a device whose plateau
+       actually extends to 10, which is not a small error. */
+    'LS': { points: [[0.80, 20], [0.94, 10], [1.05, 2], [1.20, 1.2], [1.50, 0.9], [2, 0.3], [6, 0.1], [12, 0.1]] },
+    'LSI': { points: [[0.80, 20], [0.94, 10], [1.05, 2], [1.20, 1.2], [1.50, 0.9], [2, 0.3], [6, 0.1], [9.5, 0.1], [10, 0.02]] },
+    'eLSI': { points: [[0.80, 20], [0.94, 10], [1.05, 2], [1.20, 1.2], [1.50, 0.9], [2, 0.3], [6, 0.1], [9.5, 0.1], [10, 0.02]] }
+  };
+  /* A fuse, for completeness: inverse time down to a very large multiple. */
+  TRIP_CURVES.FUSE = { points: [[1.25, 14400], [2, 3600], [4, 300], [6, 60], [10, 6], [19, 0.5], [20, 0.05]] };
+
+  /* Which curve applies to a device. A MCCB's frame does not decide it; the
+     trip unit does. */
+  function curveKeyFor(prot) {
+    if (!prot) return null;
+    if (prot.kind === 'mcb') return 'MCB_' + (prot.trip || 'C');
+    if (prot.kind === 'fuse') return 'FUSE';
+    return prot.trip || 'TM';
+  }
+
   var PANEL_TYPES = {
     'mcc'     : { name: 'MCC / control panel',        pf: 0.85, phases: '3' },
     'db_lg'   : { name: 'Lighting distribution board', pf: 0.90, phases: '3' },
@@ -531,7 +606,7 @@ var LS = (function () {
     PANEL_TYPES, DEFAULTS, SHAPE, PHASE_COLOR, PHASE_EDGE, phaseColor, phaseEdge,
     DB_SIZES_A, DB_LOAD_MAX_A, DB_LOAD_TYPES,
     MCCB_FRAMES, MCCB_SETTINGS, ICU_KA, TRIP_UNITS,
-    MCB_RATINGS, MCB_CURVES, MCB_ICU_KA, MCB_MAX_A,
+    MCB_RATINGS, MCB_CURVES, MCB_ICU_KA, MCB_MAX_A, TRIP_CURVES, curveKeyFor,
     newProt, protLabel,
     uid, num, r1, r2, clamp, esc, snapTo, fmtGrid, gridRef, closest,
     newProject, newTx, newPdb, newPdp, newDb, newPanel, sampleProject

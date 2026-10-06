@@ -849,7 +849,7 @@ var LC = (function () {
         'withstand', 0);
     }
 
-    function checkProt(p, item, kind, loadA, cableA, faultKA) {
+      function checkProt(p, item, kind, loadA, cableA, faultKA) {
       var d = item.prot;
       if (!d) { add('warn', kind, item.id, item.tag + ' has no protective device',
         'Nothing is interrupting this supply. Use Propose, or enter the device by hand.'); return; }
@@ -968,16 +968,24 @@ var LC = (function () {
         upKind = item.dbId ? 'db' : (ch.pdp ? 'pdp' : 'pdb');
       }
       if (!up || !up.prot) return;
-      var a = num(up.prot.ir, 0), b = num(item.prot.ir, 0);
-      if (!a || !b) return;
-      /* Both thermal-magnetic: the one below must be clearly smaller, or an
-         overload on the lower board clears the upper device first. */
-      if (up.prot.kind === 'mccb' && up.prot.trip === 'TM' && up.prot.trip === item.prot.trip && b / a > 0.75) {
-        add('warn', kind, item.id, item.tag + ' not selectively graded against ' + up.tag,
-          'Set to ' + b + ' A against ' + a + ' A above it — ' + (b / a * 100).toFixed(0) +
-          '% of the upstream setting. On thermal-magnetic devices that is close enough that a fault on this circuit may clear ' +
-          'the ' + up.tag + ' device first. Check the curves, or give the upstream device a short-time stage.');
-      }
+
+      /* The largest fault this pair can see, at the lower device's busbar. A
+         fault beyond that never reaches the lower device and is a breaking
+         capacity question, not a grading one. */
+      var fKA = faultAt(p, item, kind === 'panel' ? 'panel' : kind);
+      var s = selectivity(item, kind, up, upKind, fKA ? fKA * 1000 : null);
+      if (!s || s.pass) return;
+
+      /* Overload overlap and short-circuit overlap are both reported as a
+         warning. Neither is automatically wrong — the alternative is often to
+         accept a deliberate compromise — but both have to be a decision rather
+         than an accident, and only a deliberate one is visible. */
+      add('warn', kind, item.id,
+        item.tag + ' not selectively graded against ' + up.tag +
+        (s.regime === 'overload' ? ' (overload)' : ' (above ' + s.fromKA.toFixed(1) + ' kA)'),
+        selectivityMessage(s, item.tag) +
+        ' The curves used are the conventional envelopes from IEC 60898 and IEC 60947-2, not the ' +
+        'manufacturer\'s, so this says the two settings do not separate — check the actual curves before changing anything.');
     }
     p.pdps.forEach(function (d) { grade(d, 'pdp'); });
     p.dbs.forEach(function (b) { grade(b, 'db'); });
@@ -1056,6 +1064,168 @@ var LC = (function () {
     out.sort(function (a, b) { return order[a.level] - order[b.level]; });
     return out;
   }
+
+/* ======================================================= selectivity =====
+  Two devices in series are selective if, for a fault between them, the one
+  nearer the fault clears first. That sounds simple and is not, because a
+  fault can be any current: an overload at 1.2 × In is cleared by the thermal
+  elements, a bolt at 40 kA by the magnetic ones. A pair can be perfectly
+  graded at one and hopelessly ungraded at the other, and that is the normal
+  case — a thermal-magnetic device below an electronic one is selective on
+  overload and not on short circuit, which is the reason electronic trip
+  units have a short-time stage at all.
+
+  Comparing two ratings, as this used to, can only ever see one of those two
+  regimes and so cannot tell a good pair from a bad one. With curves it can:
+  walk up through the fault current, find where each device clears, and see
+  which does it first.
+
+  The curves are the conventional envelopes from js/data.js, not a
+  manufacturer's, so the result is a finding about the *scheme* rather than a
+  certificate about a *device*, and it says so. The three outcomes are
+  separated because they need different fixes:
+
+    overload       both devices clear thermally and the lower one is not
+                   enough smaller — lower its setting or raise the upper one
+    short circuit  the upper device's instantaneous stage reaches this fault
+                   before the lower one has cleared — give the upper device a
+                   short-time stage, or set its instantaneous higher
+    partly         selective up to some current and not above it. This is the
+                   common case and the one a rating comparison would either
+                   pass or fail wholesale.
+  */
+/* The clearing time of a device at a given multiple of its setting, in
+  seconds. Interpolated in log-log, which is how the curves are drawn and the
+  only interpolation that stays plausible between two published points: a
+  straight line in log-log between a thermal point at 1.2 In and a magnetic
+  point at 10 In does not cut across the corner of the curve that decides
+  whether the two devices overlap.
+
+  Returns null when the multiple is below the curve — the device never
+  clears at that current. */
+function clearingTimeAt(prot, multiple) {
+ var ck = D.curveKeyFor(prot);
+ var curve = ck && D.TRIP_CURVES[ck];
+ if (!curve) return null;
+ var pts = curve.points;
+ var m = multiple;
+ if (!(m > 0)) return null;
+ if (m < pts[0][0]) return null;
+ if (m >= pts[pts.length - 1][0]) return pts[pts.length - 1][1];
+ /* Return the published value where the multiple is one of the published
+    points. Interpolating to exactly 1.13 through a log-log segment whose
+    endpoints are 1.00 and 1.13 lands a hair under the point by floating point,
+    and the published points are where a hand calculation and a standard's own
+    table both check this — so they should come back exact. */
+ for (var k = 0; k < pts.length; k++) {
+   if (Math.abs(m - pts[k][0]) <= 1e-9 * Math.max(1, pts[k][0])) return pts[k][1];
+ }
+ for (var i = 1; i < pts.length; i++) {
+   if (m <= pts[i][0]) {
+     var a = pts[i - 1], b = pts[i];
+     var la = Math.log(a[0]), lb = Math.log(b[0]);
+     var ta = Math.log(a[1]), tb = Math.log(b[1]);
+     var f = (Math.log(m) - la) / (lb - la);
+     return Math.exp(ta + f * (tb - ta));
+   }
+ }
+ return null;
+}
+
+/* The fault currents to judge a pair over, in amps.
+
+  The range starts where the *higher* of the two settings has just been reached,
+  not the lower, and that distinction matters more than anything else here.
+
+  Below the upstream setting the upstream device is barely warm and will take
+  minutes. Comparing its fifteen-second clearing time against the lower device's
+  thirteen finds a "failure" at a current where the upstream was never going to
+  operate at all. A 63 A circuit under a 250 A board passes through 190 A on its
+  way up, and at 190 A the upstream is at 76% — nothing is wrong, nothing needs
+  to be selective, and reporting it teaches the reader to ignore the check.
+
+  It ends at the prospective fault at the lower device's busbar, capped at 500 ×
+  its own setting because no curve is published beyond that and extrapolating a
+  logarithmic interpolation that far is arithmetic, not engineering.
+
+  Logarithmic spacing, because the interesting behaviour is at both ends and
+  evenly-spaced samples would find neither. */
+var SELECTIVITY_STEPS = 60;
+function selectivityLadder(downProt, upProt, faultAmps) {
+ var irD = num(downProt.ir, 0), irU = num(upProt.ir, 0);
+ if (!(irD > 0) || !(irU > 0)) return null;
+ var lo = Math.max(irD, irU) * 1.02;
+ var hi = faultAmps || irD * 50;
+ if (hi > irD * 500) hi = irD * 500;   // beyond any curve's published end
+ if (hi <= lo * 1.05) return null;
+ var out = [], r = hi / lo;
+ for (var i = 0; i <= SELECTIVITY_STEPS; i++) {
+   out.push(lo * Math.pow(r, i / SELECTIVITY_STEPS));
+ }
+ return out;
+}
+
+/* Selectivity between a downstream device and the one above it.
+
+  Returns null when there is nothing to compare. Otherwise:
+    { pass, regime, fromA, fromKA, up, down }  */
+function selectivity(down, downKind, up, upKind, faultAmps) {
+ if (!down || !up || !down.prot || !up.prot) return null;
+ var irD = num(down.prot.ir, 0), irU = num(up.prot.ir, 0);
+ if (!(irD > 0) || !(irU > 0)) return null;
+ var ladder = selectivityLadder(down.prot, up.prot, faultAmps);
+ if (!ladder) return null;
+
+ for (var i = 0; i < ladder.length; i++) {
+   var I = ladder[i];
+   var tD = clearingTimeAt(down.prot, I / irD);
+   var tU = clearingTimeAt(up.prot, I / irU);
+   /* Neither clears: the fault is above what either device is rated to
+      interrupt, which is a breaking-capacity finding, not a selectivity
+      one. Skip rather than report. */
+   if (tD === null || tU === null) continue;
+   /* The margin the standards ask for. A plain "clears first" would call a
+      pair selective when one device clears at 0.0999 s and the other at
+      0.1000 s, which is a coin toss at the tolerance of every real curve.
+      A factor of 1.25 is the usual working figure and is what is used
+      here; below it the pair is reported as partial, not as a pass. */
+   if (tU / tD < 1.25) {
+     var overload = I < irD * 1.5;
+     return {
+       pass: false, partial: true, regime: overload ? 'overload' : 'short circuit',
+       fromA: I, fromKA: I / 1000,
+       tDown: tD, tUp: tU, irDown: irD, irUp: irU,
+       down: down, up: up, downKind: downKind, upKind: upKind
+     };
+   }
+ }
+ return { pass: true, regime: null, down: down, up: up, downKind: downKind, upKind: upKind,
+          irDown: irD, irUp: irU };
+}
+
+function selectivityMessage(s, unit) {
+ var what = unit + ' on ' + s.down.tag + ' against ' + s.up.tag;
+ if (s.regime === 'overload') {
+   return 'The curves overlap on overload. At ' + s.fromKA.toFixed(1) +
+     ' kA — only ' + (s.fromA / s.irDown).toFixed(1) + ' × its own setting — the ' +
+     s.down.tag + ' device takes ' + msOrS(s.tDown) + ' and the ' + s.up.tag +
+     ' device above it takes ' + msOrS(s.tUp) + '. An overload on this circuit would ' +
+     'clear the wrong one. Raise the ' + s.up.tag + ' setting, or lower the ' +
+     s.down.tag + ' one, so the curves separate.';
+ }
+ return 'The curves overlap above ' + s.fromKA.toFixed(1) + ' kA. At that current the ' +
+   s.down.tag + ' device takes ' + msOrS(s.tDown) + ' and the ' + s.up.tag +
+   ' device above it ' + msOrS(s.tUp) + ', so a fault on this circuit clears both — ' +
+   'or the wrong one first. The usual fix is a short-time stage on the ' + s.up.tag +
+   ' device, which holds it back over exactly this range, or an instantaneous ' +
+   'setting on it above the fault level here.';
+}
+
+/* Selective up to `fromKA`, and the useful number to quote. */
+function selectivityBand(s) {
+  return s.pass ? null : s.fromKA;
+}
+
 
   /* ------------------------------------------------------- grouped findings
      The audit reports what it finds, item by item, because that is the truth
@@ -1856,6 +2026,8 @@ var LC = (function () {
     mccbFrameFor, icuFor, mcbRatingFor, tripFor, deviceRatingFor, proposeProt, applyProt, protAll, hasDownstream,
     withstandI2t, clearingTimeS, checkWithstand, msOrS, WITHSTAND_K,
     groupFindings, worstLevel, groupTitle, boardTagOf, MIN_GROUP, MAX_LIST,
+    clearingTimeAt, selectivity, selectivityMessage, selectivityBand, selectivityLadder,
+    SELECTIVITY_STEPS,
     choosePdp, assignPanel, createPdpFor, feederLen, syncLen,
     sizeCablesFor, sizeCablesForPdb, sizeCablesForDb, suggestDbFeeder, sizeCableForPanel, sizeAll, feederAmp, needsSizing,
     nextPracticalPos, resolveDrop, autoBalance, totals, boardList, dist, uniqueTag,

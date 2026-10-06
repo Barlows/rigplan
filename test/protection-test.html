@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=78"></script>
-<script src="../js/calc.js?v=102"></script>
+<script src="../js/data.js?v=121"></script>
+<script src="../js/calc.js?v=121"></script>
 <script>
 (function () {
   var results = [];
@@ -288,6 +288,108 @@
   gp.cable = { csa: 300, runs: 1, cores: 4, len: 25, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
   check('a core the device clears in time says nothing',
     LC.audit(fpz.p).filter(function (x) { return /withstand/i.test(x.title); }).length, 0);
+
+  /* --------------------------------------------------------- selectivity */
+  /* Time-current characteristics, and what they change about the answer. A
+     rating comparison could not distinguish any of the pairs below; the curves
+     can, and they land where the textbooks say they should. */
+
+  function mcbc(ir, trip) { return { kind: 'mccb', ir: ir, frame: ir, icu: 50, trip: trip, poles: 4 }; }
+  function mcb(ir, trip) { return { kind: 'mcb', ir: ir, icu: 25, trip: trip || 'C', poles: 2 }; }
+  function sel(d, u, kA) {
+    return LC.selectivity({ tag: 'D', prot: d }, 'panel', { tag: 'U', prot: u }, 'pdp', kA * 1000);
+  }
+  /* the band, or Infinity for a pair that stays selective throughout */
+  function band(d, u, kA) { var s = sel(d, u, kA); return s.pass ? Infinity : s.fromKA; }
+
+  /* The curves themselves. Interpolated in log-log between the published
+     points, so these are the numbers a hand calculation would produce. */
+  check('a thermal-magnetic MCCB at its own setting takes seconds, not fractions',
+    LC.msOrS(LC.clearingTimeAt(mcbc(250, 'TM'), 1)), '6.0 s');
+  check('and at 1.2 times it, seconds still',
+    LC.msOrS(LC.clearingTimeAt(mcbc(250, 'TM'), 1.2)), '3.0 s');
+  check('below its own setting an MCB does not clear at all', LC.clearingTimeAt(mcb(63), 0.9), null);
+  /* IEC 60898: at 1.13 In it shall not clear within an hour, and at 1.45 In it
+     shall. Both are the same number here, which is the point — the device sits
+     on the edge of its band across that whole range. */
+  check('at 1.13 times its setting an MCB has not cleared within the hour the standard allows',
+    LC.clearingTimeAt(mcb(63), 1.13) >= 3600, true);
+  check('and at 1.45 it has, also within the hour',
+    LC.clearingTimeAt(mcb(63), 1.45) <= 3600, true);
+  check('a curve C MCB picks up magnetically at ten times its setting',
+    LC.msOrS(LC.clearingTimeAt(mcb(63, 'C'), 10)), '20.0 ms');
+  check('and a curve D at twenty, which is the whole point of choosing it',
+    LC.msOrS(LC.clearingTimeAt(mcb(63, 'D'), 20)), '20.0 ms');
+  check('a curve B picks up at five',
+    LC.msOrS(LC.clearingTimeAt(mcb(63, 'B'), 5)), '20.0 ms');
+  check('an LI unit with no short-time stage is still in the tens of milliseconds at eight times its setting',
+    LC.msOrS(LC.clearingTimeAt(mcbc(1000, 'LI'), 8)), '200 ms');
+  check('while an LS with one holds at 0.1 s across the same band',
+    LC.msOrS(LC.clearingTimeAt(mcbc(1000, 'LS'), 8)), '100 ms');
+  check('an LSI drops to its instantaneous at ten, and not before',
+    LC.clearingTimeAt(mcbc(1000, 'LSI'), 9.5) === LC.clearingTimeAt(mcbc(1000, 'LSI'), 6), true);
+  check('a device with no curve is not assessed rather than assumed',
+    LC.clearingTimeAt({ kind: 'mcb', ir: 63, trip: 'Z' }, 3), null);
+
+  /* The pairs. Each is a real arrangement and each has a known answer. */
+  check('a 63 A MCB under a 250 A MCCB is selective throughout — the MCB is an order faster',
+    band(mcb(63), mcbc(250, 'TM'), 25), Infinity);
+  check('a curve D MCB chosen for transformer inrush is likewise',
+    band(mcb(32, 'D'), mcbc(250, 'TM'), 25), Infinity);
+  check('250 A under 400 A is selective until the 400 A magnetic reaches it',
+    band(mcbc(250, 'TM'), mcbc(400, 'TM'), 30) < 4, true);
+  check('and no further',
+    band(mcbc(250, 'TM'), mcbc(400, 'TM'), 30) > 1, true);
+  check('the same setting twice overlaps on overload, immediately',
+    sel(mcbc(100, 'TM'), mcbc(100, 'TM'), 20).regime, 'overload');
+  check('two electronic units too close together overlap well below the fault level',
+    band(mcbc(1000, 'LI'), mcbc(1250, 'LI'), 50) < 5, true);
+  check('but adequately spaced ones reach the fault level before overlapping',
+    band(mcbc(1000, 'LI'), mcbc(1600, 'LI'), 50) > 5, true);
+  /* The reason an LS trip unit exists. Without the short-time stage the device
+     is instantaneous at ten times its setting, which at 1000 A is 10 kA — so a
+     fault anywhere above that on a circuit below trips the whole board. */
+  check('an LS upstream has no instantaneous stage and so stays selective throughout',
+    band(mcbc(250, 'TM'), mcbc(1000, 'LS'), 50), Infinity);
+  check('an LI above the same circuit does not',
+    band(mcbc(250, 'TM'), mcbc(1000, 'LI'), 50) < Infinity, true);
+  check('and it overlaps only once past its own instantaneous threshold',
+    band(mcbc(250, 'TM'), mcbc(1000, 'LI'), 50) > 9, true);
+
+  check('no device on one side means nothing to compare',
+    LC.selectivity({ tag: 'D' }, 'panel', { tag: 'U', prot: mcbc(250, 'TM') }, 'pdp', 25000), null);
+  check('and no rating means nothing to compare',
+    LC.selectivity({ tag: 'D', prot: {} }, 'panel', { tag: 'U', prot: mcbc(250, 'TM') }, 'pdp', 25000), null);
+  check('the ladder starts at the higher of the two settings, not the lower, so a current the upstream cannot reach is not judged',
+    LC.selectivityLadder(mcb(63), mcbc(250, 'TM'), 25000)[0] >= 250 * 1.02, true);
+
+  /* And the message, because a finding that does not say what to do about it
+     is half a finding. */
+  var sOver = LC.selectivity({ tag: 'CIRC-1', prot: mcbc(100, 'TM') }, 'panel',
+                             { tag: 'PDP1-1', prot: mcbc(100, 'TM') }, 'pdp', 20000);
+  var mOver = LC.selectivityMessage(sOver, 'CIRC-1');
+  check('an overload overlap says so', /overload/.test(mOver), true);
+  check('and names the circuit', /CIRC-1/.test(mOver), true);
+  check('and the board above it', /PDP1-1/.test(mOver), true);
+  check('and quotes a clearing time for each', /5\.\d s/.test(mOver), true);
+  var sSc = LC.selectivity({ tag: 'CIRC-2', prot: mcbc(250, 'TM') }, 'panel',
+                           { tag: 'PDP1-1', prot: mcbc(400, 'TM') }, 'pdp', 30000);
+  var mSc = LC.selectivityMessage(sSc, 'CIRC-2');
+  check('a short-circuit overlap gives the current it starts at',
+    new RegExp(sSc.fromKA.toFixed(1)).test(mSc), true);
+  check('and says what the usual fix is', /short-time/.test(mSc), true);
+
+  /* And it reaches the audit as a finding that names the board above. */
+  var gz = site();
+  var gp = load(gz.p, gz.pdp, 60, 0.9);
+  gz.pdp.prot = LS.newProt({ kind: 'mccb', ir: 400, frame: 400, icu: 50, trip: 'TM' });
+  gp.prot = LS.newProt({ kind: 'mcb', ir: 400, icu: 25, trip: 'C', poles: 4 });
+  var gsel = LC.audit(gz.p).filter(function (x) { return /selectively graded/.test(x.title); });
+  check('two devices at the same setting give a selectivity finding', gsel.length > 0, true);
+  check('and is titled with the board above it',
+    /^L-\d+ not selectively graded against \S+/.test(gsel[0].title), true);
+  check('and says the curves are the conventional ones, not the manufacturer\'s',
+    /not the manufacturer/.test(gsel[0].detail), true);
 
   /* ---------------------------------------------------- grouped findings */
   /* Folding repeats is what makes the list readable, so the shape of the fold

@@ -321,6 +321,73 @@ device cannot be protected by any cable. That last one matters: above about
 4,000 A no number of parallel cables is enough, and the audit says **busbar**
 rather than sending someone off to add another core.
 
+#### Selectivity, from curves
+
+Two devices in series are selective if, for a fault between them, the nearer one
+clears first. A fault can be any current, and that is what makes the check hard:
+an overload at 1.2 × In is cleared by the thermal elements and a bolt at 40 kA by
+the magnetic ones. A pair can be perfectly graded at one and hopelessly ungraded
+at the other, and that is the **normal** case — which is why a thermal-magnetic
+device below an electronic one is selective on overload and not on short circuit,
+and why electronic trip units have a short-time stage at all.
+
+Comparing two ratings, as this used to, can only see one of those two regimes
+and so cannot tell a good pair from a bad one. So the check now walks up through
+the fault current on logarithmic steps and compares the two **time-current
+characteristics** at each step, reporting the current at which the lower device
+stops clearing first.
+
+The curves are in `js/data.js` as `[multiple of In, seconds]` points:
+
+| Device | Thermal band | Magnetic pickup |
+|---|---|---|
+| MCB B / C / D | 1.13 In within an hour, 1.45 In within an hour, 1.61 In within 1800 s (IEC 60898) | 5 / 10 / 20 In within 0.1 s |
+| MCCB TM | 0.7 → 1.45 In over 20 s → 1 s | 6–10 In |
+| MCCB LI | 0.8 → 1.5 In over 20 s → 0.9 s | 10 In |
+| MCCB LS / LSI | as LI, then a 0.1 s plateau | LS has none; LSI at 10 In |
+
+Where a standard gives a range, the **slow** end is used. On the overload side a
+fast pickup nuisance-trips; on the short-circuit side it makes the check report
+a problem a particular make might not have, which costs a note, where the
+opposite error would pass a circuit that trips the whole board.
+
+Two details that matter more than the table:
+
+- **The ladder starts at the higher of the two settings, not the lower.** Below
+  the upstream setting the upstream device is barely warm and will take minutes;
+  comparing its fifteen-second clearing time against the lower device's thirteen
+  finds a "failure" at a current where the upstream was never going to operate at
+  all. A 63 A circuit under a 250 A board passes through 190 A on its way up,
+  and at 190 A the upstream is at 76%.
+- **A pair has to clear first by a factor of 1.25**, not merely first. Plain
+  "clears first" would call a pair selective when one device clears at 0.0999 s
+  and the other at 0.1000 s, which is a coin toss at the tolerance of every real
+  curve.
+
+What the curves buy, on arrangements that all look the same as two numbers:
+
+| Arrangement | Result |
+|---|---|
+| 63 A MCB C under a 250 A TM | selective throughout |
+| 32 A MCB **D** under a 250 A TM | selective throughout — the curve letter is the whole reason |
+| 32 A MCB D under a 160 A TM | selective to 0.4 kA, then overlaps |
+| 250 A TM under a 400 A TM | selective to 1.7 kA, then overlaps at the upper magnetic |
+| 1000 A LI under a 1250 A LI | selective to 3.6 kA — too close |
+| 1000 A LI under a 1600 A LI | selective to 7.6 kA |
+| 250 A TM under a 1000 A **LI** | selective to 10.5 kA, then overlaps at its instantaneous |
+| 250 A TM under a 1000 A **LS** | selective throughout — no instantaneous stage to overlap with |
+
+The last two are the reason an LS trip unit costs more: without the short-time
+stage the device is instantaneous at ten times its setting, which at 1000 A is
+10 kA, so a fault anywhere above that on a circuit below takes the whole board
+out.
+
+The curves are the conventional envelopes, not any manufacturer's, so this is a
+finding about the two **settings** rather than a certificate about two
+**devices**, and the message says so. Beyond the upstream's instantaneous
+threshold, discrimination is decided by let-through energy — which needs the
+manufacturer's I²t data and is out of scope here.
+
 #### Repeated findings are folded together
 
 A check that fires on every large motor, or on every circuit whose device is too
@@ -617,6 +684,7 @@ test/csv-test.html         102 checks on the CSV parser, the column mapper and
                           the value readers
 test/csv-roundtrip-test.html 26 checks on reading the app's own export back,
                           and a vendor file with a title and revision above it
+tools/bump.py              set one cache-busting version across every HTML file
 test/run.py               headless runner — serves the directory, drives Chrome,
                           reads the results back out of the DOM
 test/parser-test.html     35 checks against a synthetic DXF with known geometry
@@ -658,8 +726,19 @@ catches.
 check on each script and a grep for client identifiers in the app files.
 
 Open a `test/*.html` page in a browser to see the results while working on the
-matching module. If you edit the JavaScript while testing over HTTP and the
-browser serves a cached copy, bump the `?v=` query string in `index.html`.
+matching module.
+
+After changing any JavaScript, bump the cache-busting query so a browser does not
+run the previous version:
+
+```
+python3 tools/bump.py         # next version, applied to index.html and every test page
+python3 tools/bump.py --show  # what each file currently says
+```
+
+Doing this by hand means editing ten files and forgetting one, and the symptom
+is a suite failing for no reason because it is running a copy of the code from
+before the change.
 
 ## Single line diagram
 
@@ -709,10 +788,17 @@ This builds and checks a schedule. It is **not** a design certification tool.
   measurement you use to set it.
 - Volt drop uses an indicative cable impedance, not a full impedance and temperature
   calculation.
-- The selectivity check compares device ratings only. It ignores curves, energy
-  classes, let-through and time bands, so it is a prompt to check the curves —
-  **not** a discrimination study. A pass here is not proof of selectivity, and a
-  warning is not proof of a fault.
+- Selectivity is assessed on the conventional time-current envelopes, not on any
+  manufacturer's curves, so it judges two *settings* rather than two *devices*.
+  Beyond a device's instantaneous threshold, discrimination is decided by
+  let-through energy and is not assessed here.
+- Selectivity is assessed on the conventional time-current envelopes in
+  `js/data.js`, not on any manufacturer's curves. It judges two **settings**
+  rather than two **devices**, it does not use energy classes, let-through I²t or
+  the actual time bands, and above a device's instantaneous threshold the answer
+  it gives is "these overlap" where energy discrimination might still separate
+  them. A pass here is not proof of selectivity; a warning is not proof of a
+  fault. Check the actual curves before changing a setting.
 - Cable thermal withstand under fault, short-circuit capacity, RCD discrimination
   and cost are **not** checked.
 - Fault levels are indicative only (see above): they rest on the assumed
