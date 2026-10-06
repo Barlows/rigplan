@@ -1,10 +1,432 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><title>underlay io test</title></head>
-<body><pre id="o">…</pre>
+<body>
+<!-- The runner reads these two markers. Without them an empty result is
+     ambiguous: the page threw, the page hung, and the page never started all
+     leave the placeholder, and only the first of those is a bug worth reading. -->
+<pre id="state">running</pre>
+<pre id="o">…</pre>
 <script src="../js/data.js?v=133"></script>
 <script src="../js/dxf.js?v=133"></script>
 <script src="../js/underlay.js?v=133"></script>
+<!-- The reference DXF, inline rather than fetched. A test that reads a sibling file
+     has two extra ways to fail that have nothing to do with the parser: the file may
+     not be in the repository, and the browser may not have cached it. This suite was
+     green locally for exactly as long as fixture.dxf happened to be lying on disk and
+     had never been committed. -->
+<script type="application/dxf" id="fixture">
+0
+SECTION
+2
+HEADER
+9
+$ACADVER
+1
+AC1021
+9
+$INSUNITS
+70
+4
+9
+$EXTMIN
+10
+0.0
+20
+0.0
+9
+$EXTMAX
+10
+1200.0
+20
+800.0
+0
+ENDSEC
+0
+SECTION
+2
+TABLES
+0
+TABLE
+2
+LAYER
+70
+3
+0
+LAYER
+2
+WALLS
+70
+0
+62
+7
+0
+LAYER
+2
+DIMENSIONS
+70
+0
+62
+1
+0
+LAYER
+2
+ROOF
+70
+0
+62
+3
+0
+ENDTAB
+0
+ENDSEC
+0
+SECTION
+2
+BLOCKS
+0
+BLOCK
+8
+WALLS
+2
+DOOR
+70
+0
+10
+0.0
+20
+0.0
+0
+LINE
+8
+WALLS
+10
+0
+20
+0
+11
+100
+21
+0
+0
+LINE
+8
+WALLS
+10
+100
+20
+0
+11
+100
+21
+100
+0
+ENDBLK
+0
+ENDSEC
+0
+SECTION
+2
+ENTITIES
+0
+LWPOLYLINE
+8
+WALLS
+90
+4
+70
+1
+10
+0
+20
+0
+42
+0
+10
+1200
+20
+0
+42
+0
+10
+1200
+20
+800
+42
+0.5
+10
+0
+20
+800
+42
+0
+0
+LWPOLYLINE
+8
+ROOF
+90
+3
+70
+0
+10
+100
+20
+100
+10
+400
+20
+100
+10
+400
+20
+300
+0
+LINE
+8
+WALLS
+10
+600
+20
+400
+11
+900
+21
+700
+0
+CIRCLE
+8
+ROOF
+10
+300
+20
+600
+40
+80
+0
+ARC
+8
+ROOF
+10
+700
+20
+600
+40
+150
+50
+0
+51
+90
+0
+POLYLINE
+8
+WALLS
+66
+1
+70
+1
+10
+0
+20
+0
+0
+VERTEX
+8
+WALLS
+10
+900
+20
+100
+0
+VERTEX
+8
+WALLS
+10
+1100
+20
+100
+0
+VERTEX
+8
+WALLS
+10
+1100
+20
+300
+0
+VERTEX
+8
+WALLS
+10
+900
+20
+300
+0
+SEQEND
+8
+WALLS
+0
+TEXT
+8
+ROOF
+10
+150
+20
+180
+40
+30
+1
+PLANT ROOM
+0
+MTEXT
+8
+ROOF
+10
+150
+20
+230
+40
+30
+1
+{\fArial|b0|i0;OFFICE}\PStore 12
+0
+MTEXT
+8
+ROOF
+10
+150
+20
+270
+40
+30
+1
+%%d22.5%%C %%c250mm
+0
+POINT
+8
+WALLS
+10
+500
+20
+500
+0
+ELLIPSE
+8
+ROOF
+10
+200
+20
+400
+11
+60
+21
+0
+40
+0.5
+50
+0
+51
+360
+0
+SPLINE
+8
+ROOF
+70
+8
+71
+3
+10
+600
+20
+200
+10
+650
+20
+250
+10
+700
+20
+200
+0
+SOLID
+8
+WALLS
+10
+1000
+20
+600
+11
+1100
+21
+600
+12
+1100
+22
+700
+13
+1000
+23
+700
+0
+INSERT
+8
+WALLS
+2
+DOOR
+10
+200
+20
+400
+41
+1
+42
+1
+50
+0
+0
+INSERT
+8
+WALLS
+2
+DOOR
+10
+800
+20
+400
+41
+2
+42
+2
+50
+90
+0
+DIMENSION
+8
+DIMENSIONS
+10
+0
+20
+0
+11
+1200
+21
+0
+1
+1200
+0
+ENDSEC
+0
+EOF
+</script>
+
 <script>
+/* Any escape from here lands in the page rather than in the console, which is
+   the only place a headless runner can see it. */
+function fail(stage, e) {
+  var box = document.getElementById('o');
+  box.textContent = 'FAILED at: ' + stage + '\n' + (e && (e.stack || e.message) || String(e));
+  document.getElementById('state').textContent = 'error';
+}
+window.addEventListener('error', function (e) { fail('uncaught', e.error || e.message); });
+window.addEventListener('unhandledrejection', function (e) { fail('unhandled rejection', e.reason); });
 (async function () {
   var out = {};
   var dwg = new Uint8Array([65,67,49,48,50,54,13,10,0,0,0,0]);
@@ -21,7 +443,7 @@
   catch (e) { out.rejectedText = true; out.codeText = e.code; }
 
   // a real DXF still loads
-  var dxfTxt = await (await fetch('fixture.dxf')).text();
+  var dxfTxt = document.getElementById('fixture').textContent.replace(/^\n/, '');
   var real = await UNDERLAY.load(new File([dxfTxt], 'fixture.dxf', { type: 'application/dxf' }));
   out.dxfLoads = { kind: real.kind, entities: real.geo.entities.length, unit: real.geo.unitName };
   out.dxfDetected = UNDERLAY.isDxfText(dxfTxt);
@@ -53,5 +475,6 @@
 
   window.__U = out;
   document.getElementById('o').textContent = JSON.stringify(out, null, 1);
+  document.getElementById('state').textContent = 'done';
 })();
 </script></body></html>

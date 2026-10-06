@@ -125,6 +125,21 @@ def dump_dom(chrome, url, budget=8000):
     return out.stdout.decode("utf-8", "replace")
 
 
+# A page that says how it went. Suites opt in by carrying <pre id="state"> and
+# setting it to "running" at the start and "done" or "error" at the end.
+HAS_STATE = 'id="state"'
+
+
+def state_of(dom):
+    m = re.search(r'id="state"[^>]*>(.*?)</pre>', dom, re.S)
+    return strip_tags(m.group(1)) if m else None
+
+
+def failure_text(dom):
+    m = re.search(r'id="o"[^>]*>(.*?)</pre>', dom, re.S)
+    return strip_tags(m.group(1)) if m else ""
+
+
 def strip_tags(html):
     # Script and style content is text between tags, not markup, so it survives
     # a tag strip and ends up read as if it were the page's own words. The
@@ -210,6 +225,7 @@ def script_syntax_errors():
 def run(chrome, port, names):
     total_ok = total = 0
     failed_suites = []
+    checked = []          # suites that were supposed to produce a tally
 
     for name, filename in SUITES:
         if names and name not in names:
@@ -250,21 +266,41 @@ def run(chrome, port, names):
                 print("  %-12s inspected, %d chars of output  (%.1fs)" % (name, len(body), took))
             continue
 
-        # The tally lives in #summary on most suites and at the end of the
-        # output on the rest, so it is read from the whole document. A page
-        # still saying "running…" threw before writing anything.
+        # A suite that carries a #state marker is telling us what happened to
+        # it. Without one, an empty result is ambiguous — threw, hung, or never
+        # started all leave a placeholder — and guessing between them costs more
+        # than writing the marker once.
         body = strip_tags(dom)
-        if len(body) < 60:
-            print("  %-12s RENDERED NOTHING (%d chars) — the page threw" % (name, len(body)))
+        if HAS_STATE in dom:
+            state = state_of(dom)
+            if state == "error":
+                print("  %-12s FAILED — the page caught its own failure:" % name)
+                for line in failure_text(dom).splitlines()[:12]:
+                    print("      %s" % line)
+                failed_suites.append(name)
+                continue
+            if state != "done":
+                # Still on the placeholder. Either it hung, or the budget expired
+                # before it finished. Both are worth one retry with more time.
+                if len(strip_tags(dump_dom(chrome, url, budget * 3))) < 60:
+                    print("  %-12s NEVER FINISHED — state is still %r" % (name, state))
+                    failed_suites.append(name)
+                    continue
+                dom = dump_dom(chrome, url, budget * 3)
+                body = strip_tags(dom)
+        elif len(body) < 60:
+            print("  %-12s RENDERED NOTHING (%d chars) and has no #state marker, so\n"
+                  "               there is no way to tell a throw from a hang — see below" % (name, len(body)))
             failed_suites.append(name)
             continue
-        if "running…" in body:
+        elif "running…" in body:
             print("  %-12s DID NOT FINISH — the page threw before writing its results" % name)
             failed_suites.append(name)
             continue
 
         fails = failures_of(dom)
 
+        checked.append(name)
         m = re.search(r"(\d+)\s*/\s*(\d+)\s*checks passed", body)
         if not m:
             print("  %-12s UNREADABLE — no tally found in the page" % ())
@@ -286,7 +322,44 @@ def run(chrome, port, names):
             if len(fails) > 12:
                 print("      ... and %d more" % (len(fails) - 12))
 
-    return total_ok, total, failed_suites
+    return total_ok, total, failed_suites, checked
+
+
+def untracked_reads():
+    """Test pages that fetch a file the repository does not contain.
+
+    This is not hypothetical. The underlay suite fetched test/fixture.dxf, which
+    .gitignore excluded with a blanket `test/*.dxf`. It passed on every local
+    run for months, because the file was lying on disk, and failed immediately on
+    a fresh clone. Nothing about the test itself had changed.
+
+    A test page reading a sibling file has two extra ways to fail that have
+    nothing to do with what it is testing, and only one of them is visible from
+    the working tree. This catches the other.
+    """
+    problems = []
+    tracked = set()
+    try:
+        out = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, timeout=20)
+        tracked = set(line for line in out.stdout.decode("utf-8", "replace").splitlines() if line)
+    except (OSError, subprocess.SubprocessError):
+        return problems          # not a git checkout; nothing to check against
+
+    for name in sorted(os.listdir(os.path.join(ROOT, "test"))):
+        if not name.endswith(".html"):
+            continue
+        path = os.path.join("test", name)
+        with open(os.path.join(ROOT, path), encoding="utf-8") as f:
+            text = f.read()
+        for m in re.finditer(r"""fetch\(\s*['"]([^'"]+)['"]""", text):
+            ref = m.group(1)
+            if ref.startswith(("http://", "https://", "/", "data:")):
+                continue
+            target = os.path.normpath(os.path.join("test", ref.split("?")[0]))
+            if target in tracked:
+                continue
+            problems.append("%s fetches %s, which is not in the repository" % (path, target))
+    return problems
 
 
 def main():
@@ -315,6 +388,17 @@ def main():
             print("  %s" % e)
         return 1
 
+    # Checked before anything is rendered, and independently of it: a page that
+    # reads a file the repository does not contain fails on a fresh clone and
+    # nowhere else, so the failure only ever appears on someone else's machine.
+    reads = untracked_reads()
+    if reads:
+        print("a test page reads a file that is not in the repository:")
+        for e in reads:
+            print("  %s" % e)
+        print("inline the data in the page instead — see test/underlay-test.html")
+        return 1
+
     chrome = find_chrome(args.chrome)
     if not chrome:
         print("no Chrome or Chromium found.")
@@ -327,7 +411,7 @@ def main():
     try:
         print("running %d suite(s) against %s on port %d\n" %
               (len([s for s in SUITES if not args.names or s[0] in args.names]), chrome, port))
-        ok, total, failed = run(chrome, port, args.names)
+        ok, total, failed, checked = run(chrome, port, args.names)
     finally:
         httpd.shutdown()
 
@@ -337,6 +421,13 @@ def main():
     if failed:
         print("FAILED suites: %s" % ", ".join(failed))
         return 1
+    # Every requested suite was an inspection suite. That is a deliberate choice,
+    # not a run that silently checked nothing, so it is not a failure — but it is
+    # worth saying so, because "no failures" and "nothing was verified" are
+    # different claims and the difference matters when a pipeline goes green.
+    if not checked:
+        print("no counted suites requested — only inspection suites ran, so nothing was verified")
+        return 0
     if not total:
         print("no checks ran — that is not a pass")
         return 2

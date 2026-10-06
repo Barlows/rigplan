@@ -10,7 +10,11 @@ scratch/
 *.bak
 *~
 
-# test scaffolding not worth keeping
+# Scratch drawings dropped in the test folder are not worth keeping. Test pages
+# must not read a sibling file, though: this rule sat here silently excluding
+# test/fixture.dxf, so the underlay suite passed on every local run and failed on
+# CI because the file had never been committed. The reference DXF is inlined in
+# the page that needs it.
 test/*.dxf
 
 # Generated project files. Regenerate from the source spreadsheet with the
