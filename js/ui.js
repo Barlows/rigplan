@@ -714,7 +714,15 @@
           (e.tActual === null ? '—' : LC.msOrS(e.tActual)) + ' of ' + LC.msOrS(e.tMax) +
           (e.maxLoop !== null ? ' · max ' + e.maxLoop.toFixed(2) + ' Ω' : '') + '</span>');
       })() +
-      fRow('Cores', selIn(kind, o.id, '_cores', c.cores, [1, 2, 3, 4], function (v) { return v + (v === 1 ? ' core' : ' cores'); })) +
+      fRow('Cores', selIn(kind, o.id, '_cores', c.cores, [1, 2, 3, 4, 5], function (v) { return v + (v === 1 ? ' core' : ' cores'); })) +
+      /* Five cores is three phases, a neutral and the PE — which is what TN-S
+         wants when they share a cable, and is the only way to tell a 4-core
+         feeder carrying a neutral from one whose fourth conductor is a PEN. */
+      (kind === 'panel' ? fRow('PE in this cable', selIn('panel', o.id, 'peInCable',
+        o.peInCable === true ? 'yes' : (o.peInCable === false ? 'no' : ''),
+        ['', 'yes', 'no'], function (v) {
+          return v === '' ? 'not stated' : (v === 'yes' ? 'yes — shares the cable' : 'no — formed separately');
+        })) : '') +
       fRow('Length', '<span class="unit">' + cbl(kind, o.id, '_len', c.len, { step: 0.5, unit: 'm' }) + '<span class="u">m</span></span>') +
       fStack('Installation', '<select class="sel" data-bind="cab" data-kind="' + kind + '" data-id="' + o.id + '" data-f="method">' +
         methods.map(function (k) { return '<option value="' + k + '"' + (c.method === k ? ' selected' : '') + '>' + esc(k + ' — ' + LS.METHODS[k].name) + '</option>'; }).join('') + '</select>' +
@@ -1034,9 +1042,20 @@
           d.kvar.toFixed(1) + ' kvar &nbsp;·&nbsp; apparent ' + d.kva.toFixed(1) + ' kVA</span>');
       })() +
       fRow('Harmonics (THD)', '<span class="unit">' + nIn('panel', o.id, 'thd', o.thd, { step: 1, placeholder: 'not stated' }) + '<span class="u">%</span></span>') +
+      /* The neutral, which is the conductor most often undersized and the one a
+         single-phase declaration would miss entirely. */
+      (String(o.phases) === '3' ? fRow('Neutral', selIn('panel', o.id, 'neutral',
+        o.neutral === true ? 'yes' : (o.neutral === false ? 'no' : ''),
+        ['', 'yes', 'no'], function (v) {
+          return v === '' ? 'from core count (' + num(o.cable && o.cable.cores, 4) + ')' : (v === 'yes' ? 'carried back' : 'three-pole');
+        })) : '') +
+      fRow('Imbalance', '<span class="unit">' + nIn('panel', o.id, 'imbalance', o.imbalance, { step: 1, placeholder: 'assumed 0' }) + '<span class="u">%</span></span>') +
       '<div class="hint">Design kVA = kW ÷ pf, multiplied by the demand factor. Leave kVA blank to derive it. ' +
       '<b>Harmonics</b> is total harmonic distortion as a percentage of the fundamental — leave it blank unless the equipment ' +
-      'has significant non-linear load, because a declared figure raises this circuit\'s own RMS current and can leave its cable undersized.</div>' +
+      'has significant non-linear load, because a declared figure raises this circuit\'s own RMS current and can leave its cable undersized.' +
+      ' On a three-phase and neutral circuit it also loads the board neutral, where the triplens add at three times the per-phase value. ' +
+      '<b>Neutral</b> says whether this feeder carries one back; a three-pole motor feeder cannot put zero-sequence current into a ' +
+      'neutral bar, and one that does can. <b>Imbalance</b> is what an otherwise balanced three-phase load puts in the neutral.</div>' +
       '</div>' +
       '<div class="fieldset"><h4>Assignment</h4>' +
       fRow('Main board (PDB)', '<select class="sel" data-bind="item" data-kind="panel" data-id="' + o.id + '" data-f="pdbId"><option value="">— none —</option>' +
@@ -1505,15 +1524,36 @@
       '<h5>Earthing</h5>' +
       '<div class="two" style="max-width:640px">' +
       fRow('Supply system', '<select class="sel" data-bind="design" data-f="supplySystem">' +
-        ['TN-S', 'TN-C-S', 'TT'].map(function (v) {
+        ['TN-S', 'TN-C-S', 'TT', 'IT'].map(function (v) {
           return '<option value="' + v + '"' + (S.design.supplySystem === v ? ' selected' : '') + '>' + v + '</option>';
         }).join('') + '</select>') +
       fRow('Earth electrode R', '<span class="unit">' + dnum('earthElectrodeR', S.design.earthElectrodeR, 0.5) + '<span class="u">Ω</span></span>') +
       '</div>' +
+      /* What the chosen arrangement actually means for this installation. The
+         arrangements are not three names for one thing and the differences are
+         all things that go wrong on site. */
+      (function () {
+        var arr = LC.supplyArrangement(S);
+        return '<div class="fieldset"><h4>' + esc(arr.system) + ' — what this requires</h4>' +
+          '<div class="hint" style="margin-bottom:6px">' + esc(arr.note) + '</div>' +
+          '<ul>' +
+          '<li>Earthed at <b>' + esc(arr.earthedAt) + '</b>.</li>' +
+          '<li>A three-phase and neutral feeder needs <b>' + arr.coresFor3PN + ' cores</b> where the ' +
+          (arr.coresFor3PN === 5 ? 'protective conductor shares the cable' : 'neutral and protective conductor share a PEN') + '.</li>' +
+          (arr.pen ? '<li>Every PEN downstream is also a neutral: it must not be interrupted by a single-pole switch.</li>'
+                   : '<li>The neutral is <b>' + (arr.neutralSeparate ? 'a separate conductor' : 'combined as a PEN') + '</b> — ' +
+                     (arr.neutralSeparate ? 'it must not be re-bonded to earth, and must not be interrupted.'
+                                          : 'separate again only downstream of the first RCD.') + '</li>') +
+          '<li>The neutral conductor carries whatever triplen current the board\'s non-linear loads produce. ' +
+          'On a balanced three-phase load those add at <b>three times</b> the per-phase value, which is the usual reason a neutral is undersized.</li>' +
+          '</ul></div>';
+      })() +
       '<div class="hint">The supply system decides how the earth fault loop is formed. ' +
       'On <b>TN</b> the loop is the fault, the protective conductor and the source impedance, so R1+R2 alone decides the disconnection time. ' +
       'On <b>TT</b> the loop runs through the earth electrode, so its resistance has to be entered here as well, and a 30 mA RCD is what makes a ' +
-      '0.1 s disconnection achievable at all — this tool does not model RCDs, so on TT it will tell you the electrode resistance is needed and stop there.</div>' +
+      '0.1 s disconnection achievable at all — this tool does not model RCDs, so on TT it will tell you the electrode resistance is needed and stop there. ' +
+      'On <b>IT</b> there is no earthed source point, so a single fault does not raise the voltage on healthy metalwork and an RCD is the only thing that ' +
+      'clears it.</div>' +
       '<h5>How the schedule is built</h5><ul>' +
       '<li><b>Load</b> — design kVA = connected kW ÷ power factor × demand factor; current from kVA at the board voltage. Single-phase circuits are calculated at the phase-to-neutral voltage.</li>' +
       '<li><b>Assignment</b> — every control panel is placed by grid reference. Each board is scored on the utilisation it would end up at, how far the feeder would run, and whether a way is left free. Run length is weighted against load size, so a small circuit stays on the nearest board while a large one chases headroom. Crossing a transformer is penalised, so it only happens when it is clearly better.</li>' +
@@ -2556,6 +2596,8 @@
       demand: CSVC.num(g('demand')),
       phases: CSVC.phases(g('phases')), volt: CSVC.volt(g('volt')),
       prot: CSVC.device(g('prot')), start: CSVC.start(g('start')),
+      neutral: CSVC.neutral(g('neutral')),
+      imbalance: CSVC.num(g('imbalance')),
       loadTorque: CSVC.loadTorque(g('loadTorque')),
       simultaneousStart: CSVC.num(g('simultaneousStart')),
       csa: CSVC.num(g('csa')), runs: CSVC.num(g('runs')), cores: CSVC.num(g('cores')),
@@ -2682,6 +2724,8 @@
         kw: rec.kw || 0, kva: rec.kva || null, pf: rec.pf || 0.9,
         demand: rec.demand || 1, volt: rec.volt || 400,
         phases: rec.phases || '3', start: rec.start || 'DOL',
+        neutral: rec.neutral === undefined ? null : rec.neutral,
+        imbalance: rec.imbalance || null,
         loadTorque: rec.loadTorque || '',
         simultaneousStart: rec.simultaneousStart || null,
         ref: rec.ref || '', pdbId: null, pdpId: null, dbId: null
@@ -2859,7 +2903,7 @@
     L.push(csvRow([S.name])); L.push(csvRow(['Client', S.client, 'Project', S.ref, 'Designer', S.designer, 'Date', S.date]));
     L.push('');
     L.push(csvRow(['LOAD SCHEDULE']));
-    L.push(csvRow(['Reference', 'Board', 'Board description', 'Description', 'Type', 'Connected kW', 'Design kVA', 'kvar', 'pf', 'Demand', 'Phases', 'Voltage V', 'Current A', 'THD %', 'Protective device', 'Device frame A', 'Breaking capacity kA', 'Trip unit', 'Feeder runs', 'Feeder mm2', 'Cores', 'Length m', 'Installation', 'Rated A', 'Utilisation %', 'Volt drop %', 'PE mm2', 'R1+R2 ohm', 'Loop A', 'Max t s', 'Actual t s', 'Motor', 'Starting method', 'Starting source', 'Load torque', 'Starting together', 'Full load A', 'Starting A', 'All together A', 'Board at start V', 'Dip %', 'Torque at start', 'Grid ref E', 'Grid ref N', 'Status']));
+    L.push(csvRow(['Reference', 'Board', 'Board description', 'Description', 'Type', 'Connected kW', 'Design kVA', 'kvar', 'pf', 'Demand', 'Phases', 'Voltage V', 'Current A', 'THD %', 'Neutral carried', 'Imbalance %', 'PE in cable', 'Protective device', 'Device frame A', 'Breaking capacity kA', 'Trip unit', 'Feeder runs', 'Feeder mm2', 'Cores', 'Length m', 'Installation', 'Rated A', 'Utilisation %', 'Volt drop %', 'PE mm2', 'R1+R2 ohm', 'Loop A', 'Max t s', 'Actual t s', 'Motor', 'Starting method', 'Starting source', 'Load torque', 'Starting together', 'Full load A', 'Starting A', 'All together A', 'Board at start V', 'Dip %', 'Torque at start', 'Grid ref E', 'Grid ref N', 'Status']));
     var un = [];
     /* One row per circuit, wherever it is fed from. Declared up here because
        the main-board circuits are written before the distribution boards. */
@@ -2882,6 +2926,9 @@
       L.push(csvRow([pn.tag, board.tag, board.name, pn.name, LS.PANEL_TYPES[pn.type] ? LS.PANEL_TYPES[pn.type].name : pn.type,
         dm.kw.toFixed(1), dm.kva.toFixed(1), dm.kvar.toFixed(1), dm.pf, pn.demand, pn.phases, pn.volt, dm.ampHarm.toFixed(1),
         pn.thd === null || pn.thd === undefined || pn.thd === '' ? '' : pn.thd,
+        LC.isThreePhaseWithNeutral(pn) ? 'yes' : (String(pn.phases) === '3' ? 'no (three-pole)' : 'n/a (single-phase)'),
+        pn.imbalance === null || pn.imbalance === undefined || pn.imbalance === '' ? '' : pn.imbalance,
+        pn.peInCable === true ? 'yes' : (pn.peInCable === false ? 'no' : 'not stated'),
         pr ? (pr.kind === 'mcb' ? 'MCB' : 'MCCB') : '',
         pr && num(pr.ir, 0) ? num(pr.ir) : '',
         pr && num(pr.frame, 0) ? num(pr.frame) : '',

@@ -761,7 +761,14 @@ var LC = (function () {
     else if (kind === 'pdb') upTx = get(p, 'tx', item.txId);
     else if (kind === 'pdp') { var up1 = get(p, 'pdb', item.pdbId); if (up1) upTx = get(p, 'tx', up1.txId); }
     else if (kind === 'db') { var up2 = get(p, 'pdp', item.pdpId); if (up2) { var up3 = get(p, 'pdb', up2.pdbId); if (up3) upTx = get(p, 'tx', up3.txId); } }
-    var neut = neutralCurrent(p, sort, upTx);
+    /* The board's own per-phase current, which is the reference the neutral has
+       to be judged against. A board's neutral conductor is sized against the
+       current in one of its phases, not against its largest single circuit —
+       the two differ by the number of circuits, and comparing a summed neutral
+       against one circuit made a correctly-sized neutral look five times
+       overloaded. */
+    var boardPhaseAmp = Math.max(phaseAmp.L1, phaseAmp.L2, phaseAmp.L3);
+    var neut = neutralCurrent(p, sort, upTx, boardPhaseAmp);
     var neutCsa = neutralCsaFor(sort.length && sort[0].cable ? sort[0].cable.csa : null);
     var thdMax = 0, thdPanels = [];
     sort.forEach(function (pn) {
@@ -1053,9 +1060,8 @@ var LC = (function () {
           ' m, which lets ' + e.ia.toFixed(0) + ' A flow — the device takes ' +
           (e.tActual === null ? 'longer than its curve allows' : LC_ms(e.tActual)) +
           ' and the limit is ' + (e.tMax * 1000).toFixed(0) + ' ms. It needs ' +
-          (e.maxLoop === null ? 'a lower loop impedance than the current conductor can give' :
-            'R1 + R2 below ' + e.maxLoop.toFixed(2) + ' Ω — a protective conductor of about ' +
-            peNeededCsa(e) + ' mm² over this route, or a shorter one.'));
+          (e.maxLoop === null ? 'a lower loop impedance than the current conductors can give — ' + peNeededCsa(e) :
+            'R1 + R2 below ' + e.maxLoop.toFixed(2) + ' Ω, which over this route means ' + peNeededCsa(e) + '.'));
         return;
       }
       /* Passing silently is the right default, and so is the test for "closer to
@@ -1183,20 +1189,65 @@ var LC = (function () {
       }
     }
 
+    /* The earthing arrangement against one circuit. Reported per circuit rather
+       than per board because the fault is in the cable: a four-core feeder on a
+       TN-S installation is not a neutral problem at the board, it is a PEN that
+       re-bonds earth to neutral at every downstream point, which is the
+       arrangement the S exists to avoid. */
+    function checkEarthing(p, pn) {
+      var c = neutralCheck(p, pn);
+      if (!c) return;
+      var arr = c.arr;
+      /* The honest form of this check. A four-core three-phase feeder is normal
+         and correct on TN-S: three phases and a neutral, with the protective
+         conductor formed separately or carried alongside in the same duct. The
+         arrangement is only broken when the neutral is doing the PE's job, and
+         the core count alone cannot tell you that — 4 cores plus a separate PE
+         is the same cable as 4 cores that are a PEN. So this asks the question
+         rather than reporting a fault it cannot establish, and it stays at info
+         for the same reason. */
+      if (c.needsNeutral && arr.system === 'TN-S' && c.cores === 4 && !c.peInCable) {
+        add('info', 'panel', pn.id, pn.tag + ' — confirm how the protective conductor is provided',
+          'Four cores to a three-phase circuit carries three phases and a neutral, which is correct for TN-S ' +
+          'provided the protective conductor is formed separately. If this cable\'s fourth core is in fact the ' +
+          'earth conductor, then this feeder is a PEN and the installation is TN-C-S from here down whatever it ' +
+          'is called upstream: the neutral is no longer safe to interrupt, and losing it removes the earth ' +
+          'reference from every board beyond it. Nothing in a cable schedule distinguishes those two cases, so ' +
+          'this is worth confirming against how the feeder is actually installed.',
+          'pe-method', num(pn.kw, 0));
+        return;
+      }
+      /* Three-pole feeder to a machine that needs an earth reference. Not an error
+         — a three-pole motor feeder is correct as built — but it means the
+         circuit contributes nothing to the neutral's loading, and saying so stops
+         someone later treating it as a source of neutral current. */
+      if (!c.needsNeutral && pn.neutral === false) {
+        add('info', 'panel', pn.id, pn.tag + ' is three-pole, so it does not load the neutral',
+          'No neutral conductor, so the third harmonic in this load circulates in the machine rather than ' +
+          'returning along a neutral bar. The neutral current at its board comes from elsewhere — from the ' +
+          'single-phase circuits, or from any three-phase and neutral circuits on it.');
+      }
+    }
+
     /* The neutral. Reported per board, from the declared harmonic content of
        the single-phase circuits on it. */
     function checkNeutral(p, item, kind, st) {
       var n = st.neutral;
-      if (!n || n.thirdAmp <= 0) return;
+      if (!n || (n.thirdAmp <= 0 && n.imbalanceAmp <= 0)) return;
       /* What the neutral would carry with a full-size conductor of the same
          size as the phases. The ampacity comparison uses the phase conductor's
-         rating as a proxy, which is right for a 4-core cable and indicative for
-         a separate one. */
+         rating as a proxy, which is right for a multicore cable and indicative
+         for a separate one. */
       var phaseCsa = st.neutralPhaseCsa;
       if (!(phaseCsa > 0)) return;
       var cab = { csa: phaseCsa, runs: 1, cores: 4, len: 1, method: 'XL-A1', group: 3, ambient: 40, sheathed: true };
       var rated = cableRating(cab).derated;
-      var over = n.amps > rated;
+      /* Imbalance and triplen are both real loads on the conductor and both
+         count against its rating. Previously only the triplen did, which on a
+         TN-S board with no declared harmonics at all reported nothing — and a
+         neutral carrying imbalance is still a neutral carrying current. */
+      var total = n.amps + n.imbalanceAmp;
+      var over = total > rated;
       if (n.blocked && n.ampsIfUnblocked <= rated) {
         /* Nothing to do about it — the transformer is handling it. Saying so is
            more use than a note that repeats the same reassurance on every board,
@@ -1223,28 +1274,37 @@ var LC = (function () {
           'the neutral instead of cancelling, and it carries ' + n.amps.toFixed(0) + ' A against a phase conductor of ' +
           n.maxPhase.toFixed(0) + ' A.';
 
-      add(over ? 'bad' : n.amps > rated * 0.6 ? 'warn' : 'info', kind, item.id,
-        item.tag + ' neutral carries ' + n.amps.toFixed(0) + ' A' + (over ? ' — more than its conductors' : ''),
-        where + ' The neutral is sized here as the same cross-section as the phases (' + phaseCsa +
+      /* Where the load actually is. A board of three-pole motor feeders has a
+         neutral conductor carrying almost nothing, and one of three-phase and
+         neutral circuits full of drives has the opposite problem. The two were
+         previously reported identically, which is how a genuinely overloaded
+         neutral goes unremarked on a real site. */
+      var tp = n.threePole, threeN = n.threePhase.length;
+      var where3p = tp > 0 && threeN > 0
+        ? ' ' + threeN + ' three-phase circuit' + (threeN === 1 ? '' : 's') + ' on this board have a neutral conductor and ' +
+          tp + ' three-pole circuit' + (tp === 1 ? ' has' : 's have') + ' not, so only the first group loads it.'
+        : threeN > 0 && tp === 0
+          ? ' All ' + threeN + ' three-phase circuits on this board carry a neutral, and their triplen currents add in it — ' +
+            'three times the per-phase value, which is why drives and switch-mode loads are the usual cause of an ' +
+            'undersized neutral.'
+          : tp > 0 && threeN === 0
+            ? ' Every three-phase circuit on this board is three-pole, so none of them can put zero-sequence current ' +
+              'into the neutral bar. The conductor is here for the single-phase circuits and for earth reference.'
+            : '';
+
+      add(over ? 'bad' : total > rated * 0.6 ? 'warn' : 'info', kind, item.id,
+        item.tag + ' neutral carries ' + total.toFixed(0) + ' A' +
+        (over ? ' — more than its conductors' : '') +
+        (n.imbalanceAmp > 0 ? ' (third harmonic ' + n.amps.toFixed(0) + ' A, imbalance ' + n.imbalanceAmp.toFixed(0) + ' A)' : ''),
+        where + where3p + ' The neutral is sized here as the same cross-section as the phases (' + phaseCsa +
         ' mm², about ' + rated.toFixed(0) + ' A), which is the convention: the usual reduced-size neutral assumes a balanced ' +
         'load, and a balanced load is exactly what is not present here. ' +
-        n.declared + ' of ' + (n.declared + n.undeclared) + ' single-phase circuits on this board declare harmonic content; ' +
-        'the rest are counted as clean. Third harmonic is taken as 60% of the declared total, which is typical of switch-mode ' +
-        'supplies and not always right — a circuit with a measured spectrum should override it.');
+        n.declared + ' of ' + (n.declared + n.undeclared) + ' circuits on this board declare harmonic content; ' +
+        'the rest are counted as clean, which is the pessimistic direction for a board full of drives. Third harmonic is ' +
+        'taken as 60% of the declared total, typical of switch-mode supplies and not always right — a circuit with a ' +
+        'measured spectrum should override it.');
     }
 
-    /* The protective conductor size that would meet the requirement over this
-       route, found from the same resistance relation rather than guessed. */
-    function peNeededCsa(e) {
-      var target = e.maxLoop * e.loop.runs;      // back to one run
-      if (!(target > 0)) return null;
-      /* R2 must come down to target minus R1, which is fixed by the phase core */
-      var r2max = target - e.loop.r1 * e.loop.runs;
-      if (!(r2max > 0)) return '— (the phase conductor alone is too long)';
-      var csa = (22.5 * 1.15 * e.loop.km) / r2max;
-      var c = D.CSA.filter(function (v) { return v <= csa * 1.25; }).pop();
-      return c || 'beyond the largest listed size';
-    }
 
     function checkProt(p, item, kind, loadA, cableA, faultKA) {
       var d = item.prot;
@@ -1355,6 +1415,7 @@ var LC = (function () {
       checkImpossiblePf(p, pn);
       checkEarthFault(p, pn, 'panel');
       checkStarting(p, pn, 'panel');
+      checkEarthing(p, pn);
     });
 
     /* Coordination across a supply chain: the device downstream must be able to
@@ -1448,6 +1509,34 @@ var LC = (function () {
     });
 
     /* topology */
+    /* The vector group is not a nameplate detail here. Whether the low-voltage
+       winding has a delta decides whether third harmonic can reach the incoming
+       neutral at all — the difference between a neutral carrying hundreds of
+       amps and carrying none. The app assumes Dyn11 when nothing is declared,
+       which quietly makes every neutral look protected, and that assumption is
+       not free to make on someone's installation. */
+    p.txs.forEach(function (t) {
+      if (t.vecGroup) return;
+      /* Only worth asking where there is something for it to protect. */
+      var feeds = p.pdbs.filter(function (b) { return b.txId === t.id; }).length;
+      if (!feeds) return;
+      var nThreePN = 0;
+      p.panels.forEach(function (pn) {
+        var ch = chain(p, pn);
+        if (!ch.tx || ch.tx.id !== t.id) return;
+        if (LC.isThreePhaseWithNeutral(pn)) nThreePN++;
+      });
+      if (!nThreePN) return;
+      add('warn', 'tx', t.id, t.tag + ' vector group not stated, and ' + nThreePN + ' three-phase and neutral circuits depend on it',
+        'Assumed Dyn11, which puts a delta on the low-voltage winding and keeps zero-sequence current out of ' +
+        'the incoming neutral. Nothing on the project says so. A star-star group instead would let the third ' +
+        'harmonic through, the triplens from every three-phase and neutral circuit would add in the neutral at ' +
+        'three times the per-phase value, and the neutral conductors on the boards above would need to be ' +
+        'larger than the phase conductors to carry it. It costs the same either way on the order — a delta ' +
+        'here is the cheapest available fix and the specification should say so.',
+        'vector-group', nThreePN, 'circuits');
+    });
+
     p.pdps.forEach(function (b) { if (!b.pdbId) add('bad', 'pdp', b.id, b.tag + ' orphaned', 'No parent main board selected.'); });
     p.dbs.forEach(function (b) { if (!b.pdpId) add('bad', 'db', b.id, b.tag + ' orphaned', 'No parent distribution board selected.'); });
     /* a panel on a sub-board must also sit on that board's PDP, otherwise the
@@ -1558,30 +1647,87 @@ function clearingTimeAt(prot, multiple) {
      neutral the board would be given. Nothing is assumed: a circuit that
      declares no THD contributes no third harmonic, because guessing would put a
      number on the schedule that nobody measured. */
-  function neutralCurrent(p, panels, transformer) {
-    var sum = { fundamental: 0, third: 0, perPhase: [0, 0, 0] };
+  /* Whether a circuit's neutral conductor comes back to the board.
+
+     This is not a formality. On a three-pole motor feeder there is no neutral
+     conductor, so no zero-sequence current can return — the third harmonic
+     circulates in the machine and never touches the board's neutral bar. On a
+     three-phase-and-neutral feeder the triplens add and the neutral carries three
+     times the per-phase value. The two cases differ by more than an order of
+     magnitude in the neutral's loading, and a schedule that treats them alike is
+     either alarming about every motor or silent about every drive.
+
+     Declaration wins. Failing that, a four-core feeder to a three-phase circuit
+     has a neutral in it, which is the normal case for a TN-S installation where
+     the equipment needs an earth reference. Three cores means three poles, and
+     for a machine that is the usual answer. */
+  function isThreePhaseWithNeutral(pn) {
+    return String(pn.phases) === '3' && hasNeutralConductor(pn);
+  }
+
+  function hasNeutralConductor(pn) {
+    if (pn.neutral !== undefined && pn.neutral !== null && pn.neutral !== '') return !!pn.neutral;
+    var cores = num(pn.cable && pn.cable.cores, 4);
+    return cores >= 4;
+  }
+
+  function neutralCurrent(p, panels, transformer, boardPhaseAmp) {
+    var sum = { fundamental: 0, third: 0, imbalance: 0, perPhase: [0, 0, 0],
+                threePhase: [], threePole: 0 };
     var declared = 0, undeclared = 0;
     var blocks = !transformer || D.blocksTriplen(transformer.vecGroup || 'Dyn11');
 
+    var supplySystem = String(p.design.supplySystem || 'TN-S');
+
     panels.forEach(function (pn) {
       var d = panelDemand(p, pn);
-      /* Only single-phase circuits put a third harmonic into this board's
-         neutral. A three-phase circuit's own triplen content returns through
-         its local neutral, not through the board's. */
-      if (String(pn.phases) !== '1') return;
-      var ph = pn.phase || 'L1';
-      var idx = ph === 'L2' ? 1 : ph === 'L3' ? 2 : 0;
-      sum.fundamental += d.amp;
-      sum.perPhase[idx] += d.amp;
+      var onePhase = String(pn.phases) === '1';
+
+      /* Whether this circuit's neutral comes back to the board at all.
+         A three-phase circuit with no neutral conductor — a three-pole motor
+         feeder, most of them — has no path for zero-sequence current, so its
+         triplen content circulates in the motor windings and never appears on
+         any neutral bar. Treating such a circuit as if it loaded the board
+         neutral is the error this check exists to avoid. */
+      var hasNeutral = onePhase ? true : hasNeutralConductor(pn);
+      if (!hasNeutral) { sum.threePole++; return; }
+
+      if (onePhase) {
+        var ph = pn.phase || 'L1';
+        var idx = ph === 'L2' ? 1 : ph === 'L3' ? 2 : 0;
+        sum.fundamental += d.amp;
+        sum.perPhase[idx] += d.amp;
+      } else {
+        /* A three-phase load is balanced, so its fundamental contributes nothing
+           to the neutral. The imbalance does, but a balanced design is the
+           assumption being made here and it is stated as such rather than
+           pretended to be measured. */
+        sum.threePhase.push(d.amp);
+        sum.imbalance += d.amp * num(pn.imbalance, 0) / 100;
+      }
+
       if (d.thd === null) { undeclared++; return; }
       declared++;
+
       /* A stated total harmonic distortion does not say how much of it is third
          harmonic, which is the part that adds in the neutral. For the switched
          supplies that produce it — LED drivers, SMPS, VFDs — third harmonic is
          the largest single component, so it is taken at 60% of the total and the
          assumption is stated wherever the number is shown. A circuit that
-         declares its own spectrum should override this. */
-      sum.third += d.amp * (d.thd / 100) * 0.6;
+         declares its own spectrum should override this.
+
+         What the 60% is a fraction OF differs between the two cases, and getting
+         it wrong is a factor of three:
+
+         On a single-phase circuit the current that returns is that circuit's own
+         triplen content.
+
+         On a balanced three-phase circuit the triplens are in phase in all three
+         conductors, so they add: the neutral carries three times the per-phase
+         value. That is the same 3× the code applies when summing single-phase
+         circuits across three phases, and it is why a 3P+N feeder full of drives
+         is the classic overloaded-neutral case. */
+      sum.third += d.amp * (d.thd / 100) * 0.6 * (onePhase ? 1 : 3);
     });
 
     /* Triplen harmonics add; that is the whole point. And a delta on the LV
@@ -1594,19 +1740,45 @@ function clearingTimeAt(prot, multiple) {
        and a Dyn11 cost the same on the order and the difference between them is
        the whole neutral loading. */
     var neutral = blocks ? 0 : 3 * sum.third;
-    var maxPhase = Math.max(sum.perPhase[0], sum.perPhase[1], sum.perPhase[2]) || 0;
+
+    /* The phase reference the neutral is judged against. It used to be the
+       heaviest single-phase circuit alone, which on a board of three-phase
+       circuits is zero — so a neutral carrying hundreds of amps was being
+       compared against nothing and reported as a percentage of itself. The
+       heaviest phase conductor is the right reference: on a three-phase board
+       that is the phase current of its largest circuit. */
+    var maxSingle = Math.max(sum.perPhase[0], sum.perPhase[1], sum.perPhase[2]) || 0;
+    var maxThree = sum.threePhase.length ? Math.max.apply(null, sum.threePhase) : 0;
+    /* Given, not derived: the board's heaviest phase. Falling back to the
+       heaviest single circuit is wrong by the number of circuits, but it is
+       better than nothing when the function is called on its own. */
+    var maxPhase = num(boardPhaseAmp, 0) > 0 ? num(boardPhaseAmp, 0) : Math.max(maxSingle, maxThree);
+    var phaseRefIsBoard = num(boardPhaseAmp, 0) > 0;
     return {
       /* what the neutral carries, and what it would carry if the transformer let
          the triplen through — the difference is what specifying a delta buys */
       amps: neutral,
       ampsIfUnblocked: 3 * sum.third,
       thirdAmp: sum.third,
+      /* The imbalance contribution from three-phase circuits, which is what a
+         neutral carries on a TN-S supply from loads that are supposed to be
+         balanced. Reported separately because it is an assumption about the
+         design rather than a measurement of the load. */
+      imbalanceAmp: sum.imbalance,
+      imbalance: sum.imbalance,
       fundamental: sum.fundamental,
       maxPhase: maxPhase,
+      /* whether that reference is the board's heaviest phase or a proxy for it —
+         a summary should not present the two as the same number */
+      phaseRefIsBoard: phaseRefIsBoard,
       perPhase: sum.perPhase,
+      threePhase: sum.threePhase,
+      /* three-pole circuits on this board: no neutral path at all */
+      threePole: sum.threePole,
       blocked: blocks,
       declared: declared,
-      undeclared: undeclared
+      undeclared: undeclared,
+      supplySystem: supplySystem
     };
   }
 
@@ -1881,6 +2053,36 @@ function clearingTimeAt(prot, multiple) {
     return { r1: r1, r2: r2, total: r1 + r2, peCsa: peCsa, runs: runs, km: km };
   }
 
+  /* The protective conductor size that would meet the requirement over this
+     route, found from the same resistance relation rather than guessed. */
+  function peNeededCsa(e) {
+    var target = e.maxLoop * e.loop.runs;      // back to one run
+    if (!(target > 0)) return null;
+    /* R2 must come down to target minus R1, which is fixed by the phase core */
+    var r2max = target - e.loop.r1 * e.loop.runs;
+
+    /* Returns a whole clause, not a noun phrase. Spliced into "a protective
+       conductor of about … over this route" it produced "a protective conductor
+       of about the minimum 1.5 mm² is already all this route allows", which
+       reads as advice to fit a *smaller* conductor to a loop that needs a lower
+       one. The minimum is a floor and never the remedy: where it is all the
+       route allows, the route is the answer. */
+    if (!(r2max > 0)) {
+      return 'the phase conductor alone uses up the allowance, so this needs a shorter route or conductors in parallel';
+    }
+    var csa = (22.5 * 1.15 * e.loop.km) / r2max;
+    var min = D.peMinCsa(num(e.loop.csa, 0) || 1.5);
+    if (csa >= (D.CSA[D.CSA.length - 1] || 400) * 1.25) {
+      return 'no listed conductor size meets it, so this needs a shorter route or conductors in parallel';
+    }
+    if (csa < min * 1.25) {
+      return 'the ' + min + ' mm² minimum is already all this route allows, so the route itself has to change — shorter, or conductors in parallel';
+    }
+    var c = D.CSA.filter(function (v) { return v <= csa * 1.25; }).pop();
+    if (!c) return 'no listed conductor size meets it, so this needs a shorter route or conductors in parallel';
+    return 'a protective conductor of about ' + c + ' mm² over this route';
+  }
+
   /* The multiple of the setting at which a device clears in exactly `t` seconds,
      by bisection on the curve — the inverse of clearingTimeAt().
 
@@ -1948,6 +2150,103 @@ function clearingTimeAt(prot, multiple) {
       pass: tActual !== null && tActual <= tMax,
       /* the device cannot clear this fast however good the loop is */
       unachievable: mNeeded === null
+    };
+  }
+
+/* ====================================================== earthing arrangements ==
+     The supply system is not a label. It decides three things that change real
+     numbers, and getting it wrong produces a design that passes the checks and
+     still will not work.
+
+     **The loop.** TN-S and TN-C-S both return the earth fault through the
+     protective conductor, but TN-C-S shares the neutral and the protective
+     conductor as one PEN over part of the run, so its loop impedance is lower
+     for the length that is shared. TN-S runs them separately throughout, which
+     gives a higher loop and the stricter requirement in practice. TT returns
+     through the earth electrode and cannot be checked without its resistance.
+     IT has no earthed source point, so a single fault does not raise the
+     voltage on healthy metalwork — and disconnection must be by RCD.
+
+     **The neutral.** On TN-S the neutral is bonded to earth at the source and
+     nowhere else. It must not be interrupted by a single-pole isolator, it must
+     not be re-bonded to earth downstream, and its voltage to earth is zero only
+     because it is earthed at that one point. On TN-C-S the PEN does the same
+     job for part of the run, so the rules there are about the PEN rather than
+     about a separate neutral.
+
+     **The conductors.** TN-S needs three phases, a neutral and a protective
+     conductor, and the last two are separate for the whole installation. A
+     three-phase-and-neutral feeder therefore needs five cores — four is a
+     three-phase-and-neutral feeder with a bare PEN, which is TN-C-S and not
+     TN-S. That is the difference between a cable that is correct and one that
+     quietly converts the arrangement downstream of the first board. */
+  function supplyArrangement(p) {
+    var sys = String((p.design && p.design.supplySystem) || 'TN-S');
+    if (sys.indexOf('TN-S') === 0) {
+      return {
+        system: 'TN-S',
+        /* the neutral is a live conductor for its whole length and is earthed at
+           one point only */
+        neutralSeparate: true, pen: false,
+        coresFor3PN: 5,      // L1 L2 L3 N PE, all separate
+        earthedAt: 'source only',
+        note: 'TN-S. The neutral is earthed at the source and stays a separate conductor throughout. ' +
+              'It must not be interrupted by a single-pole switch, re-bonded to earth downstream, or used ' +
+              'as a protective conductor, and the voltage to earth of the installation metalwork depends ' +
+              'on that single earth connection staying intact.'
+      };
+    }
+    if (sys.indexOf('TN-C-S') === 0) {
+      return {
+        system: 'TN-C-S',
+        neutralSeparate: false, pen: true,
+        /* 4 cores carries a PEN, which is this arrangement rather than TN-S */
+        coresFor3PN: 4,
+        earthedAt: 'source, then continuously exposed metalwork',
+        note: 'TN-C-S. The neutral and protective conductors are combined as a PEN between the source and ' +
+              'the first RCD, and separated downstream of it. A three-phase-and-neutral feeder therefore ' +
+              'needs four cores, not five — but every PEN downstream of the source is also a neutral, and ' +
+              'the arrangement only holds while that PEN is unbroken.'
+      };
+    }
+    if (sys.indexOf('TT') === 0) {
+      return {
+        system: 'TT',
+        neutralSeparate: true, pen: false,
+        coresFor3PN: 5,
+        earthedAt: 'the installation\'s own electrode',
+        note: 'TT. The installation makes its own earth connection and the fault returns through it. The ' +
+              'loop impedance depends on the electrode resistance, which is not a design choice and has to ' +
+              'be measured — and an RCD is required, because that resistance can be high enough that an ' +
+              'overcurrent device will not clear a 50 V touch voltage.'
+      };
+    }
+    return {
+      system: sys || 'IT',
+      neutralSeparate: true, pen: false,
+      coresFor3PN: 5,
+      earthedAt: 'nothing — the system is unearthed',
+      note: 'IT. There is no earthed source point, so a single fault does not raise the voltage on healthy ' +
+            'metalwork. Disconnection cannot be by overcurrent device: an RCD is the only thing that clears a ' +
+            'first fault, and the second fault is the one that matters.'
+    };
+  }
+
+  /* What the arrangement demands of one feeder, against what the cable has. */
+  function neutralCheck(p, pn) {
+    var arr = supplyArrangement(p);
+    if (String(pn.phases) !== '3') return null;
+    var cores = num(pn.cable && pn.cable.cores, 4);
+    var needsNeutral = hasNeutralConductor(pn);
+    return {
+      arr: arr, cores: cores, needsNeutral: needsNeutral,
+      /* Declared, not inferred: whether this cable also carries the protective
+         conductor. Blank is the normal state and says nothing either way. */
+      peInCable: pn.peInCable === true,
+      /* A cable carrying the PE in a fourth core alongside three phases and no
+         neutral is a PEN, and that is TN-C-S on this feeder whatever the
+         installation is called elsewhere. */
+      pen: cores >= 5 && !needsNeutral
     };
   }
 
@@ -2154,6 +2453,8 @@ function selectivityBand(s) {
     if (key === 'start-dip') return 'motor starting that dips its board';
     if (key === 'start-unstated') return 'motor with no starting method stated';
     if (key === 'start-inferred') return 'starting method taken from the machine name';
+    if (key === 'pe-method') return 'three-phase feeder whose protective conductor method is not stated';
+    if (key === 'vector-group') return 'transformer whose vector group is not stated';
     if (key === 'withstand') return 'cable that cannot survive the fault';
   if (key === 'power-factor') return 'board below the power factor limit';
   if (key === 'harmonics') return 'circuit carrying harmonic content';
@@ -2860,6 +3161,8 @@ function selectivityBand(s) {
     groupFindings, worstLevel, groupTitle, boardTagOf, MIN_GROUP, MAX_LIST,
     clearingTimeAt, selectivity, selectivityMessage, selectivityBand, selectivityLadder, reactive,
     earthLoop, disconnectionMultipleAt, earthFaultCheck, neutralCurrent, neutralCsaFor,
+    hasNeutralConductor, isThreePhaseWithNeutral, supplyArrangement, neutralCheck,
+    peNeededCsa,
     startMethod, startingCurrentA, startingCheck, sourceImpedanceAt, curveInstantaneousMultiple, torqueNeeded,
     isMotorLoad,
     SELECTIVITY_STEPS,

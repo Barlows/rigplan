@@ -257,6 +257,11 @@ the mapping is right, because the two numbers are arrived at independently.
    unstated and reported as unchecked. The importer previously defaulted
    everything to DOL, which put a confirmed-looking 7 × inrush on 89 circuits
    nobody had checked. That is worse than a blank, so it is gone.
+6. The supply is **TN-S** and all 97 circuits are **three-phase and neutral** —
+   both confirmed, not inferred. `peInCable` is set to false: the protective
+   conductor is formed separately, so the fourth core is the neutral and not a
+   PEN. The vector group is still unstated on both transformers, which is the
+   one thing here the schedule cannot answer for itself.
 
 The cable columns in that sheet are headed *"Cable & Installation (to be
 completed)"*, so every circuit arrives without a feeder cable. The audit reports
@@ -340,6 +345,10 @@ And the motor checks, each a different fix so they are reported separately:
 - **Dip on its board** — advisory, because it affects every other circuit there.
 - **No starting method stated**, where a machine is declared and the method was
   inferred from its name. Reported as unchecked rather than assumed.
+- **Vector group not stated**, where three-phase and neutral circuits below it
+  depend on whether the LV winding has a delta. Names the circuits affected.
+- **Protective conductor method not stated**, on a three-phase feeder — 4 cores
+  is three phases and a neutral *or* a PEN, and only the installation says which.
 
 #### Selectivity, from curves
 
@@ -564,11 +573,32 @@ The conductor that carries most of the risk in a modern installation, and the on
 a load schedule never mentions.
 
 In a balanced three-phase load the fundamental currents are 120° apart and cancel
-in the neutral. **The third harmonic does not**: it is zero-sequence, in phase in
-all three phases, so it arrives as an arithmetic sum rather than cancelling. A
-board whose single-phase circuits each carry a 20 % third harmonic puts roughly
-60 % of a phase conductor's worth into the neutral, and a board of LED drivers can
-exceed the phase current outright.
+in the neutral. **The triplens do not.** A balanced set's vector sum is zero
+unless the harmonic order is a multiple of three, so the 3rd, 9th and 15th land
+in phase in all three conductors and add:
+
+| Harmonic | 1 | 3 | 5 | 7 | 9 | 15 |
+|---|---|---|---|---|---|---|
+| Sum across three phases | cancels | **adds ×3** | cancels | cancels | **adds ×3** | **adds ×3** |
+
+So a **three-phase and neutral** circuit puts **three times** its per-phase triplen
+current into the neutral — the same contribution as three single-phase circuits of
+that current, one on each phase. That is why 3P+N feeders full of drives and
+switch-mode supplies are the classic overloaded-neutral case, and it is the reason
+the usual reduced-size neutral cannot be used: the reduction assumes a balanced
+load, and a balanced load is exactly what is not present.
+
+**A three-pole feeder contributes nothing.** With no neutral conductor there is no
+path for zero-sequence current, so the third harmonic circulates in the machine and
+never touches a neutral bar. The app distinguishes the two, because the difference
+is more than an order of magnitude and a schedule that treats them alike is either
+alarming about every motor or silent about every drive. Which applies comes from
+`Neutral` in the properties panel, falling back to the core count — four cores
+carries a neutral, three is three poles.
+
+**The reference the neutral is judged against is the board's phase current**, not
+its largest single circuit. Comparing a summed neutral against one circuit made a
+correctly-sized neutral look five times overloaded.
 
 **The transformer's vector group is the cheapest fix available**, and it costs
 nothing. A delta on the LV winding blocks zero-sequence current from reaching the
@@ -579,18 +609,44 @@ incoming neutral at all — it circulates in the delta instead. So:
 | `Dyn11`, `Dyn1`, `Yd11` | nothing — the delta blocks it |
 | `Yyn11`, `Yyn0` | three times the board's third harmonic |
 
-On the sample lighting board in the tests — 18 × 2.5 mm² LED circuits at 20 % THD
-— that is the difference between **0 A and 3.5 A in a 2.5 mm² neutral**, the
-latter being 108 % of a phase conductor.
-
-Where the delta is doing the work, the app says so and says what it is preventing,
-because that belongs on the specification rather than in a note someone
-re-reads in ten years. Specifying star-star there would need a larger neutral and
-the same cost would buy nothing.
+On the real project — 97 three-phase and neutral circuits, and roughly 3,500 kW of
+them on drives and power electronics — the vector group is what decides the whole
+question, and it is **not stated on either transformer**. The app assumes `Dyn11`
+and now says so, naming the circuits that depend on it, because that assumption is
+not free to make on someone's installation. Had it been `YNyn0`, the neutral on
+PDP7-2 would carry **665 A against a 139 A phase conductor — 478 % of it** — and
+two other boards would exceed 200 %.
 
 Third harmonic is taken as 60 % of the declared total distortion — typical of
 switch-mode supplies, and not always right. A circuit with a measured spectrum
 should override it, and the finding says so.
+
+### Earthing arrangement — TN-S
+
+The supply system is not a label. It decides the conductors, the point the
+installation is earthed at, and what the neutral may safely be asked to do.
+
+| | Earthed at | Neutral | 3P+N feeder |
+|---|---|---|---|
+| **TN-S** | the source, and nowhere else | separate conductor throughout | 5 cores, or 4 + separate PE |
+| **TN-C-S** | the source, then continuous metalwork | combined as a PEN, separated after the first RCD | 4 cores |
+| **TT** | the installation's own electrode | separate | 5 cores |
+| **IT** | nothing | separate | 5 cores; RCD only |
+
+Two consequences worth stating plainly:
+
+**On TN-S the neutral must never be interrupted or re-bonded.** It is a live
+conductor for its whole length, and its earth connection exists at exactly one
+point. A single-pole isolator in it, or a downstream earth bond, converts the
+arrangement into something else — and because the neutral is then also carrying
+return current, losing it removes the earth reference from every board beyond it.
+
+**A four-core three-phase feeder is normal on TN-S** and the app does not call it a
+fault: it is three phases and a neutral, with the PE formed separately. The core
+count cannot tell that from a four-core feeder whose fourth conductor *is* the
+earth conductor — which is TN-C-S from that board down whatever it is called
+upstream. So the app asks which it is (`PE in this cable`) rather than asserting,
+and raises it at info, grouped.
 
 ### Motor starting
 
@@ -906,11 +962,12 @@ test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        36 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
-test/protection-test.html 260 checks on fault levels, device proposals, cable
+test/protection-test.html 312 checks on fault levels, device proposals, cable
                           thermal withstand, selectivity from trip curves, earth
-                          fault looping, the neutral conductor, reactive power,
-                          harmonics, motor starting, current from apparent power
-                          and the protection audit
+                          fault looping, the neutral conductor on 3P+N feeders,
+                          the earthing arrangement, reactive power, harmonics,
+                          motor starting, current from apparent power and the
+                          protection audit
 test/underlay-test.html   image/DXF/DWG loading and scale handling
 ```
 

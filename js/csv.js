@@ -190,6 +190,8 @@
     ['icu', ['breakingcapacityka', 'breakingcapacity', 'icu', 'kic', 'faultcapacity', 'ikc', 'breakingcapacitykic']],
     ['trip', ['tripunit', 'trip', 'relay', 'overload', 'trippingunit', 'adjustmentrange']],
     ['start', ['startingmethod', 'startmethod', 'starter', 'starting', 'start', 'dol', 'dolstart', 'drive', 'motors']],
+    ['neutral', ['neutralcarried', 'neutralconductor', 'carriesneutral', 'neutralcarriedback', 'neutralpresent', 'hasneutral']],
+    ['imbalance', ['imbalance', 'phaseimbalance', 'imbalancepercent', 'unbalance']],
     ['loadTorque', ['loadtorque', 'loadorquetype', 'torquecharacteristic', 'torque', 'loadcharacteristic',
                    'loaddescription', 'loadtype', 'momentofinertia']],
     ['simultaneousStart', ['startingtogether', 'simultaneousstart', 'startsogether', 'startingwith',
@@ -437,6 +439,19 @@
     return null;
   }
   CSVC.loadTorque = loadTorque;
+
+  /* Whether a three-phase circuit carries its neutral back to the board. From
+     "3P+N", "3PN", "4 core", "with neutral". A three-pole feeder must read as no:
+     it cannot return zero-sequence current, and treating it as if it could is
+     what puts a phantom load on a neutral. */
+  function neutral(v) {
+    if (!v) return null;
+    var s = String(v).toLowerCase().trim();
+    if (/^(no|none|n\b|none|3p\b|three\s*pole|3\s*pole|3ph?\s*only)\b/.test(s)) return false;
+    if (/3p\s*\+\s*n|3pn|3\s*ph\s*\+\s*n|with\s*neutral|neutral\s*carried|4\s*core|four\s*core|yes|^y\b/.test(s)) return true;
+    return null;
+  }
+  CSVC.neutral = neutral;
 
   /* Cable installation method from "XL-A1", "A1", "C", "clip". Not everything
      maps; an unknown method is left alone so the app's own default applies

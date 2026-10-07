@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=165"></script>
-<script src="../js/calc.js?v=165"></script>
+<script src="../js/data.js?v=188"></script>
+<script src="../js/calc.js?v=188"></script>
 <script>
 (function () {
   var results = [];
@@ -553,7 +553,13 @@
   var efFnd = LC.audit(ep.p).filter(function (x) { return /loop too high/.test(x.title); });
   check('the audit says so', efFnd.length > 0, true);
   check('naming the loop resistance it found', /R1 \+ R2 is/.test(efFnd[0].detail), true);
-  check('and stating the PE size that would fix it', /mm² over this route/.test(efFnd[0].detail), true);
+  /* 150 m on 2.5 mm² cannot be fixed by any protective conductor — the phase
+     conductor alone exceeds the allowance — so the advice names the route, not a
+     size. It used to print a bare number here, which read as "fit a smaller one". */
+  check('and saying what would actually fix it, which is the route not a conductor',
+    /shorter route|parallel/.test(efFnd[0].detail), true);
+  check('never naming a conductor size where none would work',
+    /about [0-9.]+ mm²/.test(efFnd[0].detail), false);
 
   /* A bigger protective conductor is the usual fix and must be recognised as
      one, rather than only increasing the phase conductor. */
@@ -925,6 +931,215 @@
   check('and one row when grouped', dg.length, 1);
   check('counting all five', dg[0].title.slice(0, 2), '5 ');
   check('and naming them motors that dip their board', /dip/.test(dg[0].title), true);
+
+  /* ---------------------------------------------------- 3P+N and TN-S -------
+     The neutral conductor, which the earlier model got structurally wrong: it
+     counted only single-phase circuits, so on a board of three-phase and neutral
+     circuits it reported zero — and this installation is 97 three-phase and
+     neutral circuits. */
+
+  /* Triplen harmonics add in a three-phase neutral; nothing else does. Checked
+     against the identity itself rather than a remembered number: the vector sum
+     of a balanced set is zero unless the harmonic order is a multiple of 3. */
+  (function () {
+    function sumOf(h) {
+      var re = 0, im = 0;
+      for (var k = 0; k < 3; k++) {
+        re += Math.cos(-2 * Math.PI * k * h / 3);
+        im += Math.sin(-2 * Math.PI * k * h / 3);
+      }
+      return Math.sqrt(re * re + im * im);
+    }
+    check('the fundamental cancels across the three phases', Math.round(sumOf(1) * 1000), 0);
+    check('the fifth cancels', Math.round(sumOf(5) * 1000), 0);
+    check('the seventh cancels', Math.round(sumOf(7) * 1000), 0);
+    check('the third does NOT — it adds at three times the per-phase value', Math.round(sumOf(3)), 3);
+    check('and the ninth, because it is a triplen too', Math.round(sumOf(9)), 3);
+    check('while the eleventh cancels', Math.round(sumOf(11) * 1000), 0);
+  })();
+
+  /* A three-phase and neutral circuit contributes three times what a single-phase
+     one of the same current contributes, because its triplens are in phase. */
+  var nn = site({ kva: 2500 });
+  var oneP = motorAt(nn.p, nn.pdp, 100, 0.9, { isMotor: false, thd: 40, phase: 'L1' });
+  oneP.phases = '1'; oneP.volt = 400; oneP.neutral = true;
+  var threePN = motorAt(nn.p, nn.pdp, 100, 0.9, { thd: 40, neutral: true });
+  threePN.phases = '3';
+  LC.protAll(nn.p, {});
+  var nStat = LC.neutralCurrent(nn.p, [oneP], null, 0);
+  var nStat3 = LC.neutralCurrent(nn.p, [threePN], null, 0);
+  check('a single-phase circuit puts its own triplen in the neutral',
+    Math.abs(nStat.thirdAmp - LC.panelDemand(nn.p, oneP).amp * 0.40 * 0.6) < 0.01, true);
+  check('a three-phase and neutral circuit puts three times as much',
+    Math.abs(nStat3.thirdAmp - 3 * LC.panelDemand(nn.p, threePN).amp * 0.40 * 0.6) < 0.01, true);
+  /* Compared per amp, not per kW: the same kW is a different current at 1-phase
+     and 3-phase (a factor of √3), so a raw ratio of the two would read √3×3 and
+     look like a bug. The engine applies the 3× to the current, which is the
+     quantity the triplens are a fraction of. */
+  check('which is three times the per-amp contribution, not three times the kW',
+    Math.abs(nStat3.thirdAmp / LC.panelDemand(nn.p, threePN).amp /
+      (nStat.thirdAmp / LC.panelDemand(nn.p, oneP).amp) - 3) < 0.01, true);
+  check('the two circuits really do carry different currents — that is the √3',
+    Math.abs(LC.panelDemand(nn.p, oneP).amp / LC.panelDemand(nn.p, threePN).amp - Math.sqrt(3)) < 0.01, true);
+
+  /* A three-pole feeder cannot contribute at all. No neutral conductor means no
+     path for zero-sequence current, so the third harmonic circulates in the
+     machine and never reaches a neutral bar. */
+  var tp = site({ kva: 2500 });
+  var pole = motorAt(tp.p, tp.pdp, 100, 0.9, { thd: 40, neutral: false });
+  pole.phases = '3';
+  LC.protAll(tp.p, {});
+  var nPole = LC.neutralCurrent(tp.p, [pole], null, 0);
+  check('a three-pole circuit puts nothing in the neutral', nPole.thirdAmp, 0);
+  check('and is counted as one', nPole.threePole, 1);
+  check('so the difference from a three-phase and neutral feeder is the whole story',
+    LC.neutralCurrent(tp.p, [motorAt(tp.p, tp.pdp, 100, 0.9, { thd: 40, neutral: true })], null, 0).thirdAmp > 0, true);
+
+  /* The core count decides it when nothing is declared — four cores carries a
+     neutral, three is three poles. */
+  check('four cores means a neutral is carried back', LC.hasNeutralConductor({ cable: { cores: 4 } }), true);
+  check('three cores means three poles', LC.hasNeutralConductor({ cable: { cores: 3 } }), false);
+  check('five cores carries both a neutral and a PE', LC.hasNeutralConductor({ cable: { cores: 5 } }), true);
+  check('and a declaration overrides the core count',
+    LC.hasNeutralConductor({ neutral: true, cable: { cores: 3 } }), true);
+  check('in either direction', LC.hasNeutralConductor({ neutral: false, cable: { cores: 5 } }), false);
+  check('a single-phase circuit always has one', LC.hasNeutralConductor({ phases: '1' }), true);
+
+  /* The board's own phase current is the reference, not its largest circuit.
+     Comparing a summed neutral against one circuit made a correctly-sized
+     neutral look five times oversized. */
+  var br = site({ kva: 2500 });
+  var acc = 0;
+  for (var q = 0; q < 8; q++) {
+    var c = motorAt(br.p, br.pdp, 60, 0.9, { thd: 45, neutral: true });
+    c.phases = '3';
+    acc += LC.panelDemand(br.p, c).amp;
+  }
+  LC.protAll(br.p, {});
+  var stR = LC.boardStats(br.p, br.pdp, 'pdp');
+  var stR2 = LC.neutralCurrent(br.p, stR.panels, br.tx, LC.boardStats(br.p, br.pdp, 'pdp').neutral.maxPhase);
+  check('the reference is the board phase current, not one circuit',
+    stR.neutral.maxPhase > acc / 8 * 1.5, true);
+  check('so the neutral is judged against something it shares a conductor with',
+    stR.neutral.phaseRefIsBoard, true);
+
+  /* TN-S is not a label. It decides the conductors, the earthed point, and what
+     the neutral may be asked to do. */
+  var arrTN = LC.supplyArrangement({ design: { supplySystem: 'TN-S' } });
+  check('TN-S keeps the neutral and the protective conductor separate', arrTN.pen, false);
+  check('TN-S earths at one point only', arrTN.earthedAt, 'source only');
+  check('and a three-phase and neutral feeder shares a five-core cable', arrTN.coresFor3PN, 5);
+  var arrC = LC.supplyArrangement({ design: { supplySystem: 'TN-C-S' } });
+  check('TN-C-S combines them as a PEN', arrC.pen, true);
+  check('so four cores carries it', arrC.coresFor3PN, 4);
+  var arrTT = LC.supplyArrangement({ design: { supplySystem: 'TT' } });
+  check('TT returns through its own electrode', arrTT.earthedAt, 'the installation\'s own electrode');
+  check('and an IT system has no earthed source point at all',
+    LC.supplyArrangement({ design: { supplySystem: 'IT' } }).earthedAt, 'nothing — the system is unearthed');
+  check('an undeclared arrangement falls back to TN-S rather than to nothing',
+    LC.supplyArrangement({ design: {} }).system, 'TN-S');
+
+  /* A four-core three-phase feeder is normal on TN-S and must not be called a
+     fault. The core count cannot tell a neutral from a PEN, so the app asks
+     rather than asserts — which is why this is info and not bad. */
+  var eh = site({ kva: 2500 });
+  var four = motorAt(eh.p, eh.pdp, 50, 0.9, {});
+  four.phases = '3'; four.neutral = true; four.cable.cores = 4;
+  LC.protAll(eh.p, {});
+  var ehF = LC.audit(eh.p).filter(function (x) { return /protective conductor is provided/.test(x.title); });
+  check('a four-core three-phase feeder is raised, not condemned', ehF.length, 1);
+  check('and only as a question', ehF[0].level, 'info');
+  check('no error is raised for it',
+    LC.audit(eh.p).filter(function (x) { return x.level === 'bad'; }).length, 0);
+  check('declaring the PE is in the cable settles it', (function () {
+    var s2 = site({ kva: 2500 });
+    var c2 = motorAt(s2.p, s2.pdp, 50, 0.9, { peInCable: true });
+    c2.phases = '3'; c2.neutral = true; c2.cable.cores = 4;
+    LC.protAll(s2.p, {});
+    return LC.audit(s2.p).filter(function (x) { return /protective conductor is provided/.test(x.title); }).length;
+  })(), 0);
+
+  /* An undeclared vector group decides whether any of this matters. Dyn11 is
+     assumed, which makes every neutral look protected, and that is not free to
+     assume on someone's installation. */
+  var vg = site({ kva: 2500 });
+  var vpn = motorAt(vg.p, vg.pdp, 60, 0.9, { thd: 45, neutral: true });
+  vpn.phases = '3';
+  vg.tx.vecGroup = null;
+  LC.protAll(vg.p, {});
+  var vgF = LC.audit(vg.p).filter(function (x) { return /vector group not stated/.test(x.title); });
+  check('an undeclared vector group is raised where it decides the neutral', vgF.length, 1);
+  check('and the finding names the circuits that depend on it', /three-phase and neutral/.test(vgF[0].title), true);
+  check('declaring it settles that', (function () {
+    var s3 = site({ kva: 2500 });
+    var c3 = motorAt(s3.p, s3.pdp, 60, 0.9, { thd: 45, neutral: true });
+    c3.phases = '3';
+    LC.protAll(s3.p, {});
+    return LC.audit(s3.p).filter(function (x) { return /vector group not stated/.test(x.title); }).length;
+  })(), 0);
+
+  /* And the whole point of it: a star-star transformer lets the triplens through
+     and the neutral ends up bigger than the phases. */
+  var ys = site({ kva: 2500 });
+  ys.tx.vecGroup = 'YNyn0';
+  for (var y = 0; y < 6; y++) { var yc = motorAt(ys.p, ys.pdp, 60, 0.9, { thd: 45, neutral: true }); yc.phases = '3'; }
+  LC.protAll(ys.p, {});
+  var ysN = LC.boardStats(ys.p, ys.pdp, 'pdp').neutral;
+  check('with a star-star winding the neutral carries something at all', ysN.amps > 0, true);
+  check('and on a board of drives it exceeds a phase conductor', ysN.amps > ysN.maxPhase, true);
+  check('which is the case the earlier model could not see, because it counted only single-phase circuits',
+    ysN.amps / ysN.maxPhase > 1, true);
+
+  /* The protective-conductor advice. Returning the bare minimum here produced the
+     absurd instruction to fit a 1.5 mm² protective conductor in order to REDUCE
+     a loop impedance — the minimum is a floor, and when it is all the route
+     allows then the route is the answer. */
+  function loopOn(proj, csa, len) {
+    var pn = motorAt(proj.p, proj.pdp, 3, 0.9, {});
+    pn.phases = '1'; pn.volt = 230;
+    pn.cable = { csa: csa, runs: 1, cores: 3, len: len, method: 'XL-A1', group: 2, ambient: 30, sheathed: true };
+    var ir = Math.round(csa * 1.6);
+    pn.prot = LS.newProt({ kind: 'mcb', ir: ir, frame: ir, icu: 25, trip: 'C', poles: 1 });
+    return { pn: pn, e: LC.earthFaultCheck(proj.p, pn, 'panel') };
+  }
+  /* A short, fat feeder is comfortable, and the minimum protective conductor for
+     a 95 mm² phase core is 50 mm² per BS 7671 Table 54.7. */
+  var peZ = site({ kva: 2500 });
+  var shortRun = loopOn(peZ, 95, 5);
+  check('a short, fat feeder clears in time', shortRun.e.pass, true);
+  check('and is left with the minimum protective conductor, 50 mm²', shortRun.e.loop.peCsa, 50);
+  check('which is the table figure, not 25', LS.peMinCsa(95), 50);
+  check('no advice is offered for a circuit that passes', LC.audit(peZ.p)
+    .some(function (x) { return /earth fault loop/.test(x.title); }), false);
+
+  /* A long run on a small conductor. Two distinct failures, and the advice has to
+     distinguish them: one where a bigger protective conductor would genuinely
+     help, and one where no conductor at all would. */
+  var vZ = site({ kva: 2500 });
+  var vLong = loopOn(vZ, 10, 1500);
+  check('a 1500 m run on 10 mm² does not clear in time', vLong.e.pass, false);
+  check('and the fault current is far below anything the device can see',
+    vLong.e.ia < 30, true);
+  var advV = LC.peNeededCsa(vLong.e);
+  check('the advice says to change the route rather than fit a conductor', /shorter route|parallel/.test(advV), true);
+  /* It must not hand back a bare size. A bare "1.5" got spliced into a sentence
+     that read as advice to fit a smaller conductor to a loop needing a lower
+     one, so the function returns a clause and these pin that. */
+  check('and never a bare number, which is what produced the 1.5 mm² absurdity',
+    /^[0-9.]+\s*mm/.test(advV), false);
+  check('it does not blame the minimum either', /minimum/.test(advV), false);
+
+  /* Where a bigger protective conductor is the answer, a size is named — and it
+     is a real conductor rather than the minimum presented as a remedy. */
+  var midZ = site({ kva: 2500 });
+  var mid = loopOn(midZ, 35, 1200);
+  check('a 1200 m run on 35 mm² does need help', mid.e.pass, false);
+  var advMid = LC.peNeededCsa(mid.e);
+  check('and the advice names a size where one would work',
+    /protective conductor of about [0-9.]+ mm/.test(advMid), true);
+  var namedMid = /about ([0-9.]+) mm/.exec(advMid);
+  check('which is at least the minimum for that phase core',
+    namedMid ? parseFloat(namedMid[1]) >= LS.peMinCsa(35) : false, true);
 
   /* ------------------------------------------------------- everything at once */
   var z = site();

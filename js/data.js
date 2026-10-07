@@ -232,8 +232,20 @@ var LS = (function () {
        Regulation 411.3.3 reproduces. The ≤32 A case assumes 30 mA additional
        protection, which is what makes 0.1 s rather than 0.5 s achievable on a
        final circuit; without an RCD the row above applies. */
+    /* TN-S: the neutral is earthed at the source and stays a separate conductor
+       all the way to every board, never re-bonded to earth downstream and never
+       interrupted. TN-C-S shares the PEN conductor over part of the run, which
+       means a lower loop impedance but also that every PEN is a neutral. TT
+       returns through an electrode. IT has no earthed source point at all and
+       needs an RCD by definition. */
     supplySystem   : 'TN-S', // TN-S | TN-C-S | TT | IT
-    earthElectrodeR: 0.0     // ohms; only read for a TT supply
+    earthElectrodeR: 0.0,    // ohms; only read for a TT supply
+    /* Which conductors the earthing arrangement puts on a feeder. TN-S is
+       3 phase + neutral + PE throughout; TN-C-S shares them as one PEN between
+       the source and the first RCD; TT and IT still need a neutral and a PE but
+       the neutral is not earthed downstream. This is what decides the core
+       count, and it is a property of the arrangement rather than of the load. */
+    neutralEarthedDownstream: false
   };
 
   /* Maximum disconnection time in seconds, IEC 60364-41 Table 41.4.
@@ -552,6 +564,18 @@ var LS = (function () {
          would derate every cable on the project, and the great majority of
          circuits genuinely have little. */
       thd: p.thd === undefined || p.thd === null || p.thd === '' ? null : clamp(num(p.thd, 0), 0, 100),
+      /* Whether this circuit's neutral conductor comes back to the board.
+         Blank falls back to the core count, which is the usual case: four cores
+         to a three-phase circuit carries a neutral, three is three poles. */
+      neutral: p.neutral === undefined || p.neutral === null || p.neutral === '' ? null : !!p.neutral,
+      /* Phase imbalance on a three-phase circuit, as a percentage of its rating.
+         What the neutral carries from an otherwise balanced load, and the one
+         thing a TN-S neutral is never allowed to carry at all. */
+      imbalance: p.imbalance === undefined || p.imbalance === null || p.imbalance === '' ? null : clamp(num(p.imbalance, 0), 0, 100),
+      /* Whether this cable also carries the protective conductor. On TN-S the
+         PE and the neutral must be separate conductors, so this says whether
+         they share a cable — not whether the PE exists, which it must. */
+      peInCable: p.peInCable === undefined || p.peInCable === null || p.peInCable === '' ? null : !!p.peInCable,
       /* Load torque characteristic. Decides whether a reduced-current start can
          accelerate the machine at all, and is the thing to ask the vendor for. */
       loadTorque: p.loadTorque || '',
