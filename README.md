@@ -260,8 +260,11 @@ the mapping is right, because the two numbers are arrived at independently.
 6. The supply is **TN-S** and all 97 circuits are **three-phase and neutral** —
    both confirmed, not inferred. `peInCable` is set to false: the protective
    conductor is formed separately, so the fourth core is the neutral and not a
-   PEN. The vector group is still unstated on both transformers, which is the
-   one thing here the schedule cannot answer for itself.
+   PEN.
+7. Both transformers are **Dyn11**, confirmed. The delta on the LV winding is what
+   keeps roughly 1,280 A of neutral conductor out of the incoming feeders — but it
+   does nothing for the board's own neutral bars, and PDP7-2's carries 159 % of a
+   phase conductor once the drives are declared.
 
 The cable columns in that sheet are headed *"Cable & Installation (to be
 completed)"*, so every circuit arrives without a feeder cable. The audit reports
@@ -609,13 +612,36 @@ incoming neutral at all — it circulates in the delta instead. So:
 | `Dyn11`, `Dyn1`, `Yd11` | nothing — the delta blocks it |
 | `Yyn11`, `Yyn0` | three times the board's third harmonic |
 
-On the real project — 97 three-phase and neutral circuits, and roughly 3,500 kW of
-them on drives and power electronics — the vector group is what decides the whole
-question, and it is **not stated on either transformer**. The app assumes `Dyn11`
-and now says so, naming the circuits that depend on it, because that assumption is
-not free to make on someone's installation. Had it been `YNyn0`, the neutral on
-PDP7-2 would carry **665 A against a 139 A phase conductor — 478 % of it** — and
-two other boards would exceed 200 %.
+#### What the delta does, and what it does not
+
+Both transformers are **Dyn11**, confirmed. That matters, and it is worth being
+precise about what it buys:
+
+| Conductor | With the delta | Without it |
+|---|---|---|
+| The board's **incoming** neutral | **0 A** | 665 A on PDP7-2 alone; 3,209 A into PDB7 |
+| The board's own **neutral bar** and feeder | **unchanged** | unchanged |
+
+A delta on the LV winding blocks zero-sequence current from the transformer
+reaching the incoming neutral — it circulates in the delta instead. Across this
+project that is **roughly 1,280 A of neutral conductor** avoided, about 640 A per
+transformer. The same order, no extra cost, and it belongs on the specification.
+
+**It does nothing for the board's own neutral bar.** The triplen from the 3P+N
+circuits below has to return through that conductor and its feeder, and a delta
+two transformers away is no help at all. With the drives declared at a typical
+45 % THD, PDP7-2's neutral bar carries **222 A against a 139 A phase conductor —
+159 % of it** — and PDB7's carries 1,070 A.
+
+This is the easy mistake to make in the reassuring direction: the vector group is
+specified, the incomer is provably fine, and a neutral bar carrying 159 % of a
+phase conductor is never looked at. The app judges each conductor against the one
+that actually carries it, and says on every row which is which.
+
+The fix there is **not** a bigger conductor — it is a 4 % impedance reactor or a
+3rd-harmonic filter at the drive, which removes the harmonic at the load instead
+of carrying it everywhere. Failing that, spreading the circuits across more
+boards so no single bar carries all of it.
 
 Third harmonic is taken as 60 % of the declared total distortion — typical of
 switch-mode supplies, and not always right. A circuit with a measured spectrum
@@ -962,7 +988,7 @@ test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        36 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
-test/protection-test.html 312 checks on fault levels, device proposals, cable
+test/protection-test.html 328 checks on fault levels, device proposals, cable
                           thermal withstand, selectivity from trip curves, earth
                           fault looping, the neutral conductor on 3P+N feeders,
                           the earthing arrangement, reactive power, harmonics,

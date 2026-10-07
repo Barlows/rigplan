@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=188"></script>
-<script src="../js/calc.js?v=188"></script>
+<script src="../js/data.js?v=204"></script>
+<script src="../js/calc.js?v=204"></script>
 <script>
 (function () {
   var results = [];
@@ -694,10 +694,110 @@
     wp.cable = { csa: 2.5, runs: 1, cores: 3, len: 30, method: 'XL-A1', group: 1, ambient: 30, sheathed: true };
   }
   LC.applyNumbering(zd.p);
-  var dFnd = LC.audit(zd.p).filter(function (x) { return /neutral is protected/.test(x.title); });
+  var dFnd = LC.audit(zd.p).filter(function (x) { return /incoming neutral protected by the/.test(x.title); });
   check('and a delta one says what the delta is doing instead of raising an alarm',
     dFnd.length > 0, true);
-  check('quantifying what it is preventing', /Without the low-voltage delta/.test(dFnd[0].detail), true);
+  check('quantifying what it is preventing', /Without it this feeder would put/.test(dFnd[0].detail), true);
+
+  /* The delta keeps zero-sequence out of the INCOMER and does nothing for the
+     board's own neutral bar. Getting that backwards is the easy mistake and it
+     errs in the reassuring direction: the vector group is specified, the finding
+     says "protected", and a neutral bar carrying 159% of a phase conductor is
+     never looked at. These pin the distinction. */
+  var lb = site({ kva: 2500 });
+  lb.tx.vecGroup = 'Dyn11';
+  for (var v = 0; v < 10; v++) {
+    var vc = motorAt(lb.p, lb.pdp, 60, 0.9, { thd: 45, neutral: true });
+    vc.phases = '3';
+    vc.cable = { csa: 70, runs: 1, cores: 4, len: 40, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  }
+  LC.protAll(lb.p, {});
+  var lbN = LC.boardStats(lb.p, lb.pdp, 'pdp').neutral;
+  check('the incomer neutral carries nothing with a delta on the winding', lbN.amps, 0);
+  check('but the board neutral bar carries the triplen locally', lbN.thirdAmp > 0, true);
+  check('and the two are genuinely different conductors', lbN.thirdAmp > lbN.amps, true);
+  /* Reported for every board tier, so the same finding appears on the main board
+     and the distribution board below it — two rows, one problem. */
+  var lbF = LC.audit(lb.p).filter(function (x) { return /neutral bar carries/.test(x.title); });
+  check('so the bar is judged on its own loading, not on the incomer being empty',
+    lbF.length > 0, true);
+  check('and reported as an error when it exceeds its conductors', lbF[0].level, 'bad');
+  check('saying the delta settles the incomer but not the bar',
+    /settled/.test(lbF[0].detail) && /nothing comes back along that conductor/.test(lbF[0].detail), true);
+  check('naming the circuit count it comes from', /three-phase and neutral circuits below/.test(lbF[0].detail), true);
+  check('and pointing at the filter or reactor, which beats a bigger conductor',
+    /reactor|filter/.test(lbF[0].detail), true);
+
+  /* A board with no harmonic content at all: the delta has genuinely done the
+     job, there is nothing on the bar, and the only thing worth saying is what
+     the vector group bought. */
+  var lo = site({ kva: 2500 });
+  lo.tx.vecGroup = 'Dyn11';
+  for (var x2 = 0; x2 < 3; x2++) {
+    var xc = motorAt(lo.p, lo.pdp, 30, 0.9, { thd: 25, neutral: true });
+    xc.phases = '3';
+    xc.cable = { csa: 95, runs: 1, cores: 4, len: 30, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  }
+  LC.protAll(lo.p, {});
+  /* Three circuits at 25% THD on a 95 mm² feeder: 65 A on a 166 A conductor is
+     comfortable for the conductor, but still over 60% of the phase current, which
+     is the advisory threshold — so a warning, not an alarm, and never a "bad". */
+  var loF = LC.audit(lo.p).filter(function (x) { return /neutral bar carries/.test(x.title); });
+  check('a board whose bar is within its conductor warns rather than alarms',
+    loF.length > 0 && loF[0].level, 'warn');
+  check('and never calls it an error', LC.audit(lo.p)
+    .filter(function (x) { return /neutral/.test(x.title) && x.level === 'bad'; }).length, 0);
+
+  /* No harmonic content anywhere: nothing on the bar at all, so the only finding
+     is the specification note about what the delta bought. */
+  var cl = site({ kva: 2500 });
+  cl.tx.vecGroup = 'Dyn11';
+  for (var x3 = 0; x3 < 4; x3++) {
+    var xc3 = motorAt(cl.p, cl.pdp, 40, 0.9, { neutral: true });
+    xc3.phases = '3';
+    xc3.cable = { csa: 95, runs: 1, cores: 4, len: 30, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  }
+  LC.protAll(cl.p, {});
+  check('with no declared harmonics there is nothing on the bar to report',
+    LC.audit(cl.p).filter(function (x) { return /neutral bar carries/.test(x.title); }).length, 0);
+  check('and nothing is said about the vector group either, because it is not yet',
+    LC.audit(cl.p).some(function (x) { return /incoming neutral protected by the/.test(x.title); }), false);
+
+  /* The crediting note needs the delta to be preventing something real — enough
+     load that a star-star would have overloaded the incomer neutral. */
+  var cr = site({ kva: 2500 });
+  cr.tx.vecGroup = 'Dyn11';
+  for (var x4 = 0; x4 < 8; x4++) {
+    var xc4 = motorAt(cr.p, cr.pdp, 90, 0.9, { thd: 35, neutral: true });
+    xc4.phases = '3';
+    xc4.cable = { csa: 120, runs: 1, cores: 4, len: 30, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  }
+  LC.protAll(cr.p, {});
+  /* Where the bar is ALSO overloaded, the delta's credit gets a row of its own
+     rather than being replaced by the alarm — a reader shown only "the vector
+     group protects the neutral" has been told something true and something
+     dangerously incomplete. Declared harmonics are required, or there is nothing
+     to report at all. */
+  check('the bar is genuinely overloaded here, so this is the case that matters',
+    LC.audit(cr.p).some(function (x) { return /neutral bar carries/.test(x.title) && x.level === 'bad'; }), true);
+  check('where the bar is overloaded, the delta is still credited on a row of its own',
+    LC.audit(cr.p).some(function (x) {
+      return /incoming neutral protected by the/.test(x.title) && /neutral conductor carries nothing at all/.test(x.detail);
+    }), true);
+  check('and it says plainly that it protects the incomer and not the bar',
+    LC.audit(cr.p).some(function (x) {
+      return /incoming neutral protected by the/.test(x.title) && /protects the incomer only/.test(x.detail);
+    }), true);
+
+  /* And where the bar is comfortable, the credit gets a row of its own. */
+  var cg = site({ kva: 2500 });
+  cg.tx.vecGroup = 'Dyn11';
+  var cgc = motorAt(cg.p, cg.pdp, 200, 0.9, { thd: 18, neutral: true });
+  cgc.phases = '3';
+  cgc.cable = { csa: 300, runs: 1, cores: 4, len: 30, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
+  LC.protAll(cg.p, {});
+  check('and where the bar is fine, the credit stands on its own row',
+    LC.audit(cg.p).some(function (x) { return /incoming neutral protected by the/.test(x.title); }), true);
 
   /* ---------------------------------------------------- grouped findings */
   /* Folding repeats is what makes the list readable, so the shape of the fold

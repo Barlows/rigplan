@@ -1248,31 +1248,86 @@ var LC = (function () {
          neutral carrying imbalance is still a neutral carrying current. */
       var total = n.amps + n.imbalanceAmp;
       var over = total > rated;
-      if (n.blocked && n.ampsIfUnblocked <= rated) {
-        /* Nothing to do about it — the transformer is handling it. Saying so is
-           more use than a note that repeats the same reassurance on every board,
-           so this is reported once, and only when the group is actually earning
-           its place. */
-        if (n.ampsIfUnblocked > n.maxPhase * 0.6) {
-          add('info', kind, item.id, item.tag + ' neutral is protected by the ' + st.vectorGroup + ' vector group',
-            'Without the low-voltage delta this board would put ' + n.ampsIfUnblocked.toFixed(0) +
-            ' A of third harmonic in the neutral — ' + (n.ampsIfUnblocked / n.maxPhase * 100).toFixed(0) +
-            '% of a phase conductor, on a ' + phaseCsa + ' mm² neutral. The delta winding keeps it out. ' +
-            'Worth recording on the specification: a star-star group here would need a larger neutral, ' +
-            'and the same cost would buy nothing.');
+      /* Two conductors, and they are not in the same state.
+
+         `amps` is what this board's INCOMER neutral carries. `thirdAmp` is what
+         the board's own neutral BAR and its feeder carry, because the triplen
+         from the three-phase and neutral circuits below has to return through
+         them whatever the transformer does. A delta on the LV winding zeroes the
+         first and leaves the second untouched.
+
+         Gating this on `ampsIfUnblocked <= rated` tested the INCOMER's
+         hypothetical loading against the BAR's conductor, so the boards that
+         needed it most — a big one, badly loaded — fell through to the generic
+         path and printed "neutral carries 0 A — more than its conductors", which
+         is nonsense and reads as reassurance. Each is now judged against the
+         conductor that actually carries it. */
+      if (n.blocked) {
+        /* The delta keeps zero-sequence out of the INCOMER. It does nothing for
+           the board's own neutral bar, which the triplen from the three-phase and
+           neutral circuits below still has to return through — and that is where
+           the current actually is on a board like this one.
+
+           Getting this wrong in the reassuring direction is the easy mistake: the
+           vector group is specified, the finding reports "protected", and a neutral
+           bar carrying 159 % of a phase conductor is never looked at. So the two
+           are reported separately, and the local bar is judged against its own
+           conductors whatever the incomer is doing. */
+        var localOver = n.thirdAmp > rated;
+        if (localOver || n.thirdAmp > n.maxPhase * 0.6) {
+          add(localOver ? 'bad' : 'warn', kind, item.id,
+            item.tag + ' neutral bar carries ' + n.thirdAmp.toFixed(0) + ' A' +
+            (localOver ? ' — more than its conductors' : ''),
+            'The ' + st.vectorGroup + ' vector group keeps zero-sequence current out of this board\'s INCOMER, ' +
+            'and nothing comes back along that conductor: it would carry ' +
+            n.ampsIfUnblocked.toFixed(0) + ' A on a star-star group. That part is settled. ' +
+            'But the board\'s own neutral bar and its feeder are a different conductor and a different ' +
+            'question — the third harmonic from the ' + n.threePhase.length + ' three-phase and neutral ' +
+            'circuits below has to return through it, because a delta on the transformer is too far away ' +
+            'to help. It carries ' + n.thirdAmp.toFixed(0) + ' A, which is ' +
+            (n.maxPhase ? (n.thirdAmp / n.maxPhase * 100).toFixed(0) + '% of a phase conductor' :
+              'a large fraction of the load') + '. ' +
+            (localOver ? 'That exceeds what a ' + phaseCsa + ' mm² conductor carries — about ' +
+              rated.toFixed(0) + ' A here — so this neutral has to be enlarged, or the circuits below it ' +
+              'have to be split across more boards so that no one bar carries all of it. ' :
+              'On a ' + phaseCsa + ' mm² neutral, about ' + rated.toFixed(0) + ' A, that leaves margin but ' +
+              'not much. ') +
+            'The usual fix is not a larger conductor but a 4 % impedance reactor or a 3rd-harmonic ' +
+            'filter at the drive, which removes the harmonic at the load rather than carrying it ' +
+            'everywhere.');
+        }
+        /* The delta's credit, reported independently of the bar rather than in
+           place of it. These are two facts about two different conductors: a
+           reader shown only "the vector group protects the neutral" has been told
+           something true and something dangerously incomplete, and an else-if made
+           the note vanish on exactly the boards with the worst bar loading. */
+        if (n.ampsIfUnblocked > n.maxPhase * 0.6 || n.ampsIfUnblocked > rated) {
+          add('info', kind, item.id,
+            item.tag + ' incoming neutral protected by the ' + st.vectorGroup + ' vector group',
+            'The delta on the low-voltage winding stops zero-sequence current reaching this incomer, so its ' +
+            'neutral conductor carries nothing at all. Without it this feeder would put ' +
+            n.ampsIfUnblocked.toFixed(0) + ' A into that conductor — ' +
+            (n.maxPhase ? (n.ampsIfUnblocked / n.maxPhase * 100).toFixed(0) + '% of a phase conductor' : 'a large fraction of the load') +
+            (n.ampsIfUnblocked > rated ? ', and over what a ' + phaseCsa + ' mm² neutral carries (about ' +
+              rated.toFixed(0) + ' A)' : '') + '. Worth recording on the specification: a star-star group ' +
+            'here would mean sizing every incomer neutral for its own third harmonic, and the same cost would ' +
+            'buy nothing. Note this protects the incomer only — the board\'s neutral bar, if it is carrying ' +
+            'anything, is a separate conductor the delta cannot help.');
         }
         return;
       }
 
-      var where = n.blocked
-        ? 'The ' + st.vectorGroup + ' vector group has a delta on the low-voltage winding, which stops zero-sequence ' +
-          'current reaching this incomer — the board\'s neutral bar carries ' + n.thirdAmp.toFixed(1) + ' A locally but ' +
-          'none of it comes back along the incoming neutral. A star-star group would put ' + n.ampsIfUnblocked.toFixed(0) +
-          ' A in that conductor instead, against a phase conductor of ' + n.maxPhase.toFixed(0) + ' A, so the vector group ' +
-          'is doing real work here rather than being a nameplate detail.'
-        : 'The ' + st.vectorGroup + ' vector group is star-star, so the third harmonic passes through: the currents add in ' +
-          'the neutral instead of cancelling, and it carries ' + n.amps.toFixed(0) + ' A against a phase conductor of ' +
-          n.maxPhase.toFixed(0) + ' A.';
+      /* Only the star-star case reaches here: the delta case returned above with
+         its own wording, because the two conductors are not in the same state. */
+      var passTotal = n.amps + n.imbalanceAmp;
+      /* Judged on BOTH conductors. With a star-star the incoming neutral carries
+         the triplen as well as the board's own bar, and either can be the one
+         that is too small. */
+      var passOver = passTotal > rated || n.thirdAmp > rated;
+      var where = 'The ' + st.vectorGroup + ' vector group is star-star, so the third harmonic passes through: ' +
+        'the currents add in the neutral instead of cancelling, and the incoming conductor carries ' +
+        n.amps.toFixed(0) + ' A against a phase conductor of ' + n.maxPhase.toFixed(0) + ' A, while the ' +
+        'board\'s own bar carries ' + n.thirdAmp.toFixed(0) + ' A of it.';
 
       /* Where the load actually is. A board of three-pole motor feeders has a
          neutral conductor carrying almost nothing, and one of three-phase and
@@ -1292,9 +1347,9 @@ var LC = (function () {
               'into the neutral bar. The conductor is here for the single-phase circuits and for earth reference.'
             : '';
 
-      add(over ? 'bad' : total > rated * 0.6 ? 'warn' : 'info', kind, item.id,
+      add(passOver ? 'bad' : total > rated * 0.6 ? 'warn' : 'info', kind, item.id,
         item.tag + ' neutral carries ' + total.toFixed(0) + ' A' +
-        (over ? ' — more than its conductors' : '') +
+        (passOver ? ' — more than its conductors' : '') +
         (n.imbalanceAmp > 0 ? ' (third harmonic ' + n.amps.toFixed(0) + ' A, imbalance ' + n.imbalanceAmp.toFixed(0) + ' A)' : ''),
         where + where3p + ' The neutral is sized here as the same cross-section as the phases (' + phaseCsa +
         ' mm², about ' + rated.toFixed(0) + ' A), which is the convention: the usual reduced-size neutral assumes a balanced ' +
