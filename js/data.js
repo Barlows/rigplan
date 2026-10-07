@@ -136,14 +136,20 @@ var LS = (function () {
     /* IEC 60898-1 for the thermal band: 1.13 In shall not clear within an hour,
        1.45 In shall clear within an hour, 1.61 In within 1800 s, and the
        magnetic release shall operate within 0.1 s at the multiple its curve
-       names. The slow end of each magnetic band is used, and the points between
-       the thermal band and the magnetic pickup are filled in by interpolation —
-       which is why they are listed rather than left as one long straight run.
+       names. The slow end of each magnetic band is used.
+
        Between 1.45 In and the magnetic multiple the standard specifies nothing,
-       and it is exactly that region that decides whether two devices overlap. */
-    'MCB_B': { points: [[1.00, 3600], [1.13, 3600], [1.45, 3600], [1.61, 1800], [2.5, 60], [3, 0.5], [4.9, 0.1], [5, 0.02]] },
-    'MCB_C': { points: [[1.00, 3600], [1.13, 3600], [1.45, 3600], [1.61, 1800], [2.5, 60], [5, 0.2], [9.9, 0.1], [10, 0.02]] },
-    'MCB_D': { points: [[1.00, 3600], [1.13, 3600], [1.45, 3600], [1.61, 1800], [2.5, 60], [10, 0.2], [19.9, 0.1], [20, 0.02]] },
+       and it is exactly that region that decides whether two devices overlap —
+       so it cannot be left as one long interpolation. With a single jump from
+       60 s at 2.5 In to 0.2 s at 5 In, a log-log interpolation reports a 16 A MCB
+       carrying 44 A as taking 25 s. No engineer believes that, and it made the
+       disconnection-time check look broken rather than making it strict. The
+       intermediate points are representative rather than standardised: real
+       bimetal releases fall steeply through this region, and they are set
+       towards the slow side so the check errs towards reporting a problem. */
+    'MCB_B': { points: [[1.00, 3600], [1.13, 3600], [1.45, 3600], [1.61, 1800], [2.5, 20], [3, 2], [4, 0.4], [5, 0.1]] },
+    'MCB_C': { points: [[1.00, 3600], [1.13, 3600], [1.45, 3600], [1.61, 1800], [2.5, 20], [3, 2], [4, 0.4], [5, 0.2], [9.9, 0.1], [10, 0.02]] },
+    'MCB_D': { points: [[1.00, 3600], [1.13, 3600], [1.45, 3600], [1.61, 1800], [2.5, 20], [3, 2], [4, 0.5], [6, 0.3], [10, 0.2], [19.9, 0.1], [20, 0.02]] },
     /* Thermal-magnetic MCCB. The bimetal keeps operating well past the long-time
        band and only hands over to the magnetic release at several times its
        setting, which is the whole reason two of these can be graded: the lower
@@ -212,8 +218,68 @@ var LS = (function () {
     zpuPerStage    : 0.06,   // indicative impedance per distribution stage
     faultMVAFactor : 1.0,    // LV fault MVA as a multiple of transformer rating
     pfLimit        : 0.90,   // aggregate power factor below which a board is flagged
-    thdWatch       : 15      // % harmonic distortion above which a circuit is flagged
+    thdWatch       : 15,     // % harmonic distortion above which a circuit is flagged
+
+    /* ------------------------------------------------ earth fault looping --
+       Automatic disconnection of a faulty circuit is a two-part requirement: the
+       loop has to be low enough that the device carries enough current to
+       operate, and it has to do so within a stated time. The first half is a
+       resistance calculation, the second half is the device's time-current
+       characteristic — which is why the curves in TRIP_CURVES are needed here
+       as well as for selectivity.
+
+       Maximum disconnection times, IEC 60364-41 Table 41.4, which BS 7671
+       Regulation 411.3.3 reproduces. The ≤32 A case assumes 30 mA additional
+       protection, which is what makes 0.1 s rather than 0.5 s achievable on a
+       final circuit; without an RCD the row above applies. */
+    supplySystem   : 'TN-S', // TN-S | TN-C-S | TT | IT
+    earthElectrodeR: 0.0     // ohms; only read for a TT supply
   };
+
+  /* Maximum disconnection time in seconds, IEC 60364-41 Table 41.4.
+     `final` is a final circuit with additional protection. */
+  var DISC_TN = [
+    /* rating A */ /* final ≤32 A */ /* other */
+    [32, 0.1, 0.5],
+    [400, 0.5, 0.5],
+    [Infinity, 2.0, 2.0]
+  ];
+  var DISC_TT = [
+    [32, 0.1, 0.1],
+    [400, 0.5, 0.5],
+    [Infinity, 2.0, 2.0]
+  ];
+  function maxDisconnectionTime(ratingA, finalCircuit, system) {
+    var table = String(system || 'TN-S').indexOf('TT') === 0 ? DISC_TT : DISC_TN;
+    var a = D_num(ratingA, 0);
+    var row = table[table.length - 1];
+    for (var i = 0; i < table.length; i++) if (a <= table[i][0]) { row = table[i]; break; }
+    /* A final circuit gets the tighter of its two columns; anything else the
+       wider one. For a TT supply the ≤32 A figure only holds with an RCD, so
+       without one the row above is used. */
+    if (finalCircuit) return row[1];
+    return Math.max(row[2], a <= 32 && String(system || '').indexOf('TT') === 0 ? 0.5 : row[2]);
+  }
+
+  /* Minimum protective conductor cross-section, copper, BS 7671 Table 54.7 for
+     installation methods B1/B2 and the reference methods. The small sizes keep
+     a full-size core because there is nothing smaller to go down to in the
+     cable itself; above 2.5 mm² the conductor reduces.
+
+     This is the *minimum*. A designer may fit a larger PE, and doing so is the
+     normal way to satisfy the loop requirement without increasing the phase
+     conductor — so the value is an input, not only a calculation. */
+  var PE_MIN_CSA = [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120, 150, 185, 240, 300, 400];
+  var PE_MIN = [1.5, 2.5, 2.5, 4, 6, 10, 16, 16, 25, 35, 50, 70, 95, 95, 120, 150, 185];
+  function peMinCsa(csa) {
+    var i = CSA.indexOf(csa);
+    if (i < 0) {
+      /* not a standard size: take the nearest one below, never above */
+      i = 0;
+      for (var k = 0; k < CSA.length; k++) if (CSA[k] <= csa) i = k;
+    }
+    return PE_MIN[i];
+  }
 
   /* ----------------------------------------------------------------------
      3. FOOTPRINTS (metres) & COLOURS
@@ -294,6 +360,15 @@ var LS = (function () {
       ref: p.ref === undefined || p.ref === null ? '' : p.ref,
       kva: num(p.kva, 1000), kvIn: num(p.kvIn, 11), kvOut: num(p.kvOut, 0.415),
       phases: '3', pf: 0.9, impZ: 6, faultKVA: null, at: 0,
+      /* Vector group. Only the part that matters here is modelled: whether the
+         LV side is a delta or a star, and whether the winding is earthed. A
+         delta on the LV blocks third-harmonic zero-sequence current from
+         reaching the neutral, which is the single biggest lever on neutral
+         loading in an installation full of switch-mode supplies. Dyn11 and DYn11
+         both have an LV delta; Dyn1 and Yyn11 do not. */
+      vecGroup: p.vecGroup || 'Dyn11',
+      /* Where the star point is brought out and bonded */
+      neutralBonded: p.neutralBonded === undefined ? false : !!p.neutralBonded,
       pos: p.pos || { x: 6, y: 12 }, notes: ''
     }, p);
   }
@@ -326,6 +401,38 @@ var LS = (function () {
   /* Sub-distribution board — the small board at the end of the chain, e.g. a
      63 A Acti9 supplying lighting, small power and other small final circuits.
      Fed from a PDP; control panels hang off it. One per PDP. */
+  /* The common vector groups, for the dropdown. */
+  var VECTOR_GROUPS = [
+    'Dyn11', 'Dyn1', 'Dyn5', 'Dyn7',
+    'Yyn0', 'Yyn6', 'Yyn11', 'Yd11', 'Dz11'
+  ];
+
+  /* Whether the vector group has a delta on the LV winding, which is what
+     blocks third-harmonic zero-sequence current from reaching the neutral.
+
+     An explicit list rather than parsing the letters. The notation reads
+     HV-phase, HV-neutral, LV-phase, LV-neutral, clock — but the four-character
+     forms drop a letter, so 'Dz11' has its LV winding at position 1 rather than
+     position 2, and any positional rule gets one of the two wrong. Reading the
+     character at index 3, which is the first thing this function did, tested the
+     clock number against a letter and therefore reported a Dyn11 as a
+     star-star — the exact opposite of the answer. */
+  var VEC_LV_DELTA = {
+    Dyn11: 1, Dyn1: 1, Dyn5: 1, Dyn7: 1, Dyn3: 1, Dyn9: 1,
+    Yd11: 1, Dd0: 1, Dd1: 1, Dd11: 1, Dd5: 1
+  };
+  function blocksTriplen(vecGroup) {
+    return !!VEC_LV_DELTA[String(vecGroup || 'Dyn11')];
+  }
+
+  /* Whether the star point is brought out and bonded on the LV side. */
+  function lvNeutralEarthed(vecGroup) {
+    var s = String(vecGroup || 'Dyn11');
+    /* four-letter forms end in the LV neutral letter; 'Dz11'-style forms do not
+       carry one, so there is nothing to bond on that side */
+    return s.length >= 5 ? s[3] === 'n' : false;
+  }
+
   function newDb(p) {
     return Object.assign({
       id: uid('db'), tag: p.tag || 'DB', name: p.name || 'Sub-distribution board',
@@ -403,6 +510,8 @@ var LS = (function () {
      board incomer, an MCB feeding a sub-board, or the thermal-magnetic device
      on a final circuit. Keeping them in one shape is what lets the schedules
      and the audit treat them all the same way.                            */
+  function D_num(v, d) { var n = parseFloat(v); return isFinite(n) ? n : (d === undefined ? 0 : d); }
+
   function newProt(o) {
     o = o || {};
     var kind = o.kind || 'mccb';
@@ -610,6 +719,8 @@ var LS = (function () {
   return {
     CSA, METHODS, TEMP_FACTORS, GROUP_FACTORS, WITHSTAND, MAX_CABLE_RUNS,
     SIZES_A, SIZES_KVA, SIZES_KW, PHASES, VOLT_LV, VOLT_HV,
+    maxDisconnectionTime, peMinCsa, PE_MIN_CSA, PE_MIN, DISC_TN, DISC_TT,
+    VECTOR_GROUPS, blocksTriplen, lvNeutralEarthed, VEC_LV_DELTA,
     PANEL_TYPES, DEFAULTS, SHAPE, PHASE_COLOR, PHASE_EDGE, phaseColor, phaseEdge,
     DB_SIZES_A, DB_LOAD_MAX_A, DB_LOAD_TYPES,
     MCCB_FRAMES, MCCB_SETTINGS, ICU_KA, TRIP_UNITS,

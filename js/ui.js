@@ -627,6 +627,13 @@
     if (v !== '' && v !== null && v !== undefined && vals.indexOf(v) < 0) vals.push(v);
     return '<select class="sel" data-bind="num" data-kind="' + kind + '" data-id="' + id + '" data-f="' + f + '">' + opts(vals, v, fmt) + '</select>';
   }
+  /* A duration in whichever unit reads: these are compared against
+     disconnection times, which are all sub-second in the cases that matter. */
+  function LC_ms(t) {
+    if (t === null || t === undefined || !isFinite(t)) return '—';
+    if (t >= 1) return t.toFixed(2) + ' s';
+    return (t * 1000).toFixed(0) + ' ms';
+  }
   function cbl(kind, id, f, v, opt) {
     opt = opt || {};
     return '<input class="inp" type="number" data-bind="cabnum" data-kind="' + kind + '" data-id="' + id + '" data-f="' + f + '" value="' + (v === '' || v === null || v === undefined ? '' : v) + '" step="' + (opt.step || 0.1) + '" ' + (opt.unit ? 'placeholder="' + opt.unit + '"' : '') + '>';
@@ -693,6 +700,20 @@
     var methods = Object.keys(LS.METHODS);
     return fRow('Cross-section', '<input class="inp" type="number" list="dlCsa" step="0.5" data-bind="cabnum" data-kind="' + kind + '" data-id="' + o.id + '" data-f="csa" value="' + (c.csa || '') + '" placeholder="mm²">') +
       fRow('Runs', '<span class="unit">' + cbl(kind, o.id, '_runs', c.runs || 1, { step: 1, unit: 'runs' }) + '<span class="u">runs</span></span>') +
+      fRow('Protective cond.', '<span class="unit">' + cbl(kind, o.id, '_peCsa', c.peCsa, { step: 0.5, unit: LS.peMinCsa(num(c.csa, 0)) ? String(LS.peMinCsa(num(c.csa, 0))) + ' min' : '' }) + '<span class="u">mm²</span></span>') +
+      (function () {
+        var e = LC.earthFaultCheck(S, o, kind);
+        if (!e) return '';
+        if (e.needs) {
+          return fRow('Earth fault loop', '<span class="mono" style="color:var(--fg-dim)">needs ' + e.needs + '</span>');
+        }
+        var good = e.pass;
+        return fRow('Earth fault loop',
+          '<span class="mono" style="color:' + (good ? 'var(--ok,#4ade80)' : '#f87171') + '">' +
+          'R1+R2 ' + e.loop.total.toFixed(2) + ' Ω · ' + e.ia.toFixed(0) + ' A · clears ' +
+          (e.tActual === null ? '—' : LC.msOrS(e.tActual)) + ' of ' + LC.msOrS(e.tMax) +
+          (e.maxLoop !== null ? ' · max ' + e.maxLoop.toFixed(2) + ' Ω' : '') + '</span>');
+      })() +
       fRow('Cores', selIn(kind, o.id, '_cores', c.cores, [1, 2, 3, 4], function (v) { return v + (v === 1 ? ' core' : ' cores'); })) +
       fRow('Length', '<span class="unit">' + cbl(kind, o.id, '_len', c.len, { step: 0.5, unit: 'm' }) + '<span class="u">m</span></span>') +
       fStack('Installation', '<select class="sel" data-bind="cab" data-kind="' + kind + '" data-id="' + o.id + '" data-f="method">' +
@@ -815,6 +836,15 @@
       fRow('LV', '<span class="unit">' + nIn('tx', o.id, 'kvOut', o.kvOut, { step: 0.005, unit: 'kV' }) + '<span class="u">kV</span></span>') +
       fRow('Power factor', nIn('tx', o.id, 'pf', o.pf, { step: 0.01 })) +
       fRow('Impedance', '<span class="unit">' + nIn('tx', o.id, 'impZ', o.impZ, { step: 0.5, unit: '%' }) + '<span class="u">% uk</span></span>') +
+      fRow('Vector group', selIn('tx', o.id, 'vecGroup', o.vecGroup || 'Dyn11', LS.VECTOR_GROUPS,
+        function (v) { return v + (LS.blocksTriplen(v) ? ' — LV delta, blocks 3rd harmonic' : ' — LV star, 3rd harmonic reaches the neutral'); })) +
+      fRow('Neutral bonded', '<label style="display:flex;gap:6px;align-items:center;cursor:pointer;font-size:11.5px"><input type="checkbox" data-bind="item" data-kind="tx" data-id="' + o.id + '" data-f="neutralBonded"' + (o.neutralBonded ? ' checked' : '') + '> bring the star point out and bond it</label>') +
+      (function () {
+        var blocks = LS.blocksTriplen(o.vecGroup || 'Dyn11');
+        return '<div class="hint">' + (blocks
+          ? 'The low-voltage winding is a <b>delta</b>, so third-harmonic zero-sequence current cannot leave the transformer. That is what keeps the neutral down in an installation full of switch-mode supplies.'
+          : 'The low-voltage winding is a <b>star</b>, so third-harmonic current returns through the neutral and adds across all three phases instead of cancelling. With a star-star group this is a reason to specify a delta winding on this transformer.') + '</div>';
+      })() +
       fRow('LV fault MVA', '<span class="unit">' + nIn('tx', o.id, 'faultKVA', o.faultKVA, { step: 50, unit: 'MVA' }) + '<span class="u">MVA</span></span>') +
       '<div class="hint">Leave fault MVA blank to derive it from the rating (Isc = 1.0 × kVA at the LV terminals). Indicative fault level at the board: <b id="faultKA">—</b></div>' +
       '</div>' +
@@ -1196,13 +1226,16 @@
     });
     var h = '<div class="toolbar-inline"><span style="font-size:11px;color:var(--fg-dim)">' + rows.length + ' circuits · volt drop limit ' + S.design.vdropLimitLv + '%</span>' +
       '<span style="margin-left:auto"></span>' + btn2('autocables', 'Size all cables') + btn2('csv', 'Export CSV') + '</div>';
-    h += '<table class="grid"><thead><tr><th class="l">From</th><th class="l">To</th><th class="l">Circuit</th><th>Runs</th><th>Core mm²</th><th>Cores</th><th>Length m</th><th class="l">Installation</th><th>Grouped</th><th>Amb °C</th><th>Base A</th><th>Derated A</th><th>Load A</th><th>%</th><th>Drop V</th><th>Drop %</th><th>Verdict</th></tr></thead><tbody>';
+    h += '<table class="grid"><thead><tr><th class="l">From</th><th class="l">To</th><th class="l">Circuit</th><th>Runs</th><th>Core mm²</th><th>Cores</th><th>Length m</th><th class="l">Installation</th><th>Grouped</th><th>Amb °C</th><th>Base A</th><th>Derated A</th><th>Load A</th><th>%</th><th>Drop V</th><th>Drop %</th><th>PE mm²</th><th>R1+R2 Ω</th><th>Loop A</th><th>Max t ms</th><th>Act t ms</th><th>Verdict</th></tr></thead><tbody>';
     rows.forEach(function (r) {
       var cab = r.c && r.c.csa ? LC.cableRating(r.c) : null;
       var vd = cab ? LC.voltDrop(r.c, r.load, r.pf, r.ph, r.volt) : null;
+      var ef = LC.earthFaultCheck(S, r.o, r.tkind);
       var verdict = '—', vc = 'mute';
       if (cab) {
         if (r.load > cab.derated) { verdict = '✕ undersized'; vc = 'bad'; }
+        else if (ef && ef.unachievable) { verdict = '✕ device too slow'; vc = 'bad'; }
+        else if (ef && !ef.pass) { verdict = '✕ loop too high'; vc = 'bad'; }
         else if (vd.pct > num(S.design.vdropLimitLv, 3)) { verdict = '✕ drop'; vc = 'bad'; }
         else if (r.load > cab.derated * 0.9) { verdict = '! near limit'; vc = 'warn'; }
         else { verdict = '✓ ok'; vc = 'ok'; }
@@ -1217,6 +1250,15 @@
         '<td>' + r.load.toFixed(1) + '</td><td class="' + utilCls(cu) + '">' + (cu === null ? '—' : cu.toFixed(0) + '%') + '</td>' +
         '<td>' + (vd ? vd.volts.toFixed(1) : '—') + '</td>' +
         '<td class="' + (vd && vd.pct > num(S.design.vdropLimitLv, 3) ? 'num-bad' : '') + '">' + (vd ? vd.pct.toFixed(2) : '—') + '</td>' +
+        /* The earth fault columns. R1+R2 and the current it will carry are the
+           calculation; the required and achieved times are the pass or fail,
+           side by side because neither means anything on its own. */
+        '<td>' + (ef && !ef.needs ? (ef.loop.peCsa || '—') : '—') + '</td>' +
+        '<td>' + (ef && !ef.needs ? ef.loop.total.toFixed(3) : '—') + '</td>' +
+        '<td>' + (ef && !ef.needs ? ef.ia.toFixed(0) : '—') + '</td>' +
+        '<td>' + (ef && !ef.needs ? (ef.tMax * 1000).toFixed(0) : '—') + '</td>' +
+        '<td class="' + (ef && !ef.needs && !ef.pass ? 'num-bad' : '') + '">' +
+          (ef && !ef.needs ? (ef.tActual === null ? '—' : (ef.tActual * 1000).toFixed(0)) : '—') + '</td>' +
         '<td><span class="badge ' + vc + '">' + verdict + '</span></td></tr>';
     });
     h += '</tbody></table>';
@@ -1354,7 +1396,21 @@
       fRow('Imbalance limit', '<span class="unit">' + dnum('imbalanceBad', S.design.imbalanceBad, 1) + '<span class="u">%</span></span>') +
       fRow('Fault MVA factor', '<span class="unit">' + dnum('faultMVAFactor', S.design.faultMVAFactor, 0.1) + '<span class="u">×kVA</span></span>') +
       fRow('Impedance / stage', '<span class="unit">' + dnum('zpuPerStage', S.design.zpuPerStage, 0.01) + '<span class="u">pu</span></span>') +
+      fRow('Power factor limit', '<span class="unit">' + dnum('pfLimit', S.design.pfLimit, 0.05) + '<span class="u">pf</span></span>') +
+      fRow('Harmonic watch', '<span class="unit">' + dnum('thdWatch', S.design.thdWatch, 1) + '<span class="u">% THD</span></span>') +
       '</div>' +
+      '<h5>Earthing</h5>' +
+      '<div class="two" style="max-width:640px">' +
+      fRow('Supply system', '<select class="sel" data-bind="design" data-f="supplySystem">' +
+        ['TN-S', 'TN-C-S', 'TT'].map(function (v) {
+          return '<option value="' + v + '"' + (S.design.supplySystem === v ? ' selected' : '') + '>' + v + '</option>';
+        }).join('') + '</select>') +
+      fRow('Earth electrode R', '<span class="unit">' + dnum('earthElectrodeR', S.design.earthElectrodeR, 0.5) + '<span class="u">Ω</span></span>') +
+      '</div>' +
+      '<div class="hint">The supply system decides how the earth fault loop is formed. ' +
+      'On <b>TN</b> the loop is the fault, the protective conductor and the source impedance, so R1+R2 alone decides the disconnection time. ' +
+      'On <b>TT</b> the loop runs through the earth electrode, so its resistance has to be entered here as well, and a 30 mA RCD is what makes a ' +
+      '0.1 s disconnection achievable at all — this tool does not model RCDs, so on TT it will tell you the electrode resistance is needed and stop there.</div>' +
       '<h5>How the schedule is built</h5><ul>' +
       '<li><b>Load</b> — design kVA = connected kW ÷ power factor × demand factor; current from kVA at the board voltage. Single-phase circuits are calculated at the phase-to-neutral voltage.</li>' +
       '<li><b>Assignment</b> — every control panel is placed by grid reference. Each board is scored on the utilisation it would end up at, how far the feeder would run, and whether a way is left free. Run length is weighted against load size, so a small circuit stays on the nearest board while a large one chases headroom. Crossing a transformer is penalised, so it only happens when it is clearly better.</li>' +
@@ -1362,12 +1418,14 @@
       '<li><b>Phase balance</b> — single-phase circuits are allocated to the lightest phase of the board they land on, so they spread across L1, L2 and L3 rather than stacking. The properties panel marks the lightest phase.</li>' +
       '<li><b>Moving a panel</b> — drop it on an occupied cell and it is nudged to the next clear reference rather than overlapping. Dragging also re-runs the assignment if the load no longer fits.</li>' +
       '<li><b>Cables</b> — indicative ampacity per the IEC 60364-5-52 reference methods, derated for ambient temperature, grouping and 4-core construction, with up to four parallel runs. Volt drop uses an indicative copper impedance at 70 °C over the straight-line route plus 20%.</li>' +
+      '<li><b>Earth fault loop</b> — R1 + R2 over the route at conductor operating temperature, giving the loop current as U0 ÷ (R1 + R2). The device\'s time-current curve is then read at that current and compared against the maximum disconnection time for its rating and the supply system (IEC 60364-41 Table 41.4). The protective conductor defaults to the BS 7671 Table 54.7 minimum for the phase size and can be overridden. Where the loop is too high, the finding states the size that would meet it.</li>' +
       '<li><b>Balancing</b> — <b>Auto-balance</b> levels the distribution boards feeding from each main board, and never moves a circuit between main boards. <b>↔ Balance across TX</b> does allow that, because it changes the supply topology.</li>' +
       '</ul>' +
       '<h5>Limits of this tool</h5><ul>' +
       '<li>Ampacity values are indicative — confirm against the current edition of BS 7671 / IEC 60364-5-52, the manufacturer\'s data, and local rules before issue.</li>' +
       '<li>Selectivity and cable thermal withstand are assessed on conventional envelopes (IEC 60898, IEC 60947-2 and the adiabatic relation), not on manufacturer\'s curves or let-through data. Both judge the <b>settings</b> rather than the devices.</li>' +
-      '<li>No protection coordination study, RCD discrimination, short-circuit capacity or cost checks are performed.</li>' +
+      '<li>Earth fault loop impedance uses the simplified R1 + R2 method of IEC 60364-5-54 Annex B with an assumed copper resistance, not measured or calculated loop impedance. Joint and contact resistances, and any temperature below operating, are not included.</li>' +
+      '<li>No RCD discrimination, short-circuit capacity or cost checks are performed. The &le;32 A disconnection time assumes 30 mA additional protection, which this tool does not model.</li>' +
       '<li>Fault levels are indicative (LV fault MVA = factor × transformer rating, stepped by an assumed impedance per stage).</li>' +
       '<li>No diversity is applied between circuits; each panel is loaded at its own demand factor.</li>' +
       '</ul></div>';
@@ -1650,6 +1708,11 @@
       if (f === '_cores') o3.cable.cores = num(v);
       if (f === '_runs') o3.cable.runs = Math.max(1, num(v, 1));
       if (f === '_len') { o3.cable.len = num(v); if (o3.__kind === 'panel' || o3.__kind === 'pdp') autoLen(o3); }
+      /* The field name is prefixed so it cannot collide with a cable property
+         of the same name; every one has to be translated explicitly, because the
+         fall-through would write a key called "_peCsa" that nothing reads. */
+      else if (f === '_peCsa') o3.cable.peCsa = (v === '' ? null : num(v));
+      else if (f === '_csa') o3.cable.csa = (v === '' ? null : num(v));
       else o3.cable[f] = (v === '' ? null : num(v));
       if (f === '_x' || f === '_y') onMoved(o3, true);
     } else if (b === 'cab') {
@@ -2663,12 +2726,28 @@
     S.panels.forEach(function (pn) { if (!pn.cable) return; autoLen(pn); });
   }
 
+  /* The earth fault columns for a schedule row: PE size, loop impedance, the
+     current that loop will carry, and the required and achieved disconnection
+     times side by side. The achieved one is the column an inspector reads, and
+     it is only meaningful next to the required one. */
+  function loopOf(pn, kind) {
+    var e = LC.earthFaultCheck(S, pn, kind);
+    if (!e || e.needs) return ['', '', '', '', ''];
+    return [
+      e.loop.peCsa || '',
+      e.loop.total.toFixed(3),
+      e.ia.toFixed(0),
+      e.tMax.toFixed(2),
+      e.tActual === null ? '' : e.tActual.toFixed(3)
+    ];
+  }
+
   function exportCsv() {
     var L = [];
     L.push(csvRow([S.name])); L.push(csvRow(['Client', S.client, 'Project', S.ref, 'Designer', S.designer, 'Date', S.date]));
     L.push('');
     L.push(csvRow(['LOAD SCHEDULE']));
-    L.push(csvRow(['Reference', 'Board', 'Board description', 'Description', 'Type', 'Connected kW', 'Design kVA', 'kvar', 'pf', 'Demand', 'Phases', 'Voltage V', 'Current A', 'THD %', 'Protective device', 'Device frame A', 'Breaking capacity kA', 'Trip unit', 'Feeder runs', 'Feeder mm2', 'Cores', 'Length m', 'Installation', 'Rated A', 'Utilisation %', 'Volt drop %', 'Grid ref E', 'Grid ref N', 'Status']));
+    L.push(csvRow(['Reference', 'Board', 'Board description', 'Description', 'Type', 'Connected kW', 'Design kVA', 'kvar', 'pf', 'Demand', 'Phases', 'Voltage V', 'Current A', 'THD %', 'Protective device', 'Device frame A', 'Breaking capacity kA', 'Trip unit', 'Feeder runs', 'Feeder mm2', 'Cores', 'Length m', 'Installation', 'Rated A', 'Utilisation %', 'Volt drop %', 'PE mm2', 'R1+R2 ohm', 'Loop A', 'Max t s', 'Actual t s', 'Grid ref E', 'Grid ref N', 'Status']));
     var un = [];
     /* One row per circuit, wherever it is fed from. Declared up here because
        the main-board circuits are written before the distribution boards. */
@@ -2689,6 +2768,7 @@
         pr && pr.trip ? pr.trip : '',
         cab ? cab.runs : '', cab ? cab.csa : '', pn.cable.cores, pn.cable.len, cab ? cab.method.name : pn.cable.method,
         cab ? cab.derated.toFixed(0) : '', cu === '' ? '' : cu.toFixed(0), vd ? vd.pct.toFixed(2) : '',
+        loopOf(pn, 'panel'),
         pn.pos.x, pn.pos.y, stt]));
     }
     /* Circuits fed straight off a main board come first — they are one way on
@@ -2737,7 +2817,7 @@
     });
     L.push('');
     L.push(csvRow(['CABLE / VOLT DROP SCHEDULE']));
-    L.push(csvRow(['From', 'To', 'Circuit', 'Runs', 'mm2', 'Cores', 'Length m', 'Installation', 'Grouped', 'Ambient C', 'Base A', 'Derated A', 'Load A', 'Utilisation %', 'Drop V', 'Drop %', 'Verdict']));
+    L.push(csvRow(['From', 'To', 'Circuit', 'Runs', 'mm2', 'Cores', 'Length m', 'Installation', 'Grouped', 'Ambient C', 'Base A', 'Derated A', 'Load A', 'Utilisation %', 'Drop V', 'Drop %', 'PE mm2', 'R1+R2 ohm', 'Loop A', 'Max t ms', 'Actual t ms', 'Verdict']));
     var feeds = [];
     S.dbs.forEach(function (b) { var pdp2 = LC.get(S, 'pdp', b.pdpId); feeds.push([pdp2 ? pdp2.tag : '', b.tag, 'PDP to sub-board', b, LC.boardStats(S, b, 'db').amp, 0.9, b.phases, 400]); });
     S.pdps.forEach(function (d) { var pdb = LC.get(S, 'pdb', d.pdbId); feeds.push([pdb ? pdb.tag : '', d.tag, 'PDB to PDP', d, LC.boardStats(S, d, 'pdp').amp, 0.9, d.phases, 400]); });
@@ -2750,10 +2830,21 @@
     feeds.forEach(function (f) {
       var cab = f[3].cable && f[3].cable.csa ? LC.cableRating(f[3].cable) : null;
       var vd = cab ? LC.voltDrop(f[3].cable, f[4], f[5], f[6], f[7]) : null;
+      var efc = LC.earthFaultCheck(S, f[3], f[6] === 400 && f[2].indexOf('to panel') >= 0 ? 'panel' : 'pdp');
       L.push(csvRow([f[0], f[1], f[2], cab ? cab.runs : '', cab ? cab.csa : '', f[3].cable.cores, f[3].cable.len, cab ? cab.method.name : f[3].cable.method, f[3].cable.group, f[3].cable.ambient,
         cab ? cab.base : '', cab ? cab.derated.toFixed(1) : '', f[4].toFixed(1), cab ? ((f[4] / cab.derated) * 100).toFixed(0) : '',
         vd ? vd.volts.toFixed(2) : '', vd ? vd.pct.toFixed(2) : '',
-        !cab ? 'no cable' : f[4] > cab.derated ? 'UNDERSIZED' : vd.pct > num(S.design.vdropLimitLv, 3) ? 'VOLT DROP' : 'OK']));
+        efc && !efc.needs ? (efc.loop.peCsa || '') : '',
+        efc && !efc.needs ? efc.loop.total.toFixed(3) : '',
+        efc && !efc.needs ? efc.ia.toFixed(0) : '',
+        efc && !efc.needs ? (efc.tMax * 1000).toFixed(0) : '',
+        efc && !efc.needs && efc.tActual !== null ? (efc.tActual * 1000).toFixed(0) : '',
+        !cab ? 'no cable'
+          : efc && efc.unachievable ? 'DEVICE TOO SLOW'
+          : efc && !efc.pass ? 'LOOP TOO HIGH'
+          : f[4] > cab.derated ? 'UNDERSIZED'
+          : vd.pct > num(S.design.vdropLimitLv, 3) ? 'VOLT DROP'
+          : 'OK']));
     });
     L.push('');
     L.push(csvRow(['DESIGN WARNINGS']));

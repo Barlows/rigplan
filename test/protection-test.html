@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=133"></script>
-<script src="../js/calc.js?v=133"></script>
+<script src="../js/data.js?v=141"></script>
+<script src="../js/calc.js?v=141"></script>
 <script>
 (function () {
   var results = [];
@@ -325,7 +325,17 @@
   check('and a curve D at twenty, which is the whole point of choosing it',
     LC.msOrS(LC.clearingTimeAt(mcb(63, 'D'), 20)), '20.0 ms');
   check('a curve B picks up at five',
-    LC.msOrS(LC.clearingTimeAt(mcb(63, 'B'), 5)), '20.0 ms');
+    LC.msOrS(LC.clearingTimeAt(mcb(63, 'B'), 5)), '100 ms');
+  /* The region between the thermal band and the magnetic pickup is where the
+     standard is silent and where both selectivity and disconnection time live.
+     Left as one long interpolation it reports a 16 A MCB carrying 44 A as taking
+     25 s, which is not a number anyone accepts from a schedule. */
+  check('a curve C MCB at 44 A clears in seconds, not tens of seconds',
+    LC.clearingTimeAt(mcb(16, 'C'), 2.75) < 10, true);
+  check('and still on the slow side of the plausible range, so the check errs that way',
+    LC.clearingTimeAt(mcb(16, 'C'), 2.75) > 0.5, true);
+  check('the three curves stay in their published order at 2.75 In',
+    LC.clearingTimeAt(mcb(16, 'B'), 2.75) <= LC.clearingTimeAt(mcb(16, 'C'), 2.75), true);
   check('an LI unit with no short-time stage is still in the tens of milliseconds at eight times its setting',
     LC.msOrS(LC.clearingTimeAt(mcbc(1000, 'LI'), 8)), '200 ms');
   check('while an LS with one holds at 0.1 s across the same band',
@@ -494,6 +504,194 @@
   h1.thd = 5;
   check('below the threshold it is not worth a line',
     LC.audit(hp.p).filter(function (x) { return /harmonic/i.test(x.title); }).length, 0);
+
+  /* ------------------------------------------- earth fault loop & the neutral */
+  /* Disconnection has two halves and the app had neither: a resistance that has
+     to be low enough, and a time that has to be met. The second is a question
+     about the device's curve and nothing else, which is why it needs the same
+     trip curves the selectivity work uses. */
+
+  check('a 16 A final circuit on TN-S has 0.1 s to disconnect',
+    LS.maxDisconnectionTime(16, true, 'TN-S'), 0.1);
+  check('a 63 A circuit has 0.5 s, final or not',
+    [LS.maxDisconnectionTime(63, true, 'TN-S'), LS.maxDisconnectionTime(63, false, 'TN-S')], [0.5, 0.5]);
+  check('and anything over 400 A has 2 s',
+    LS.maxDisconnectionTime(630, false, 'TN-S'), 2);
+  check('the boundary is inclusive at 400 A', LS.maxDisconnectionTime(400, false, 'TN-S'), 0.5);
+  check('a TT supply without an RCD cannot claim the 0.1 s row',
+    LS.maxDisconnectionTime(20, false, 'TT'), 0.5);
+
+  /* PE minimums, BS 7671 Table 54.7. The small sizes keep a full-size core
+     because there is nothing smaller in the cable to go down to. */
+  check('the smallest cores keep a full-size PE', [LS.peMinCsa(1.5), LS.peMinCsa(2.5)], [1.5, 2.5]);
+  check('4 mm2 phase takes a 2.5 mm2 PE', LS.peMinCsa(4), 2.5);
+  check('16 mm2 phase takes a 10 mm2 PE', LS.peMinCsa(16), 10);
+  check('35 mm2 phase takes a 16 mm2 PE', LS.peMinCsa(35), 16);
+  check('240 mm2 phase takes a 120 mm2 PE', LS.peMinCsa(240), 120);
+  check('an off-list size rounds down, never up', LS.peMinCsa(30), LS.peMinCsa(25));
+
+  /* The loop itself: 22.5 Ω·mm²/m at 20 °C, ×1.15 for operating temperature. */
+  var ep = site();
+  var epn = load(ep.p, ep.pdp, 2, 0.9, { phases: '1', volt: 230 });
+  epn.cable = { csa: 1.5, runs: 1, cores: 3, len: 20, method: 'XL-A1', group: 1, ambient: 30, sheathed: true };
+  epn.prot = LS.newProt({ kind: 'mcb', ir: 16, icu: 6, trip: 'C', poles: 2 });
+  var loop = LC.earthLoop(ep.p, epn.cable);
+  check('a 20 m 1.5 mm2 loop at 70 °C', loop.total.toFixed(3), '0.690');
+  check('which carries 230 V divided by it', (230 / loop.total).toFixed(0), '333');
+  var ef = LC.earthFaultCheck(ep.p, epn, 'panel');
+  check('and a 16 A C-curve clears that in well under 0.1 s', ef.pass, true);
+  check('with the permissible figure the other way: what the loop may be',
+    ef.maxLoop.toFixed(2), '1.45');
+  check('and the required time is the 0.1 s row for a 16 A final circuit', ef.tMax, 0.1);
+
+  /* Longer route, same cable: this is the case that fails, and it should say so
+     in terms the designer can act on. */
+  epn.cable.len = 150;
+  var ef2 = LC.earthFaultCheck(ep.p, epn, 'panel');
+  check('the same circuit over 150 m no longer meets the time', ef2.pass, false);
+  check('and the loop current has fallen far enough to matter', ef2.ia < 60, true);
+  var efFnd = LC.audit(ep.p).filter(function (x) { return /loop too high/.test(x.title); });
+  check('the audit says so', efFnd.length > 0, true);
+  check('naming the loop resistance it found', /R1 \+ R2 is/.test(efFnd[0].detail), true);
+  check('and stating the PE size that would fix it', /mm² over this route/.test(efFnd[0].detail), true);
+
+  /* A bigger protective conductor is the usual fix and must be recognised as
+     one, rather than only increasing the phase conductor. */
+  var before = LC.earthFaultCheck(ep.p, epn, 'panel');
+  epn.cable.peCsa = 16;
+  var after = LC.earthFaultCheck(ep.p, epn, 'panel');
+  check('upping only the PE conductor lowers the loop', after.loop.total < before.loop.total, true);
+  check('and raises the loop current', after.ia > before.ia, true);
+  check('without touching the phase conductor', after.loop.r1, before.loop.r1);
+
+  /* Parallel runs divide the loop resistance — both halves of it. */
+  epn.cable.peCsa = null; epn.cable.len = 60; epn.cable.runs = 2;
+  var par = LC.earthLoop(ep.p, epn.cable);
+  var oneRun = LC.earthLoop(ep.p, Object.assign({}, epn.cable, { runs: 1 }));
+  check('two parallel runs halve the loop impedance, both halves of it',
+    Math.round(par.total * 2 * 1000), Math.round(oneRun.total * 1000));
+
+  /* The inverse of the curve: at which multiple does a device clear in t? This
+     is what turns a required time into a permissible loop resistance. */
+  var mcb16 = { kind: 'mcb', ir: 16, trip: 'C' };
+  var mAt01 = LC.disconnectionMultipleAt(mcb16, 0.1);
+  check('the multiple at which a 16 A C-curve clears in 0.1 s round-trips',
+    LC.clearingTimeAt(mcb16, mAt01).toFixed(2), '0.10');
+  check('and it lands on the curve\'s published point rather than between two',
+    mAt01.toFixed(1), '9.9');
+  /* Asking for a time the curve cannot reach is a design failure, and the
+     honest answer is "none" — an extrapolated multiple would let a schedule
+     claim a loop impedance the device cannot actually achieve. */
+  check('a time faster than the curve reaches returns none, not a guess',
+    LC.disconnectionMultipleAt(mcb16, 0.001), null);
+  /* No device in the library trips the "cannot disconnect within" branch, and
+     that is worth stating rather than leaving untested: every catalogue MCB and
+     MCCB reaches well under 0.1 s at its magnetic threshold, so a real
+     disconnection failure on this project is always a loop-impedance failure
+     rather than a device-speed one. The branch exists for a device whose curve
+     genuinely cannot reach the required time — a long-time-dominant protection,
+     or a fuse on a final circuit. Asserting the branch is unreachable by the
+     usual catalogue, so a future curve edit that broke it would be noticed. */
+  check('every MCB curve clears faster than the 0.1 s final-circuit requirement',
+    ['B', 'C', 'D'].every(function (c) {
+      return LC.clearingTimeAt({ kind: 'mcb', ir: 16, trip: c },
+        LS.TRIP_CURVES['MCB_' + c].points.slice(-1)[0][0]) <= 0.1;
+    }), true);
+  check('every MCCB trip unit clears faster than the 0.5 s requirement above 32 A',
+    Object.keys(LS.TRIP_UNITS).every(function (t) {
+      return LC.clearingTimeAt({ kind: 'mccb', ir: 63, trip: t },
+        LS.TRIP_CURVES[t].points.slice(-1)[0][0]) <= 0.5;
+    }), true);
+
+  /* Nothing to check without the pieces a check needs. */
+  check('no cable means no loop', LC.earthFaultCheck(ep.p, load(ep.p, ep.pdp, 1, 0.9), 'panel'), null);
+  var nop = load(ep.p, ep.pdp, 1, 0.9);
+  nop.cable = { csa: 2.5, len: 10, method: 'XL-A1', cores: 3 };
+  check('and no device means no disconnection condition', LC.earthFaultCheck(ep.p, nop, 'panel'), null);
+
+  /* A TT supply cannot be assessed from R1+R2 alone, and must say which piece
+     of data is missing rather than applying a TN formula to it. */
+  ep.p.design.supplySystem = 'TT';
+  var tt = LC.earthFaultCheck(ep.p, epn, 'panel');
+  check('a TT supply reports the missing input', tt.needs, 'earth electrode resistance');
+  check('and the audit names it', LC.audit(ep.p).some(function (x) {
+    return /cannot be assessed/.test(x.title) && /electrode/.test(x.detail);
+  }), true);
+  ep.p.design.supplySystem = 'TN-S';
+
+  /* ------------------------------------------------ the neutral conductor */
+  /* The vector group parse has to read the LV winding, and an explicit list is
+     the only thing that gets all the forms right: reading a character position
+     reported a Dyn11 as star-star, which is the opposite of the answer. */
+  check('Dyn11 has a delta on the LV side', LS.blocksTriplen('Dyn11'), true);
+  check('and so does Dyn1 and Yd11', [LS.blocksTriplen('Dyn1'), LS.blocksTriplen('Yd11')], [true, true]);
+  check('Yyn11 does not', LS.blocksTriplen('Yyn11'), false);
+  check('nor Yyn0', LS.blocksTriplen('Yyn0'), false);
+  check('a zig-zag winding does not block it — it provides a path for zero sequence',
+    LS.blocksTriplen('Dz11'), false);
+
+  /* 18 single-phase LED circuits at 20% THD on 2.5 mm2. */
+  function ledBoard(vecGroup) {
+    var z = site();
+    z.p.txs[0].vecGroup = vecGroup;
+    for (var i = 0; i < 18; i++) {
+      var pn = load(z.p, z.pdp, 0.1, 0.95, { phases: '1', volt: 230, thd: 20 });
+      pn.phase = ['L1', 'L2', 'L3'][i % 3];
+      pn.cable = { csa: 2.5, runs: 1, cores: 3, len: 30, method: 'XL-A1', group: 1, ambient: 30, sheathed: true };
+    }
+    LC.applyNumbering(z.p);
+    return { z: z, st: LC.boardStats(z.p, z.pdp, 'pdp') };
+  }
+  var D_ = ledBoard('Dyn11'), Y_ = ledBoard('Yyn11'), C_ = ledBoard('Dyn11');
+  C_.z.p.panels.forEach(function (pn) { pn.thd = null; });
+  var cl = LC.boardStats(C_.z.p, C_.z.pdp, 'pdp');
+  var dyn = D_.st, yyn = Y_.st;
+
+  check('the board carries third harmonic either way', Math.round(dyn.neutral.thirdAmp), Math.round(yyn.neutral.thirdAmp));
+  check('a star-star transformer puts three times that in the incoming neutral',
+    Math.round(yyn.neutral.amps), Math.round(3 * yyn.neutral.thirdAmp));
+  check('and the currents add rather than cancelling — which is the whole point',
+    yyn.neutral.amps > yyn.neutral.maxPhase * 0.5, true);
+  check('a delta on the LV winding stops it reaching the incomer at all',
+    dyn.neutral.amps, 0);
+  check('while the board\'s own neutral bar still carries it', Math.round(dyn.neutral.thirdAmp) > 0, true);
+  check('and the same board with nothing declared is clean — nothing is assumed',
+    cl.neutral.amps, 0);
+  check('three-phase circuits do not contribute to this board\'s neutral',
+    (function () {
+      var t = site();
+      load(t.p, t.pdp, 100, 0.85, { phases: '3', thd: 40 });
+      return LC.boardStats(t.p, t.pdp, 'pdp').neutral.amps;
+    })(), 0);
+
+  /* The finding has to be actionable and has to name the vector group, because
+     that is the cheapest fix available. */
+  var zn = site();
+  zn.p.txs[0].vecGroup = 'Yyn11';
+  for (var q = 0; q < 18; q++) {
+    var qp = load(zn.p, zn.pdp, 0.1, 0.95, { phases: '1', volt: 230, thd: 20 });
+    qp.phase = ['L1', 'L2', 'L3'][q % 3];
+    qp.cable = { csa: 2.5, runs: 1, cores: 3, len: 30, method: 'XL-A1', group: 1, ambient: 30, sheathed: true };
+  }
+  LC.applyNumbering(zn.p);
+  var nFnd = LC.audit(zn.p).filter(function (x) { return /neutral carries/.test(x.title); });
+  check('a star-star board is flagged on the neutral', nFnd.length > 0, true);
+  check('naming the vector group', /Yyn11/.test(nFnd[0].detail), true);
+  check('and the phase conductor it is being compared against',
+    /phase conductor of/.test(nFnd[0].detail), true);
+
+  var zd = site();
+  zd.p.txs[0].vecGroup = 'Dyn11';
+  for (var w = 0; w < 18; w++) {
+    var wp = load(zd.p, zd.pdp, 0.1, 0.95, { phases: '1', volt: 230, thd: 20 });
+    wp.phase = ['L1', 'L2', 'L3'][w % 3];
+    wp.cable = { csa: 2.5, runs: 1, cores: 3, len: 30, method: 'XL-A1', group: 1, ambient: 30, sheathed: true };
+  }
+  LC.applyNumbering(zd.p);
+  var dFnd = LC.audit(zd.p).filter(function (x) { return /neutral is protected/.test(x.title); });
+  check('and a delta one says what the delta is doing instead of raising an alarm',
+    dFnd.length > 0, true);
+  check('quantifying what it is preventing', /Without the low-voltage delta/.test(dFnd[0].detail), true);
 
   /* ---------------------------------------------------- grouped findings */
   /* Folding repeats is what makes the list readable, so the shape of the fold

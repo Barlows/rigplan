@@ -741,6 +741,16 @@ var LC = (function () {
                   : kind === 'pdp' ? (item.ways !== undefined && item.ways !== null && item.ways > 0)
                   : false;
     var rq = reactive(p, sort);
+    /* Which transformer feeds this board — the vector group decides whether the
+       third harmonic ever reaches the incomer, so the neutral cannot be
+       calculated without knowing it. */
+    var upTx = null;
+    if (kind === 'tx') upTx = item;
+    else if (kind === 'pdb') upTx = get(p, 'tx', item.txId);
+    else if (kind === 'pdp') { var up1 = get(p, 'pdb', item.pdbId); if (up1) upTx = get(p, 'tx', up1.txId); }
+    else if (kind === 'db') { var up2 = get(p, 'pdp', item.pdpId); if (up2) { var up3 = get(p, 'pdb', up2.pdbId); if (up3) upTx = get(p, 'tx', up3.txId); } }
+    var neut = neutralCurrent(p, sort, upTx);
+    var neutCsa = neutralCsaFor(sort.length && sort[0].cable ? sort[0].cable.csa : null);
     var thdMax = 0, thdPanels = [];
     sort.forEach(function (pn) {
       var t = D.num(pn.thd, 0);
@@ -750,6 +760,13 @@ var LC = (function () {
     });
     return {
       panels: sort, kw: kw, kva: kva, kvar: rq.kvar, pf: rq.pf, amp: amp, ampSum: ampSum,
+      neutral: neut, neutralCsa: neutCsa, vectorGroup: upTx ? (upTx.vecGroup || 'Dyn11') : null,
+      /* the neutral conductor the board's own circuits imply, which is the
+         largest phase conductor going into it */
+      neutralPhaseCsa: sort.reduce(function (a, pn) {
+        var c = num(pn.cable && pn.cable.csa, 0);
+        return c > a ? c : a;
+      }, 0),
       /* the worst declared harmonic content on the board, and how many circuits
          declare any at all */
       thdMax: thdPanels.length ? thdMax : null, thdPanels: thdPanels.length,
@@ -989,6 +1006,137 @@ var LC = (function () {
 
     function thg(t) { return (Math.round(t * 10) / 10) + '%'; }
 
+    /* Earth fault disconnection. Two separate failures, reported separately,
+       because they have different fixes and confusing them wastes a site visit:
+       a loop that is too high needs a bigger protective conductor or a shorter
+       route, while a device that is too slow to clear needs a faster one. */
+    function checkEarthFault(p, item, kind) {
+      var e = earthFaultCheck(p, item, kind);
+      if (!e) return;
+      var what = item.tag;
+
+      if (e.needs) {
+        add('info', kind, item.id, what + ' earth fault loop cannot be assessed',
+          'The supply is ' + e.system + ', whose loop runs through the earth ' +
+          'electrode, so it needs the electrode resistance before the disconnection ' +
+          'time can be checked. Set it on the site page, and note that a TT supply ' +
+          'also needs the 30 mA RCD that makes a 0.1 s disconnection achievable at all.');
+        return;
+      }
+      if (e.unachievable) {
+        add('bad', kind, item.id, what + ' cannot disconnect within ' +
+          (e.tMax * 1000).toFixed(0) + ' ms',
+          'The device is set at ' + e.ir + ' A and its curve does not clear in less than ' +
+          (e.tMax * 1000).toFixed(0) + ' ms at any current, so no loop impedance can meet the ' +
+          'requirement — IEC 60364-41 Table 41.4 allows ' + (e.tMax * 1000).toFixed(0) +
+          ' ms for a ' + e.ir + ' A ' + (kind === 'panel' ? 'final circuit' : 'circuit') +
+          ' on a ' + e.system + ' supply. This is a device choice, not a cable choice.');
+        return;
+      }
+      if (!e.pass) {
+        add('bad', kind, item.id, what + ' earth fault loop too high to disconnect in time',
+          'R1 + R2 is ' + e.loop.total.toFixed(2) + ' Ω over ' + (e.loop.km * 1000).toFixed(0) +
+          ' m, which lets ' + e.ia.toFixed(0) + ' A flow — the device takes ' +
+          (e.tActual === null ? 'longer than its curve allows' : LC_ms(e.tActual)) +
+          ' and the limit is ' + (e.tMax * 1000).toFixed(0) + ' ms. It needs ' +
+          (e.maxLoop === null ? 'a lower loop impedance than the current conductor can give' :
+            'R1 + R2 below ' + e.maxLoop.toFixed(2) + ' Ω — a protective conductor of about ' +
+            peNeededCsa(e) + ' mm² over this route, or a shorter one.'));
+        return;
+      }
+      /* Passing silently is the right default, and so is the test for "closer to
+         failing than it looks".
+
+         The first version of this asked whether the loop current was high
+         against the device rating, which is backwards: a low loop impedance gives
+         a *large* current, and a large current is safe — it is what the device
+         wants. On the sample project every short fat feeder carries tens of
+         kiloamps through the loop and the check fired on 68 of 103 rows, which is
+         precisely the noise the grouped list exists to remove.
+
+         The risk is the other end. A circuit that passes only just is one where
+         the achieved time is a large fraction of the time allowed, because then
+         the conductor has to be at its limit temperature, the joints have to be
+         good and the route must not be extended. */
+      var ratio = e.tActual === null ? null : e.tActual / e.tMax;
+      if (ratio !== null && ratio > 0.4) {
+        add('info', kind, item.id, what + ' earth fault loop leaves little margin',
+          'The loop carries ' + e.ia.toFixed(0) + ' A against a ' + e.ir +
+          ' A setting, which clears in ' + LC_ms(e.tActual) + ' against a ' +
+          (e.tMax * 1000).toFixed(0) + ' ms limit — ' + (ratio * 100).toFixed(0) +
+          '% of the time available used. It passes, and R1 + R2 is ' + e.loop.total.toFixed(2) +
+          ' Ω against a permitted ' + (e.maxLoop === null ? '—' : e.maxLoop.toFixed(2)) +
+          ' Ω, but the calculation assumes the conductor at its operating temperature with ' +
+          'sound joints, and any later extension of the route eats into what is left.',
+          'loop-margin', 0);
+      }
+    }
+
+    function LC_ms(t) { return t >= 1 ? t.toFixed(2) + ' s' : (t * 1000).toFixed(0) + ' ms'; }
+
+    /* The neutral. Reported per board, from the declared harmonic content of
+       the single-phase circuits on it. */
+    function checkNeutral(p, item, kind, st) {
+      var n = st.neutral;
+      if (!n || n.thirdAmp <= 0) return;
+      /* What the neutral would carry with a full-size conductor of the same
+         size as the phases. The ampacity comparison uses the phase conductor's
+         rating as a proxy, which is right for a 4-core cable and indicative for
+         a separate one. */
+      var phaseCsa = st.neutralPhaseCsa;
+      if (!(phaseCsa > 0)) return;
+      var cab = { csa: phaseCsa, runs: 1, cores: 4, len: 1, method: 'XL-A1', group: 3, ambient: 40, sheathed: true };
+      var rated = cableRating(cab).derated;
+      var over = n.amps > rated;
+      if (n.blocked && n.ampsIfUnblocked <= rated) {
+        /* Nothing to do about it — the transformer is handling it. Saying so is
+           more use than a note that repeats the same reassurance on every board,
+           so this is reported once, and only when the group is actually earning
+           its place. */
+        if (n.ampsIfUnblocked > n.maxPhase * 0.6) {
+          add('info', kind, item.id, item.tag + ' neutral is protected by the ' + st.vectorGroup + ' vector group',
+            'Without the low-voltage delta this board would put ' + n.ampsIfUnblocked.toFixed(0) +
+            ' A of third harmonic in the neutral — ' + (n.ampsIfUnblocked / n.maxPhase * 100).toFixed(0) +
+            '% of a phase conductor, on a ' + phaseCsa + ' mm² neutral. The delta winding keeps it out. ' +
+            'Worth recording on the specification: a star-star group here would need a larger neutral, ' +
+            'and the same cost would buy nothing.');
+        }
+        return;
+      }
+
+      var where = n.blocked
+        ? 'The ' + st.vectorGroup + ' vector group has a delta on the low-voltage winding, which stops zero-sequence ' +
+          'current reaching this incomer — the board\'s neutral bar carries ' + n.thirdAmp.toFixed(1) + ' A locally but ' +
+          'none of it comes back along the incoming neutral. A star-star group would put ' + n.ampsIfUnblocked.toFixed(0) +
+          ' A in that conductor instead, against a phase conductor of ' + n.maxPhase.toFixed(0) + ' A, so the vector group ' +
+          'is doing real work here rather than being a nameplate detail.'
+        : 'The ' + st.vectorGroup + ' vector group is star-star, so the third harmonic passes through: the currents add in ' +
+          'the neutral instead of cancelling, and it carries ' + n.amps.toFixed(0) + ' A against a phase conductor of ' +
+          n.maxPhase.toFixed(0) + ' A.';
+
+      add(over ? 'bad' : n.amps > rated * 0.6 ? 'warn' : 'info', kind, item.id,
+        item.tag + ' neutral carries ' + n.amps.toFixed(0) + ' A' + (over ? ' — more than its conductors' : ''),
+        where + ' The neutral is sized here as the same cross-section as the phases (' + phaseCsa +
+        ' mm², about ' + rated.toFixed(0) + ' A), which is the convention: the usual reduced-size neutral assumes a balanced ' +
+        'load, and a balanced load is exactly what is not present here. ' +
+        n.declared + ' of ' + (n.declared + n.undeclared) + ' single-phase circuits on this board declare harmonic content; ' +
+        'the rest are counted as clean. Third harmonic is taken as 60% of the declared total, which is typical of switch-mode ' +
+        'supplies and not always right — a circuit with a measured spectrum should override it.');
+    }
+
+    /* The protective conductor size that would meet the requirement over this
+       route, found from the same resistance relation rather than guessed. */
+    function peNeededCsa(e) {
+      var target = e.maxLoop * e.loop.runs;      // back to one run
+      if (!(target > 0)) return null;
+      /* R2 must come down to target minus R1, which is fixed by the phase core */
+      var r2max = target - e.loop.r1 * e.loop.runs;
+      if (!(r2max > 0)) return '— (the phase conductor alone is too long)';
+      var csa = (22.5 * 1.15 * e.loop.km) / r2max;
+      var c = D.CSA.filter(function (v) { return v <= csa * 1.25; }).pop();
+      return c || 'beyond the largest listed size';
+    }
+
     function checkProt(p, item, kind, loadA, cableA, faultKA) {
       var d = item.prot;
       if (!d) { add('warn', kind, item.id, item.tag + ' has no protective device',
@@ -1067,6 +1215,8 @@ var LC = (function () {
       checkProt(p, b, 'pdb', st.amp, cab && cab.derated, st.faultKA);
       checkWithstandFinding(p, b, 'pdb', st.faultKA);
       checkReactive(p, b, 'pdb', st);
+      checkEarthFault(p, b, 'pdb');
+      checkNeutral(p, b, 'pdb', st);
     });
     p.pdps.forEach(function (d) {
       var st = boardStats(p, d, 'pdp');
@@ -1074,6 +1224,8 @@ var LC = (function () {
       checkProt(p, d, 'pdp', st.amp, cab && cab.derated, st.faultKA);
       checkWithstandFinding(p, d, 'pdp', st.faultKA);
       checkReactive(p, d, 'pdp', st);
+      checkEarthFault(p, d, 'pdp');
+      checkNeutral(p, d, 'pdp', st);
     });
     p.dbs.forEach(function (b) {
       var st = boardStats(p, b, 'db');
@@ -1081,6 +1233,7 @@ var LC = (function () {
       checkProt(p, b, 'db', st.amp, cab && cab.derated, st.faultKA);
       checkWithstandFinding(p, b, 'db', st.faultKA);
       checkReactive(p, b, 'db', st);
+      checkEarthFault(p, b, 'db');
     });
     p.panels.forEach(function (pn) {
       if (!pn.pdpId && !pn.pdbId) return;
@@ -1091,6 +1244,7 @@ var LC = (function () {
       checkWithstandFinding(p, pn, 'panel', f);
       checkHarmonics(p, pn, 'panel');
       checkImpossiblePf(p, pn);
+      checkEarthFault(p, pn, 'panel');
     });
 
     /* Coordination across a supply chain: the device downstream must be able to
@@ -1276,6 +1430,206 @@ function clearingTimeAt(prot, multiple) {
  }
  return null;
 }
+
+/* ======================================================== the neutral =====
+     The conductor that carries most of the risk in a modern installation and
+     the one a load schedule never mentions.
+
+     In a balanced three-phase load the fundamental currents are 120 degrees
+     apart and sum to zero in the neutral. The third harmonic is not: it is a
+     zero-sequence component, in phase in all three phases, so it arrives at the
+     neutral as an arithmetic sum rather than cancelling. A board whose
+     single-phase circuits each carry a 20% third harmonic puts roughly 60% of a
+     phase conductor's worth of current into the neutral, and a board of LED
+     drivers can exceed the phase current outright.
+
+     The transformer decides how much of it gets that far. A delta on the LV
+     winding blocks zero-sequence current from passing through the transformer
+     at all — it circulates in the delta instead — so a Dyn11 or DYn11 has a
+     fourth-harmonic-free neutral regardless of what is connected to it. A
+     star-star group lets it straight through, and it is the single cheapest
+     lever on neutral loading: specify the vector group rather than upsizing the
+     neutral.
+
+     So the neutral current is modelled per board, from the declared harmonic
+     content of the single-phase circuits on it, and compared against the size of
+     neutral the board would be given. Nothing is assumed: a circuit that
+     declares no THD contributes no third harmonic, because guessing would put a
+     number on the schedule that nobody measured. */
+  function neutralCurrent(p, panels, transformer) {
+    var sum = { fundamental: 0, third: 0, perPhase: [0, 0, 0] };
+    var declared = 0, undeclared = 0;
+    var blocks = !transformer || D.blocksTriplen(transformer.vecGroup || 'Dyn11');
+
+    panels.forEach(function (pn) {
+      var d = panelDemand(p, pn);
+      /* Only single-phase circuits put a third harmonic into this board's
+         neutral. A three-phase circuit's own triplen content returns through
+         its local neutral, not through the board's. */
+      if (String(pn.phases) !== '1') return;
+      var ph = pn.phase || 'L1';
+      var idx = ph === 'L2' ? 1 : ph === 'L3' ? 2 : 0;
+      sum.fundamental += d.amp;
+      sum.perPhase[idx] += d.amp;
+      if (d.thd === null) { undeclared++; return; }
+      declared++;
+      /* A stated total harmonic distortion does not say how much of it is third
+         harmonic, which is the part that adds in the neutral. For the switched
+         supplies that produce it — LED drivers, SMPS, VFDs — third harmonic is
+         the largest single component, so it is taken at 60% of the total and the
+         assumption is stated wherever the number is shown. A circuit that
+         declares its own spectrum should override this. */
+      sum.third += d.amp * (d.thd / 100) * 0.6;
+    });
+
+    /* Triplen harmonics add; that is the whole point. And a delta on the LV
+       winding does not merely reduce them — it stops them reaching the incoming
+       neutral at all. The board's own neutral bar still carries them locally,
+       but between the board and the transformer there is nowhere for zero
+       sequence to go, so that conductor carries none.
+
+       This is why the vector group is the cheapest fix available: a star-star
+       and a Dyn11 cost the same on the order and the difference between them is
+       the whole neutral loading. */
+    var neutral = blocks ? 0 : 3 * sum.third;
+    var maxPhase = Math.max(sum.perPhase[0], sum.perPhase[1], sum.perPhase[2]) || 0;
+    return {
+      /* what the neutral carries, and what it would carry if the transformer let
+         the triplen through — the difference is what specifying a delta buys */
+      amps: neutral,
+      ampsIfUnblocked: 3 * sum.third,
+      thirdAmp: sum.third,
+      fundamental: sum.fundamental,
+      maxPhase: maxPhase,
+      perPhase: sum.perPhase,
+      blocked: blocks,
+      declared: declared,
+      undeclared: undeclared
+    };
+  }
+
+  /* How much neutral a board gets if nothing says otherwise. The convention is
+     a neutral the same size as the phases, with a reduced size permitted for a
+     three-phase circuit — but that reduction assumes a balanced load, which is
+     exactly the assumption that fails with harmonics. So the default here is a
+     full-size neutral. */
+  function neutralCsaFor(phaseCsa) {
+    return D.num(phaseCsa, 0) || null;
+  }
+
+/* ==================================================== earth fault loop =====
+     Automatic disconnection has two halves and the app had neither.
+
+     The first is a resistance: the loop from the fault, back through the
+     protective conductor to the source, has to be low enough that enough
+     current flows. The second is a time: that current has to make the device
+     operate within a stated maximum, which is a question about the device's
+     time-current characteristic and nothing else.
+
+     The second half is why the trip curves are needed here as well as for
+     selectivity. A device's rating says nothing about how quickly it clears —
+     a 63 A MCB and a 63 A MCCB with a long-time delay above 1 In clear a
+     modest fault at completely different speeds, and the required time is
+     0.5 s for both.
+
+     The method is the conventional one of IEC 60364-5-54 Annex B, which BS 7671
+     Regulation 543.1.3 reproduces:
+
+         Ia = U0 / (R1 + R2)        the current the loop will carry
+         the device must clear that current within t_max
+
+     and the design form of the same condition:
+
+         R1 + R2 ≤ U0 / Ia(t_max)   where Ia(t_max) is the current at which the
+                                    device clears in exactly the allowed time
+
+     R1 and R2 are taken at the conductor's operating temperature rather than at
+     20 °C, which is the conservative reading: the resistance is higher when hot
+     and the loop current lower. */
+  function earthLoop(p, cable) {
+    if (!cable || !num(cable.csa)) return null;
+    var runs = Math.max(1, num(cable.runs, 1));
+    var peCsa = num(cable.peCsa, 0) || D.peMinCsa(num(cable.csa));
+    var km = num(cable.len, 0) / 1000;
+    /* 22.5 Ω·mm²/m for copper at 20 °C, and ×1.15 for roughly 70 °C operating.
+       The temperature matters here and nowhere else in the app, because this is
+       the only check where the resistance sets the current rather than merely
+       reducing it. */
+    var rPerKm = function (csa) { return (22.5 * 1.15) / num(csa, 1); };
+    var r1 = rPerKm(cable.csa) * km / runs;
+    var r2 = rPerKm(peCsa) * km / runs;
+    return { r1: r1, r2: r2, total: r1 + r2, peCsa: peCsa, runs: runs, km: km };
+  }
+
+  /* The multiple of the setting at which a device clears in exactly `t` seconds,
+     by bisection on the curve — the inverse of clearingTimeAt().
+
+     Returns null when the device cannot clear that fast at all, which is a
+     design failure rather than a number: a device with nothing below 2 s on its
+     curve cannot meet a 0.5 s requirement however good the loop is. */
+  function disconnectionMultipleAt(prot, t) {
+    var ck = D.curveKeyFor(prot);
+    var curve = ck && D.TRIP_CURVES[ck];
+    if (!curve || !(t > 0)) return null;
+    var pts = curve.points;
+    var lo = pts[0][0], hi = pts[pts.length - 1][0];
+    /* still too slow at the fastest point on the curve: cannot be achieved */
+    if (clearingTimeAt(prot, hi) > t) return null;
+    /* never clears at all within the published band: anything at or below the
+       first multiple is outside it */
+    if (clearingTimeAt(prot, lo) < t) return lo;
+    for (var i = 0; i < 40; i++) {
+      var mid = (lo + hi) / 2;
+      var tm = clearingTimeAt(prot, mid);
+      if (tm === null) { lo = mid; continue; }
+      if (tm > t) lo = mid; else hi = mid;
+    }
+    return (lo + hi) / 2;
+  }
+
+  /* The whole check for one supply. Returns null when there is nothing to say —
+     no cable, no device, no length, or a supply arrangement that cannot be
+     assessed without data this app does not hold. */
+  function earthFaultCheck(p, item, kind) {
+    var prot = item.prot;
+    if (!prot || !num(prot.ir, 0)) return null;
+    var loop = earthLoop(p, item.cable);
+    if (!loop || loop.total <= 0) return null;
+
+    var system = String(p.design.supplySystem || 'TN-S');
+    var volt = num(item.volt, 400) || 400;
+    /* U0 is the line-to-neutral voltage, which is what the loop is across
+       whichever way the circuit is connected. */
+    var u0 = String(item.phases) === '3' ? volt / Math.sqrt(3) : volt;
+    var finalCct = kind === 'panel';
+    var ir = num(prot.ir, 0);
+
+    /* A TT supply's loop is through the earth electrode, so it cannot be
+       verified without the electrode resistance and the RCD that would limit it.
+       Saying so is better than applying a TN formula to a TT system. */
+    if (system.indexOf('TT') === 0) {
+      var re = num(p.design.earthElectrodeR, 0);
+      if (!(re > 0)) {
+        return { needs: 'earth electrode resistance', system: system, kind: kind, item: item };
+      }
+      loop.total += re;
+      loop.re = re;
+    }
+
+    var ia = u0 / loop.total;
+    var tMax = D.maxDisconnectionTime(ir, finalCct, system);
+    var tActual = clearingTimeAt(prot, ia / ir);
+    var mNeeded = disconnectionMultipleAt(prot, tMax);
+    var maxLoop = mNeeded === null ? null : u0 / (mNeeded * ir);
+    return {
+      system: system, kind: kind, item: item, prot: prot, ir: ir,
+      u0: u0, loop: loop, ia: ia, tMax: tMax, tActual: tActual,
+      maxLoop: maxLoop, multipleNeeded: mNeeded,
+      pass: tActual !== null && tActual <= tMax,
+      /* the device cannot clear this fast however good the loop is */
+      unachievable: mNeeded === null
+    };
+  }
 
 /* The fault currents to judge a pair over, in amps.
 
@@ -1475,6 +1829,7 @@ function selectivityBand(s) {
   if (key === 'power-factor') return 'board below the power factor limit';
   if (key === 'harmonics') return 'circuit carrying harmonic content';
   if (key === 'bad-kva') return 'circuit entered with less kVA than kW';
+  if (key === 'loop-margin') return 'earth fault loop with little margin';
     return key;
   }
 
@@ -2175,6 +2530,7 @@ function selectivityBand(s) {
     withstandI2t, clearingTimeS, checkWithstand, msOrS, WITHSTAND_K,
     groupFindings, worstLevel, groupTitle, boardTagOf, MIN_GROUP, MAX_LIST,
     clearingTimeAt, selectivity, selectivityMessage, selectivityBand, selectivityLadder, reactive,
+    earthLoop, disconnectionMultipleAt, earthFaultCheck, neutralCurrent, neutralCsaFor,
     SELECTIVITY_STEPS,
     choosePdp, assignPanel, createPdpFor, feederLen, syncLen,
     sizeCablesFor, sizeCablesForPdb, sizeCablesForDb, suggestDbFeeder, sizeCableForPanel, sizeAll, feederAmp, needsSizing,

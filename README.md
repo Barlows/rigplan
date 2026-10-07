@@ -483,6 +483,95 @@ project 78 of 97 circuits carry a kVA figure smaller than their kW, which is a
 data-entry problem in that schedule rather than a modelling one; it now shows as
 one grouped finding rather than 78 rows.
 
+### Earth fault loop and disconnection time
+
+Automatic disconnection of a faulty circuit has two halves, and the app had
+neither. The first is a resistance: the loop from the fault, back through the
+protective conductor to the source, has to be low enough that enough current
+flows. The second is a time: that current has to make the device operate within a
+stated maximum.
+
+The method is the conventional one of IEC 60364-5-54 Annex B, which BS 7671
+Regulation 543.1.3 reproduces:
+
+```
+Ia = U0 / (R1 + R2)        the current the loop will carry
+```
+
+and then the device's **time-current curve is read at that current** and compared
+against the maximum disconnection time for its rating and the supply system
+(IEC 60364-41 Table 41.4):
+
+| Rating | Final circuit | Other |
+|---|---|---|
+| ≤ 32 A | 0.1 s | 0.5 s |
+| > 32 to 400 A | 0.5 s | 0.5 s |
+| > 400 A | 2.0 s | 2.0 s |
+
+The ≤ 32 A figure assumes 30 mA additional protection, which this tool does not
+model — so it is stated as an assumption rather than quietly applied.
+
+The second half is why the trip curves are needed here as well as for
+selectivity. A device's **rating says nothing about how quickly it clears**: a
+63 A MCB and a 63 A MCCB with a long-time delay above 1 In clear a modest fault at
+completely different speeds, and the requirement is 0.5 s for both.
+
+Working the other way gives the **permissible loop impedance** — the current at
+which the device clears in exactly the allowed time, found by inverting the curve
+by bisection, then `U0 ÷ Ia`. Where a loop is too high the finding states the
+**protective conductor size that would meet it**, rather than only telling you
+that something is wrong.
+
+`R1 + R2` is taken at the conductor's operating temperature rather than 20 °C.
+That matters here and nowhere else in the app, because this is the only check
+where the resistance *sets* the current rather than merely reducing it. Parallel
+runs divide both halves of it.
+
+**Supply arrangement** is on the notes page. On **TN** the loop is the fault, the
+protective conductor and the source, so `R1 + R2` alone decides the time. On **TT**
+it runs through the earth electrode, so the electrode resistance has to be entered
+as well — and a 30 mA RCD is what makes a 0.1 s disconnection achievable at all,
+so on TT the app names the missing input and stops rather than applying a TN
+formula to a TT system.
+
+The protective conductor defaults to the **BS 7671 Table 54.7** minimum for the
+phase size and can be overridden — increasing the PE is the normal way to satisfy
+the loop requirement without increasing the phase conductor.
+
+### The neutral conductor
+
+The conductor that carries most of the risk in a modern installation, and the one
+a load schedule never mentions.
+
+In a balanced three-phase load the fundamental currents are 120° apart and cancel
+in the neutral. **The third harmonic does not**: it is zero-sequence, in phase in
+all three phases, so it arrives as an arithmetic sum rather than cancelling. A
+board whose single-phase circuits each carry a 20 % third harmonic puts roughly
+60 % of a phase conductor's worth into the neutral, and a board of LED drivers can
+exceed the phase current outright.
+
+**The transformer's vector group is the cheapest fix available**, and it costs
+nothing. A delta on the LV winding blocks zero-sequence current from reaching the
+incoming neutral at all — it circulates in the delta instead. So:
+
+| Vector group | Neutral at the board incomer |
+|---|---|
+| `Dyn11`, `Dyn1`, `Yd11` | nothing — the delta blocks it |
+| `Yyn11`, `Yyn0` | three times the board's third harmonic |
+
+On the sample lighting board in the tests — 18 × 2.5 mm² LED circuits at 20 % THD
+— that is the difference between **0 A and 3.5 A in a 2.5 mm² neutral**, the
+latter being 108 % of a phase conductor.
+
+Where the delta is doing the work, the app says so and says what it is preventing,
+because that belongs on the specification rather than in a note someone
+re-reads in ten years. Specifying star-star there would need a larger neutral and
+the same cost would buy nothing.
+
+Third harmonic is taken as 60 % of the declared total distortion — typical of
+switch-mode supplies, and not always right. A circuit with a measured spectrum
+should override it, and the finding says so.
+
 ### Fault levels
 
 The fault level at a board comes from the transformer's **impedance**, not its
@@ -733,9 +822,10 @@ test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        36 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
-test/protection-test.html 146 checks on fault levels, device proposals, cable
-                          thermal withstand, selectivity from trip curves, reactive
-                          power, harmonics and the protection audit
+test/protection-test.html 200 checks on fault levels, device proposals, cable
+                          thermal withstand, selectivity from trip curves, earth
+                          fault looping, the neutral conductor, reactive power,
+                          harmonics and the protection audit
 test/underlay-test.html   image/DXF/DWG loading and scale handling
 ```
 
