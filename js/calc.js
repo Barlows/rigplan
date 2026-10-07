@@ -280,10 +280,15 @@ var LC = (function () {
     if (impossible) kvarD = 0;
     /* Total demand distortion, as a percentage of the fundamental. A circuit
        that declares harmonics raises its own RMS current, which is what actually
-       heats a cable — the fundamental alone understates it. Left null unless the
-       circuit says so, because assuming harmonic content for every motor would
-       derate every cable on the project. */
-    var thd = pn.thd === null || pn.thd === undefined || pn.thd === '' ? null : D.clamp(D.num(pn.thd, 0), 0, 100);
+       heats a cable — the fundamental alone understates it.
+
+       A declared THD wins. Failing that, a declared non-linear load type supplies
+       its own typical figure: a six-pulse drive distorts by around 35% whether or
+       not anyone measured it, and derating its feeder on that is more correct than
+       treating it as a clean load. Left null when neither is declared, because
+       assuming harmonic content for every motor would derate every cable. */
+    var thd = D.defaultThd(pn);
+    thd = thd === null || thd === undefined ? null : D.clamp(D.num(thd, 0), 0, 100);
     /* RMS current with harmonics present: the fundamental plus every harmonic
        in quadrature, which for a stated total THD is sqrt(1 + (THD/100)²) times
        the fundamental. */
@@ -294,6 +299,13 @@ var LC = (function () {
       kva: kvaD,                       // design / diversified kVA
       kvar: kvarD,
       pf: pf, demand: dem, thd: thd, impossible: impossible,
+      /* Whether this THD is measured or the load type's typical figure, because a
+         schedule should not present a typical as a measurement. */
+      thdAssumed: thd !== null && (pn.thd === null || pn.thd === undefined || pn.thd === ''),
+      /* The third harmonic specifically, as a percentage of the fundamental — the
+         part that reaches a neutral. Zero for a drive; high for a single-phase
+         switch-mode supply. */
+      triplen: thd === null ? null : thd * D.triplenFractionOf(pn),
       amp: currentFor(kvaD, pf, pn.phases, pn.volt),
       /* what actually flows in the cable */
       ampHarm: currentFor(kvaD, pf, pn.phases, pn.volt) * harmF,
@@ -1354,10 +1366,13 @@ var LC = (function () {
         where + where3p + ' The neutral is sized here as the same cross-section as the phases (' + phaseCsa +
         ' mm², about ' + rated.toFixed(0) + ' A), which is the convention: the usual reduced-size neutral assumes a balanced ' +
         'load, and a balanced load is exactly what is not present here. ' +
-        n.declared + ' of ' + (n.declared + n.undeclared) + ' circuits on this board declare harmonic content; ' +
-        'the rest are counted as clean, which is the pessimistic direction for a board full of drives. Third harmonic is ' +
-        'taken as 60% of the declared total, typical of switch-mode supplies and not always right — a circuit with a ' +
-        'measured spectrum should override it.');
+        n.declared + ' of ' + (n.declared + n.undeclared + n.ruledOut) + ' circuits on this board put triplen in the ' +
+        'neutral. ' + (n.ruledOut ? n.ruledOut + ' are ruled out by their load type — a drive is a balanced ' +
+        'three-phase rectifier whose harmonics are 5th and 7th, and its third harmonic cancels between the phases ' +
+        'before it reaches any conductor. ' : '') +
+        'Third harmonic comes from single-phase switch-mode loads: control supplies, PLC racks, instrumentation, ' +
+        'LED drivers. A measured spectrum overrides any of this, and a board of drives with no control loads on it ' +
+        'has a neutral that carries nothing.');
     }
 
 
@@ -1729,7 +1744,7 @@ function clearingTimeAt(prot, multiple) {
   function neutralCurrent(p, panels, transformer, boardPhaseAmp) {
     var sum = { fundamental: 0, third: 0, imbalance: 0, perPhase: [0, 0, 0],
                 threePhase: [], threePole: 0 };
-    var declared = 0, undeclared = 0;
+    var declared = 0, undeclared = 0, ruledOut = 0;
     var blocks = !transformer || D.blocksTriplen(transformer.vecGroup || 'Dyn11');
 
     var supplySystem = String(p.design.supplySystem || 'TN-S');
@@ -1779,10 +1794,26 @@ function clearingTimeAt(prot, multiple) {
 
          On a balanced three-phase circuit the triplens are in phase in all three
          conductors, so they add: the neutral carries three times the per-phase
-         value. That is the same 3× the code applies when summing single-phase
-         circuits across three phases, and it is why a 3P+N feeder full of drives
-         is the classic overloaded-neutral case. */
-      sum.third += d.amp * (d.thd / 100) * 0.6 * (onePhase ? 1 : 3);
+         value.
+
+         **Except where the load type rules the triplen out entirely**, which is
+         the case for a drive. A six-pulse rectifier is a balanced three-phase
+         load and its characteristic harmonics are 6k ± 1 — 5, 7, 11, 13, none of
+         them triplen. Its third harmonic cancels between phases before it ever
+         reaches a conductor. So a panel of drives raises the CABLE's RMS current
+         and puts nothing at all in the neutral.
+
+         This distinction was worth 159% of a phase conductor on one real board,
+         because the code applied the triplen fraction to a drive feeder and
+         reported a neutral problem that the drive's own waveform cannot produce.
+         The load type decides; see triplenFractionOf(). */
+      /* A load type that rules the triplen out — a drive — is not "undeclared",
+         it is known to contribute nothing. Counting it as clean-but-unknown put
+         drives in the "declared nothing" tally and made a board of them read as
+         though nobody had measured it. */
+      var tf = D.triplenFractionOf(pn);
+      if (tf <= 0) { ruledOut++; return; }
+      sum.third += d.amp * (d.thd / 100) * tf * (onePhase ? 1 : 3);
     });
 
     /* Triplen harmonics add; that is the whole point. And a delta on the LV
@@ -1833,6 +1864,9 @@ function clearingTimeAt(prot, multiple) {
       blocked: blocks,
       declared: declared,
       undeclared: undeclared,
+      /* circuits whose load type means they carry no triplen — drives, and the
+         balanced six-pulse converters on a welding supply */
+      ruledOut: ruledOut,
       supplySystem: supplySystem
     };
   }

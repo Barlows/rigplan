@@ -413,6 +413,115 @@ var LS = (function () {
   /* Sub-distribution board — the small board at the end of the chain, e.g. a
      63 A Acti9 supplying lighting, small power and other small final circuits.
      Fed from a PDP; control panels hang off it. One per PDP. */
+  /* ---------------------------------------------------- harmonic spectrums ---
+     Total harmonic distortion is not the number that matters for a neutral, and
+     treating it as one produces findings that cannot be true.
+
+     A six-pulse drive is a balanced three-phase rectifier. Its characteristic
+     harmonics are 6k ± 1 — the 5th, 7th, 11th, 13th — and none of those are
+     triplen. Its third harmonic cancels between the phases before it reaches any
+     conductor, so a panel of drives loads the cable and does nothing to the
+     neutral. It is still a 30-40 % distortion load, which is what heats the
+     feeder.
+
+     A single-phase switch-mode supply is the opposite. Its rectifier is between
+     phase and neutral, so its third harmonic is in phase with itself and returns
+     along the neutral — this is where the triplen in a control panel actually
+     comes from, along with LED drivers, electronic ballasts, PLC racks and
+     instrumentation.
+
+     `triplen` is the fraction of the declared THD that is third harmonic. Zero
+     for a drive, high for a switch-mode supply. The distinction matters: applying
+     a general 60% to a drive feeder reported a neutral carrying 159 % of a phase
+     conductor, which that waveform cannot produce.
+
+     `note` says what the figure means, because a drive's 35% and a lighting
+     supply's 35% are not the same problem and a reader deserves to know which
+     one they are looking at. */
+  var HARMONIC_SPECTRUMS = {
+    drive: {
+      name: 'Six-pulse drive (rectifier)',
+      /* IEC 60000-2-3 / IEEE 519 typical line-side THD for a 6-pulse converter
+         with no input reactor. With a line reactor it falls to roughly half. */
+      thd: 35, triplen: 0,
+      note: 'A drive is a balanced three-phase rectifier. Its harmonics are 6k ± 1 — the 5th and 7th are ' +
+        'the big ones — and none are triplen, so the third harmonic cancels between the phases before it ' +
+        'reaches any conductor. A panel of these heats its feeder and loads its cable, but puts nothing ' +
+        'into the neutral. An input reactor cuts the distortion roughly in half. A measured figure from the ' +
+        'drive is better than this one.'
+    },
+    drive_reactor: {
+      name: 'Drive with input reactor',
+      thd: 15, triplen: 0,
+      note: 'The reactor is there to cut the harmonics, and it does — roughly halving the total distortion. ' +
+        'Still no triplen, so still nothing in the neutral.'
+    },
+    drive_afe: {
+      name: 'Drive with active front end',
+      thd: 5, triplen: 2,
+      note: 'An active front end regenerates cleanly and distorts very little. What triplen it does produce ' +
+        'comes from its own auxiliaries and control supply rather than the main converter.'
+    },
+    smps_single: {
+      name: 'Single-phase switch-mode supply',
+      /* the classic: rectified from phase to neutral, so the third harmonic
+         returns through the neutral instead of cancelling */
+      thd: 40, triplen: 35,
+      note: 'A single-phase rectifier between phase and neutral. Its third harmonic is in phase with itself ' +
+        'and returns along the neutral, and it is the usual source of neutral current in a control panel. ' +
+        'Several hundred watts per supply is a normal figure for a PLC rack or instrumentation.'
+    },
+    led: {
+      name: 'LED driver / electronic ballast',
+      thd: 30, triplen: 25,
+      note: 'Constant-current LED drivers are single-phase switched-capacitor circuits with a high triplen ' +
+        'content. A lighting installation with many of them is a well-known case of an overloaded neutral.'
+    },
+    ups: {
+      name: 'UPS on a three-phase supply',
+      thd: 20, triplen: 8,
+      note: 'A three-phase UPS is balanced, so most of its distortion is 5th and 7th. Its triplen comes from ' +
+        'the bypass and the control circuitry rather than the main inverter.'
+    },
+    welder: {
+      name: 'Welding machine / intermittent load',
+      thd: 10, triplen: 0,
+      note: 'Mostly a nuisance on voltage and a poor power factor, rather than a harmonic source. Six-pulse ' +
+        'converters again, so nothing triplen.'
+    },
+    measured: {
+      name: 'Measured spectrum',
+      thd: null, triplen: null,
+      note: 'A measured spectrum always overrides anything inferred here. Declare the total and, if it was ' +
+        'measured separately, the third-harmonic fraction.'
+    }
+  };
+
+  /* What fraction of this circuit's declared distortion is third harmonic.
+     An explicit declaration wins; otherwise the load type decides; otherwise
+     nothing is asserted, because the default that produced the 159% finding was
+     a guess applied to a load that has no third harmonic to guess about. */
+  function triplenFractionOf(pn) {
+    if (pn.triplen !== undefined && pn.triplen !== null && pn.triplen !== '') {
+      return Math.max(0, Math.min(100, num(pn.triplen, 0))) / 100;
+    }
+    var sp = HARMONIC_SPECTRUMS[String(pn.harmonicType || '')];
+    if (sp && sp.triplen !== null && sp.triplen !== undefined) return sp.triplen / 100;
+    /* An undeclared load type asserts nothing. Returning zero rather than 0.6 is
+       deliberate: an unknown three-phase load is more likely to be balanced —
+       motors, and balanced rectifiers — than to be a single-phase supply, and
+       guessing high puts a false alarm on every board. */
+    return 0;
+  }
+
+  /* A declared THD and a load type together: the type supplies a default total
+     where the user has not measured one, but never overrides a measured figure. */
+  function defaultThd(pn) {
+    if (pn.thd !== undefined && pn.thd !== null && pn.thd !== '') return num(pn.thd, 0);
+    var sp = HARMONIC_SPECTRUMS[String(pn.harmonicType || '')];
+    return sp && sp.thd !== null && sp.thd !== undefined ? sp.thd : null;
+  }
+
   /* ------------------------------------------------------- starting methods --
      What each method does to the current a motor draws from the board.
 
@@ -564,6 +673,14 @@ var LS = (function () {
          would derate every cable on the project, and the great majority of
          circuits genuinely have little. */
       thd: p.thd === undefined || p.thd === null || p.thd === '' ? null : clamp(num(p.thd, 0), 0, 100),
+      /* The kind of non-linear load, which decides whether its distortion is
+         triplen. This is the field that separates a drive — balanced, 5th and
+         7th, nothing in the neutral — from a switch-mode control supply —
+         single-phase, third harmonic returns through the neutral. */
+      harmonicType: p.harmonicType || '',
+      /* Third harmonic as a percentage of the fundamental, where it has been
+         measured separately. Overrides the load type's implied fraction. */
+      triplen: p.triplen === undefined || p.triplen === null || p.triplen === '' ? null : clamp(num(p.triplen, 0), 0, 100),
       /* Whether this circuit's neutral conductor comes back to the board.
          Blank falls back to the core count, which is the usual case: four cores
          to a three-phase circuit carries a neutral, three is three poles. */
@@ -841,6 +958,7 @@ var LS = (function () {
     maxDisconnectionTime, peMinCsa, PE_MIN_CSA, PE_MIN, DISC_TN, DISC_TT,
     VECTOR_GROUPS, blocksTriplen, lvNeutralEarthed, VEC_LV_DELTA,
     START_METHODS, LOAD_TORQUES,
+    HARMONIC_SPECTRUMS, triplenFractionOf, defaultThd,
     PANEL_TYPES, DEFAULTS, SHAPE, PHASE_COLOR, PHASE_EDGE, phaseColor, phaseEdge,
     DB_SIZES_A, DB_LOAD_MAX_A, DB_LOAD_TYPES,
     MCCB_FRAMES, MCCB_SETTINGS, ICU_KA, TRIP_UNITS,

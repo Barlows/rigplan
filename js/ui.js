@@ -1041,7 +1041,17 @@
         return fRow('Reactive', '<span class="mono" style="color:var(--fg-dim)">' +
           d.kvar.toFixed(1) + ' kvar &nbsp;·&nbsp; apparent ' + d.kva.toFixed(1) + ' kVA</span>');
       })() +
-      fRow('Harmonics (THD)', '<span class="unit">' + nIn('panel', o.id, 'thd', o.thd, { step: 1, placeholder: 'not stated' }) + '<span class="u">%</span></span>') +
+      /* The load type comes before the THD, because it decides what the THD means.
+         A drive and a switch-mode supply can both be 35% distorted and only one
+         of them puts anything in the neutral. */
+      fRow('Non-linear load', selIn('panel', o.id, 'harmonicType', o.harmonicType || '',
+        [''].concat(Object.keys(LS.HARMONIC_SPECTRUMS)), function (v) {
+          return v === '' ? 'not stated — clean' : (LS.HARMONIC_SPECTRUMS[v] || {}).name || v;
+        })) +
+      fRow('Harmonics (THD)', '<span class="unit">' + nIn('panel', o.id, 'thd', o.thd, { step: 1, placeholder: 'not stated' }) +
+        '<span class="u">%</span></span>') +
+      fRow('3rd harmonic', '<span class="unit">' + nIn('panel', o.id, 'triplen', o.triplen, { step: 1, placeholder: 'from load type' }) +
+        '<span class="u">%</span></span>') +
       /* The neutral, which is the conductor most often undersized and the one a
          single-phase declaration would miss entirely. */
       (String(o.phases) === '3' ? fRow('Neutral', selIn('panel', o.id, 'neutral',
@@ -1051,9 +1061,14 @@
         })) : '') +
       fRow('Imbalance', '<span class="unit">' + nIn('panel', o.id, 'imbalance', o.imbalance, { step: 1, placeholder: 'assumed 0' }) + '<span class="u">%</span></span>') +
       '<div class="hint">Design kVA = kW ÷ pf, multiplied by the demand factor. Leave kVA blank to derive it. ' +
-      '<b>Harmonics</b> is total harmonic distortion as a percentage of the fundamental — leave it blank unless the equipment ' +
-      'has significant non-linear load, because a declared figure raises this circuit\'s own RMS current and can leave its cable undersized.' +
-      ' On a three-phase and neutral circuit it also loads the board neutral, where the triplens add at three times the per-phase value. ' +
+      '<b>Non-linear load</b> matters as much as the distortion figure, because not all distortion reaches a neutral. A six-pulse ' +
+      '<b>drive</b> is a balanced three-phase rectifier: its harmonics are 6k ± 1, so the 5th and 7th, and none of them triplen. Its ' +
+      'third harmonic cancels between the phases before it reaches any conductor — so a panel of drives heats its feeder and puts ' +
+      'nothing into the neutral. The third harmonic that does reach a neutral comes from <b>single-phase switch-mode</b> loads: ' +
+      'control supplies, PLC racks, instrumentation, LED drivers. ' +
+      '<b>Harmonics</b> is total distortion as a percentage of the fundamental; it raises this circuit\'s RMS current, which is what heats ' +
+      'the cable. <b>3rd harmonic</b> is that part of it which reaches a neutral — leave it blank to take it from the load type, or declare ' +
+      'it where a measured spectrum gives it. ' +
       '<b>Neutral</b> says whether this feeder carries one back; a three-pole motor feeder cannot put zero-sequence current into a ' +
       'neutral bar, and one that does can. <b>Imbalance</b> is what an otherwise balanced three-phase load puts in the neutral.</div>' +
       '</div>' +
@@ -2597,6 +2612,8 @@
       phases: CSVC.phases(g('phases')), volt: CSVC.volt(g('volt')),
       prot: CSVC.device(g('prot')), start: CSVC.start(g('start')),
       neutral: CSVC.neutral(g('neutral')),
+      harmonicType: CSVC.harmonicType(g('harmonicType')) || '',
+      triplen: CSVC.num(g('triplen')),
       imbalance: CSVC.num(g('imbalance')),
       loadTorque: CSVC.loadTorque(g('loadTorque')),
       simultaneousStart: CSVC.num(g('simultaneousStart')),
@@ -2725,6 +2742,8 @@
         demand: rec.demand || 1, volt: rec.volt || 400,
         phases: rec.phases || '3', start: rec.start || 'DOL',
         neutral: rec.neutral === undefined ? null : rec.neutral,
+        harmonicType: rec.harmonicType || '',
+        triplen: rec.triplen === undefined ? null : rec.triplen,
         imbalance: rec.imbalance || null,
         loadTorque: rec.loadTorque || '',
         simultaneousStart: rec.simultaneousStart || null,
@@ -2903,7 +2922,7 @@
     L.push(csvRow([S.name])); L.push(csvRow(['Client', S.client, 'Project', S.ref, 'Designer', S.designer, 'Date', S.date]));
     L.push('');
     L.push(csvRow(['LOAD SCHEDULE']));
-    L.push(csvRow(['Reference', 'Board', 'Board description', 'Description', 'Type', 'Connected kW', 'Design kVA', 'kvar', 'pf', 'Demand', 'Phases', 'Voltage V', 'Current A', 'THD %', 'Neutral carried', 'Imbalance %', 'PE in cable', 'Protective device', 'Device frame A', 'Breaking capacity kA', 'Trip unit', 'Feeder runs', 'Feeder mm2', 'Cores', 'Length m', 'Installation', 'Rated A', 'Utilisation %', 'Volt drop %', 'PE mm2', 'R1+R2 ohm', 'Loop A', 'Max t s', 'Actual t s', 'Motor', 'Starting method', 'Starting source', 'Load torque', 'Starting together', 'Full load A', 'Starting A', 'All together A', 'Board at start V', 'Dip %', 'Torque at start', 'Grid ref E', 'Grid ref N', 'Status']));
+    L.push(csvRow(['Reference', 'Board', 'Board description', 'Description', 'Type', 'Connected kW', 'Design kVA', 'kvar', 'pf', 'Demand', 'Phases', 'Voltage V', 'Current A', 'Non-linear load', 'THD %', '3rd harmonic %', 'Neutral carried', 'Imbalance %', 'PE in cable', 'Protective device', 'Device frame A', 'Breaking capacity kA', 'Trip unit', 'Feeder runs', 'Feeder mm2', 'Cores', 'Length m', 'Installation', 'Rated A', 'Utilisation %', 'Volt drop %', 'PE mm2', 'R1+R2 ohm', 'Loop A', 'Max t s', 'Actual t s', 'Motor', 'Starting method', 'Starting source', 'Load torque', 'Starting together', 'Full load A', 'Starting A', 'All together A', 'Board at start V', 'Dip %', 'Torque at start', 'Grid ref E', 'Grid ref N', 'Status']));
     var un = [];
     /* One row per circuit, wherever it is fed from. Declared up here because
        the main-board circuits are written before the distribution boards. */
@@ -2925,7 +2944,9 @@
       }
       L.push(csvRow([pn.tag, board.tag, board.name, pn.name, LS.PANEL_TYPES[pn.type] ? LS.PANEL_TYPES[pn.type].name : pn.type,
         dm.kw.toFixed(1), dm.kva.toFixed(1), dm.kvar.toFixed(1), dm.pf, pn.demand, pn.phases, pn.volt, dm.ampHarm.toFixed(1),
+        LC.isThreePhaseWithNeutral(pn) || pn.harmonicType ? (LS.HARMONIC_SPECTRUMS[pn.harmonicType] || {}).name || '' : '',
         pn.thd === null || pn.thd === undefined || pn.thd === '' ? '' : pn.thd,
+        pn.triplen === null || pn.triplen === undefined || pn.triplen === '' ? '' : pn.triplen,
         LC.isThreePhaseWithNeutral(pn) ? 'yes' : (String(pn.phases) === '3' ? 'no (three-pole)' : 'n/a (single-phase)'),
         pn.imbalance === null || pn.imbalance === undefined || pn.imbalance === '' ? '' : pn.imbalance,
         pn.peInCable === true ? 'yes' : (pn.peInCable === false ? 'no' : 'not stated'),

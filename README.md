@@ -262,9 +262,14 @@ the mapping is right, because the two numbers are arrived at independently.
    conductor is formed separately, so the fourth core is the neutral and not a
    PEN.
 7. Both transformers are **Dyn11**, confirmed. The delta on the LV winding is what
-   keeps roughly 1,280 A of neutral conductor out of the incoming feeders — but it
-   does nothing for the board's own neutral bars, and PDP7-2's carries 159 % of a
-   phase conductor once the drives are declared.
+   keeps roughly 1,280 A of neutral conductor out of the incoming feeders.
+8. Every circuit is a **control panel feeding drives** — there are no direct-on-line
+   motors, so no circuit carries a starting method unless its name says otherwise.
+   All 97 are declared `harmonicType: drive`, which gives them a typical 35 %
+   distortion for cable sizing and **zero** triplen for the neutral. The 8 air
+   compressors and dryers whose machine descriptions name a VSD also carry
+   `start: VFD`; the rest are left unstated, because "a panel with drives in it"
+   is not a statement about how the drives are started.
 
 The cable columns in that sheet are headed *"Cable & Installation (to be
 completed)"*, so every circuit arrives without a feeder cable. The audit reports
@@ -352,6 +357,9 @@ And the motor checks, each a different fix so they are reported separately:
   depend on whether the LV winding has a delta. Names the circuits affected.
 - **Protective conductor method not stated**, on a three-phase feeder — 4 cores
   is three phases and a neutral *or* a PEN, and only the installation says which.
+- **Neutral bar overloaded**, where single-phase switch-mode load on a board puts
+  more into the board's own neutral than its conductors carry. Distinct from the
+  incoming neutral, which the vector group settles, and the delta cannot help.
 
 #### Selectivity, from curves
 
@@ -612,6 +620,45 @@ incoming neutral at all — it circulates in the delta instead. So:
 | `Dyn11`, `Dyn1`, `Yd11` | nothing — the delta blocks it |
 | `Yyn11`, `Yyn0` | three times the board's third harmonic |
 
+#### Total distortion is not the number that matters for a neutral
+
+**A six-pulse drive contributes nothing to a neutral.** It is a balanced
+three-phase rectifier, and its characteristic harmonics are 6k ± 1 — the 5th and
+7th are the big ones — and none of those are triplen. Its third harmonic cancels
+between the phases *before it reaches any conductor*. A panel of drives therefore
+heats its feeder and loads its cable, and does nothing at all to the neutral.
+
+The triplen in a control panel comes from somewhere else: **single-phase
+switch-mode loads** — control power supplies, PLC racks, instrumentation, LED
+drivers, electronic ballasts. Their rectifier sits between phase and neutral, so
+their third harmonic is in phase with itself and returns down the neutral.
+
+The app used a flat 60% of THD as the third harmonic, applied to every circuit
+that declared any distortion. On this project — every circuit a drive panel —
+that reported **PDP7-2's neutral bar carrying 222 A, 159% of a phase conductor**,
+a waveform that cannot produce it. The load type now decides:
+
+| Non-linear load | Typical THD | Triplen |
+|---|---|---|
+| Six-pulse drive | 35% | **0** |
+| Drive with input reactor | 15% | **0** |
+| Drive with active front end | 5% | 2% |
+| Single-phase switch-mode supply | 40% | 35% |
+| LED driver | 30% | 25% |
+| UPS on a three-phase supply | 20% | 8% |
+| Welding machine | 10% | **0** |
+
+Declared as `Non-linear load` on the circuit. An undeclared type asserts nothing,
+because an unknown three-phase load is more likely to be balanced — a motor, a
+balanced rectifier — than a single-phase supply, and guessing high puts a false
+alarm on every board. A measured `3rd harmonic` overrides the table.
+
+**The total still matters, for the cable.** A drive's 35% distortion raises its
+own RMS current by `√(1 + 0.35²)` ≈ 6%, and that is what heats the feeder. On
+this project that is 6,021 A of fundamental current becoming 6,379 A — **+5.9%
+across the site**, which is a real effect on cable sizing even though the neutral
+is untouched.
+
 #### What the delta does, and what it does not
 
 Both transformers are **Dyn11**, confirmed. That matters, and it is worth being
@@ -627,25 +674,24 @@ reaching the incoming neutral — it circulates in the delta instead. Across thi
 project that is **roughly 1,280 A of neutral conductor** avoided, about 640 A per
 transformer. The same order, no extra cost, and it belongs on the specification.
 
-**It does nothing for the board's own neutral bar.** The triplen from the 3P+N
-circuits below has to return through that conductor and its feeder, and a delta
-two transformers away is no help at all. With the drives declared at a typical
-45 % THD, PDP7-2's neutral bar carries **222 A against a 139 A phase conductor —
-159 % of it** — and PDB7's carries 1,070 A.
+**It does nothing for the board's own neutral bar** — but on this site the
+neutral bar is carrying nothing either, because every circuit is a drive panel and
+a drive has no triplen. Both conductors come out clean, for two different and
+independent reasons.
 
-This is the easy mistake to make in the reassuring direction: the vector group is
-specified, the incomer is provably fine, and a neutral bar carrying 159 % of a
-phase conductor is never looked at. The app judges each conductor against the one
-that actually carries it, and says on every row which is which.
+What is left on the neutral is whatever **single-phase** non-linear load exists on
+these boards: control supplies, PLC racks, instrumentation, lighting. That is a
+real and probably modest number, and it is the one thing worth measuring — it is
+what would ever put current in a neutral here. Declare it as
+`Non-linear load: switch-mode supply` on the circuits that have it.
 
-The fix there is **not** a bigger conductor — it is a 4 % impedance reactor or a
-3rd-harmonic filter at the drive, which removes the harmonic at the load instead
-of carrying it everywhere. Failing that, spreading the circuits across more
-boards so no single bar carries all of it.
+The general case still matters, so the app still checks it. Where a board *does*
+carry single-phase switch-mode load, the fix is **not** a bigger conductor — it is
+stopping the harmonic at the load, or spreading the circuits across more boards so
+no single bar carries all of it.
 
-Third harmonic is taken as 60 % of the declared total distortion — typical of
-switch-mode supplies, and not always right. A circuit with a measured spectrum
-should override it, and the finding says so.
+Third harmonic comes from the load type, not from the total — see above. A circuit
+with a measured spectrum overrides both.
 
 ### Earthing arrangement — TN-S
 
@@ -988,7 +1034,7 @@ test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        36 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
-test/protection-test.html 328 checks on fault levels, device proposals, cable
+test/protection-test.html 344 checks on fault levels, device proposals, cable
                           thermal withstand, selectivity from trip curves, earth
                           fault looping, the neutral conductor on 3P+N feeders,
                           the earthing arrangement, reactive power, harmonics,

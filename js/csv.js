@@ -192,6 +192,9 @@
     ['start', ['startingmethod', 'startmethod', 'starter', 'starting', 'start', 'dol', 'dolstart', 'drive', 'motors']],
     ['neutral', ['neutralcarried', 'neutralconductor', 'carriesneutral', 'neutralcarriedback', 'neutralpresent', 'hasneutral']],
     ['imbalance', ['imbalance', 'phaseimbalance', 'imbalancepercent', 'unbalance']],
+    ['harmonicType', ['nonlinearmachinetype', 'nonlineartype', 'harmonicsource', 'loadharmoniccontent',
+                     'harmoniccontent', 'convertertype', 'invertertype', 'harmonics', 'rectifiertype']],
+    ['triplen', ['3rdharmonic', 'thirdharmonic', 'threerdharmonic', 'h3', 'triplen', 'neutralharmonic']],
     ['loadTorque', ['loadtorque', 'loadorquetype', 'torquecharacteristic', 'torque', 'loadcharacteristic',
                    'loaddescription', 'loadtype', 'momentofinertia']],
     ['simultaneousStart', ['startingtogether', 'simultaneousstart', 'startsogether', 'startingwith',
@@ -452,6 +455,24 @@
     return null;
   }
   CSVC.neutral = neutral;
+
+  /* Which non-linear load this is, because it decides whether the distortion
+     reaches a neutral. From "VFD", "drive", "6-pulse", "soft starter", "switch
+     mode supply", "LED driver", "UPS". Anything unrecognised is left blank so
+     nothing is asserted. */
+  function harmonicType(v) {
+    if (!v) return null;
+    var s = String(v).toLowerCase().trim();
+    if (/\b(afe|active\s*front|regen\s*front)\b/.test(s)) return 'drive_afe';
+    if (/reactor|in reactor|line reactor|input reactor|filtered/.test(s)) return 'drive_reactor';
+    if (/\b(vfd|vsd|drive|inverter|6\s*-?\s*pulse|rectifier|converter|soft\s*starter|static\s*starter)\b/.test(s)) return 'drive';
+    if (/\b(led|ballast|luminaire|lighting\s*driver)\b/.test(s)) return 'led';
+    if (/\bups\b|uninterruptible/.test(s)) return 'ups';
+    if (/weld|arc\s*furnace|induction\s*furnace/.test(s)) return 'welder';
+    if (/switch\s*-?mode|smps|control\s*supply|psu|power\s*supply|plc|supply/.test(s)) return 'smps_single';
+    return null;
+  }
+  CSVC.harmonicType = harmonicType;
 
   /* Cable installation method from "XL-A1", "A1", "C", "clip". Not everything
      maps; an unknown method is left alone so the app's own default applies

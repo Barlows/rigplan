@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=204"></script>
-<script src="../js/calc.js?v=204"></script>
+<script src="../js/data.js?v=213"></script>
+<script src="../js/calc.js?v=213"></script>
 <script>
 (function () {
   var results = [];
@@ -641,7 +641,7 @@
     var z = site();
     z.p.txs[0].vecGroup = vecGroup;
     for (var i = 0; i < 18; i++) {
-      var pn = load(z.p, z.pdp, 0.1, 0.95, { phases: '1', volt: 230, thd: 20 });
+      var pn = load(z.p, z.pdp, 0.1, 0.95, { phases: '1', volt: 230, thd: 20, harmonicType: 'smps_single' });
       pn.phase = ['L1', 'L2', 'L3'][i % 3];
       pn.cable = { csa: 2.5, runs: 1, cores: 3, len: 30, method: 'XL-A1', group: 1, ambient: 30, sheathed: true };
     }
@@ -666,7 +666,7 @@
   check('three-phase circuits do not contribute to this board\'s neutral',
     (function () {
       var t = site();
-      load(t.p, t.pdp, 100, 0.85, { phases: '3', thd: 40 });
+      load(t.p, t.pdp, 100, 0.85, { phases: '3', thd: 40, harmonicType: 'drive' });
       return LC.boardStats(t.p, t.pdp, 'pdp').neutral.amps;
     })(), 0);
 
@@ -675,7 +675,7 @@
   var zn = site();
   zn.p.txs[0].vecGroup = 'Yyn11';
   for (var q = 0; q < 18; q++) {
-    var qp = load(zn.p, zn.pdp, 0.1, 0.95, { phases: '1', volt: 230, thd: 20 });
+    var qp = load(zn.p, zn.pdp, 0.1, 0.95, { phases: '1', volt: 230, thd: 20, harmonicType: 'smps_single' });
     qp.phase = ['L1', 'L2', 'L3'][q % 3];
     qp.cable = { csa: 2.5, runs: 1, cores: 3, len: 30, method: 'XL-A1', group: 1, ambient: 30, sheathed: true };
   }
@@ -689,7 +689,7 @@
   var zd = site();
   zd.p.txs[0].vecGroup = 'Dyn11';
   for (var w = 0; w < 18; w++) {
-    var wp = load(zd.p, zd.pdp, 0.1, 0.95, { phases: '1', volt: 230, thd: 20 });
+    var wp = load(zd.p, zd.pdp, 0.1, 0.95, { phases: '1', volt: 230, thd: 20, harmonicType: 'smps_single' });
     wp.phase = ['L1', 'L2', 'L3'][w % 3];
     wp.cable = { csa: 2.5, runs: 1, cores: 3, len: 30, method: 'XL-A1', group: 1, ambient: 30, sheathed: true };
   }
@@ -707,7 +707,7 @@
   var lb = site({ kva: 2500 });
   lb.tx.vecGroup = 'Dyn11';
   for (var v = 0; v < 10; v++) {
-    var vc = motorAt(lb.p, lb.pdp, 60, 0.9, { thd: 45, neutral: true });
+    var vc = motorAt(lb.p, lb.pdp, 60, 0.9, { thd: 45, harmonicType: 'smps_single', neutral: true });
     vc.phases = '3';
     vc.cable = { csa: 70, runs: 1, cores: 4, len: 40, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
   }
@@ -734,7 +734,7 @@
   var lo = site({ kva: 2500 });
   lo.tx.vecGroup = 'Dyn11';
   for (var x2 = 0; x2 < 3; x2++) {
-    var xc = motorAt(lo.p, lo.pdp, 30, 0.9, { thd: 25, neutral: true });
+    var xc = motorAt(lo.p, lo.pdp, 30, 0.9, { thd: 25, harmonicType: 'smps_single', neutral: true });
     xc.phases = '3';
     xc.cable = { csa: 95, runs: 1, cores: 4, len: 30, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
   }
@@ -768,7 +768,7 @@
   var cr = site({ kva: 2500 });
   cr.tx.vecGroup = 'Dyn11';
   for (var x4 = 0; x4 < 8; x4++) {
-    var xc4 = motorAt(cr.p, cr.pdp, 90, 0.9, { thd: 35, neutral: true });
+    var xc4 = motorAt(cr.p, cr.pdp, 90, 0.9, { thd: 35, harmonicType: 'smps_single', neutral: true });
     xc4.phases = '3';
     xc4.cable = { csa: 120, runs: 1, cores: 4, len: 30, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
   }
@@ -792,7 +792,7 @@
   /* And where the bar is comfortable, the credit gets a row of its own. */
   var cg = site({ kva: 2500 });
   cg.tx.vecGroup = 'Dyn11';
-  var cgc = motorAt(cg.p, cg.pdp, 200, 0.9, { thd: 18, neutral: true });
+  var cgc = motorAt(cg.p, cg.pdp, 200, 0.9, { thd: 18, harmonicType: 'smps_single', neutral: true });
   cgc.phases = '3';
   cgc.cable = { csa: 300, runs: 1, cores: 4, len: 30, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
   LC.protAll(cg.p, {});
@@ -1061,17 +1061,22 @@
   /* A three-phase and neutral circuit contributes three times what a single-phase
      one of the same current contributes, because its triplens are in phase. */
   var nn = site({ kva: 2500 });
-  var oneP = motorAt(nn.p, nn.pdp, 100, 0.9, { isMotor: false, thd: 40, phase: 'L1' });
+  /* Both circuits are switch-mode supplies, because that is the load that has a
+     third harmonic at all. A drive declares a larger THD and contributes none. */
+  var oneP = motorAt(nn.p, nn.pdp, 100, 0.9, { isMotor: false, thd: 40, harmonicType: 'smps_single', phase: 'L1' });
   oneP.phases = '1'; oneP.volt = 400; oneP.neutral = true;
-  var threePN = motorAt(nn.p, nn.pdp, 100, 0.9, { thd: 40, neutral: true });
+  var threePN = motorAt(nn.p, nn.pdp, 100, 0.9, { thd: 40, harmonicType: 'smps_single', neutral: true });
   threePN.phases = '3';
   LC.protAll(nn.p, {});
   var nStat = LC.neutralCurrent(nn.p, [oneP], null, 0);
   var nStat3 = LC.neutralCurrent(nn.p, [threePN], null, 0);
+  /* 0.35, not the 0.6 the old model assumed — that figure is now a property of
+     the load type, and a switch-mode supply's is 35% of its distortion. */
+  var FR = 0.35;
   check('a single-phase circuit puts its own triplen in the neutral',
-    Math.abs(nStat.thirdAmp - LC.panelDemand(nn.p, oneP).amp * 0.40 * 0.6) < 0.01, true);
+    Math.abs(nStat.thirdAmp - LC.panelDemand(nn.p, oneP).amp * 0.40 * FR) < 0.01, true);
   check('a three-phase and neutral circuit puts three times as much',
-    Math.abs(nStat3.thirdAmp - 3 * LC.panelDemand(nn.p, threePN).amp * 0.40 * 0.6) < 0.01, true);
+    Math.abs(nStat3.thirdAmp - 3 * LC.panelDemand(nn.p, threePN).amp * 0.40 * FR) < 0.01, true);
   /* Compared per amp, not per kW: the same kW is a different current at 1-phase
      and 3-phase (a factor of √3), so a raw ratio of the two would read √3×3 and
      look like a bug. The engine applies the 3× to the current, which is the
@@ -1081,6 +1086,61 @@
       (nStat.thirdAmp / LC.panelDemand(nn.p, oneP).amp) - 3) < 0.01, true);
   check('the two circuits really do carry different currents — that is the √3',
     Math.abs(LC.panelDemand(nn.p, oneP).amp / LC.panelDemand(nn.p, threePN).amp - Math.sqrt(3)) < 0.01, true);
+
+  /* ------------------------------------------- the load type decides it ------
+     A six-pulse drive is a balanced three-phase rectifier: harmonics 6k ± 1, so
+     the 5th and 7th, none of them triplen. Its third harmonic cancels between the
+     phases before it reaches a conductor. Applying a general third-harmonic
+     fraction to a drive feeder reported a neutral carrying 159% of a phase
+     conductor on a real board — a waveform that cannot produce it. */
+  check('a drive has no triplen fraction', LS.triplenFractionOf({ harmonicType: 'drive' }), 0);
+  check('a drive with an input reactor likewise', LS.triplenFractionOf({ harmonicType: 'drive_reactor' }), 0);
+  check('an active front end has almost none', LS.triplenFractionOf({ harmonicType: 'drive_afe' }), 0.02);
+  check('a single-phase switch-mode supply has a lot', LS.triplenFractionOf({ harmonicType: 'smps_single' }), 0.35);
+  check('an LED driver has a lot', LS.triplenFractionOf({ harmonicType: 'led' }), 0.25);
+  check('a welding machine has none', LS.triplenFractionOf({ harmonicType: 'welder' }), 0);
+  /* An undeclared load type asserts nothing. A generic three-phase load is more
+     likely to be balanced — a motor, a balanced rectifier — than a single-phase
+     supply, and guessing high puts a false alarm on every board. */
+  check('and an undeclared load type asserts nothing at all', LS.triplenFractionOf({}), 0);
+  check('though an explicit declaration always wins over the load type',
+    LS.triplenFractionOf({ harmonicType: 'drive', triplen: 30 }), 0.30);
+
+  /* The end-to-end consequence, which is the finding that was wrong. */
+  var dv = site({ kva: 2500 });
+  dv.tx.vecGroup = 'Dyn11';
+  for (var dvi = 0; dvi < 10; dvi++) {
+    var dvp = motorAt(dv.p, dv.pdp, 60, 0.9, { thd: 45, harmonicType: 'drive', neutral: true });
+    dvp.phases = '3';
+    dvp.cable = { csa: 70, runs: 1, cores: 4, len: 40, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  }
+  LC.protAll(dv.p, {});
+  var dvN = LC.boardStats(dv.p, dv.pdp, 'pdp').neutral;
+  var dvD = LC.panelDemand(dv.p, dv.p.panels[0]);
+  check('a board of drive panels puts nothing in the neutral bar', dvN.thirdAmp, 0);
+  check('and raises no neutral finding at all, which is the correct answer',
+    LC.audit(dv.p).filter(function (x) { return /neutral/.test(x.title); }).length, 0);
+  check('though the drive still raises its own RMS current, which heats the cable',
+    dvD.ampHarm > dvD.amp, true);
+  check('by the amount a 45% THD implies',
+    Math.abs(dvD.harmFactor - Math.sqrt(1 + 0.45 * 0.45)) < 0.001, true);
+  check('and the drives are counted as ruled out rather than undeclared', dvN.ruledOut, 10);
+
+  /* The same board with switch-mode supplies instead of drives. */
+  var sm = site({ kva: 2500 });
+  sm.tx.vecGroup = 'Dyn11';
+  for (var smi = 0; smi < 10; smi++) {
+    var smp = motorAt(sm.p, sm.pdp, 60, 0.9, { thd: 45, harmonicType: 'smps_single', neutral: true });
+    smp.phases = '3';
+    smp.cable = { csa: 70, runs: 1, cores: 4, len: 40, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  }
+  LC.protAll(sm.p, {});
+  var smN = LC.boardStats(sm.p, sm.pdp, 'pdp').neutral;
+  check('the same board of switch-mode supplies loads the bar heavily', smN.thirdAmp > 400, true);
+  check('and does raise the finding', LC.audit(sm.p)
+    .some(function (x) { return /neutral bar carries/.test(x.title); }), true);
+  check('which is the difference the load type makes at an identical 45% THD',
+    smN.thirdAmp > dvN.thirdAmp * 100, true);
 
   /* A three-pole feeder cannot contribute at all. No neutral conductor means no
      path for zero-sequence current, so the third harmonic circulates in the
@@ -1093,7 +1153,7 @@
   check('a three-pole circuit puts nothing in the neutral', nPole.thirdAmp, 0);
   check('and is counted as one', nPole.threePole, 1);
   check('so the difference from a three-phase and neutral feeder is the whole story',
-    LC.neutralCurrent(tp.p, [motorAt(tp.p, tp.pdp, 100, 0.9, { thd: 40, neutral: true })], null, 0).thirdAmp > 0, true);
+    LC.neutralCurrent(tp.p, [motorAt(tp.p, tp.pdp, 100, 0.9, { thd: 40, harmonicType: 'smps_single', neutral: true })], null, 0).thirdAmp > 0, true);
 
   /* The core count decides it when nothing is declared — four cores carries a
      neutral, three is three poles. */
@@ -1111,7 +1171,7 @@
   var br = site({ kva: 2500 });
   var acc = 0;
   for (var q = 0; q < 8; q++) {
-    var c = motorAt(br.p, br.pdp, 60, 0.9, { thd: 45, neutral: true });
+    var c = motorAt(br.p, br.pdp, 60, 0.9, { thd: 45, harmonicType: 'smps_single', neutral: true });
     c.phases = '3';
     acc += LC.panelDemand(br.p, c).amp;
   }
@@ -1163,7 +1223,7 @@
      assumed, which makes every neutral look protected, and that is not free to
      assume on someone's installation. */
   var vg = site({ kva: 2500 });
-  var vpn = motorAt(vg.p, vg.pdp, 60, 0.9, { thd: 45, neutral: true });
+  var vpn = motorAt(vg.p, vg.pdp, 60, 0.9, { thd: 45, harmonicType: 'smps_single', neutral: true });
   vpn.phases = '3';
   vg.tx.vecGroup = null;
   LC.protAll(vg.p, {});
@@ -1172,7 +1232,7 @@
   check('and the finding names the circuits that depend on it', /three-phase and neutral/.test(vgF[0].title), true);
   check('declaring it settles that', (function () {
     var s3 = site({ kva: 2500 });
-    var c3 = motorAt(s3.p, s3.pdp, 60, 0.9, { thd: 45, neutral: true });
+    var c3 = motorAt(s3.p, s3.pdp, 60, 0.9, { thd: 45, harmonicType: 'smps_single', neutral: true });
     c3.phases = '3';
     LC.protAll(s3.p, {});
     return LC.audit(s3.p).filter(function (x) { return /vector group not stated/.test(x.title); }).length;
@@ -1182,7 +1242,7 @@
      and the neutral ends up bigger than the phases. */
   var ys = site({ kva: 2500 });
   ys.tx.vecGroup = 'YNyn0';
-  for (var y = 0; y < 6; y++) { var yc = motorAt(ys.p, ys.pdp, 60, 0.9, { thd: 45, neutral: true }); yc.phases = '3'; }
+  for (var y = 0; y < 6; y++) { var yc = motorAt(ys.p, ys.pdp, 60, 0.9, { thd: 45, harmonicType: 'smps_single', neutral: true }); yc.phases = '3'; }
   LC.protAll(ys.p, {});
   var ysN = LC.boardStats(ys.p, ys.pdp, 'pdp').neutral;
   check('with a star-star winding the neutral carries something at all', ysN.amps > 0, true);
