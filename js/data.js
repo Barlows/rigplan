@@ -401,6 +401,78 @@ var LS = (function () {
   /* Sub-distribution board — the small board at the end of the chain, e.g. a
      63 A Acti9 supplying lighting, small power and other small final circuits.
      Fed from a PDP; control panels hang off it. One per PDP. */
+  /* ------------------------------------------------------- starting methods --
+     What each method does to the current a motor draws from the board.
+
+     The current multiple is the locked-rotor current the method actually
+     presents, and it is the number that decides whether the upstream device
+     survives. The design figures used are the slow end of the published ranges,
+     because overshooting a starting current is safe and undershooting it trips a
+     board.
+
+     `torque` is the starting torque as a fraction of full-load torque, and it is
+     the reason the reduced-current methods exist: star-delta gives a third of the
+     current and a third of the torque, which is not enough for a constant-torque
+     load and is ample for a fan.
+
+     `accel` is the usual accelerating period, which matters because an upstream
+     magnetic device clears in well under a second — so the inrush has to be
+     below the upstream pick-up, or below it only briefly, and duration is the
+     thing that decides which.
+
+     The curve letter a motor's own device needs follows from the multiple: a
+     device whose magnetic pick-up is below the inrush will operate during
+     starting, which on a MCB means it trips. */
+  var START_METHODS = {
+    'DOL': {
+      name: 'Direct on line', multiple: 7, torque: 2.5, accel: 4,
+      note: '6–8 × full load current, which is the range IEC 60034-1 gives for locked rotor. Highest torque, so the fastest start and the highest inrush.',
+      needsCurve: 'D'
+    },
+    'Star-delta': {
+      name: 'Star-delta', multiple: 2.3, torque: 0.85, accel: 12,
+      note: 'About a third of the direct-on-line current, because the motor is started in star. The cost is a third of the torque and roughly three times the starting time, so it suits fan and pump loads and will not start a conveyor against a full belt.',
+      needsCurve: 'C'
+    },
+    'Soft starter': {
+      name: 'Soft starter', multiple: 3, torque: 1.6, accel: 15,
+      note: 'Ramps the voltage, so the current is limited by the ramp setting rather than by the motor. The figure assumes a moderate ramp — set too short and it approaches direct on line.',
+      needsCurve: 'C'
+    },
+    'VFD': {
+      name: 'Variable speed drive', multiple: 1.4, torque: 1.5, accel: 40,
+      note: 'Frequency-converting, so the motor draws only magnetising current at standstill — there is essentially no inrush. Torque is available up to about 150 % at low speed. The trade is a long acceleration and a drive that has to be rated for the motor.',
+      needsCurve: 'B'
+    },
+    'Static': {
+      name: 'Static / SVC starter', multiple: 1.2, torque: 1.1, accel: 10,
+      note: 'A switched capacitor or thyristor starter. Very little inrush, and no harmonics — the reason to choose it over a soft starter where both fit.',
+      needsCurve: 'B'
+    }
+  };
+
+  /* Load torque characteristics. Which of these a machine is determines whether a
+     reduced-current start can accelerate it at all, and this is the single most
+     useful thing to know before choosing one. */
+  var LOAD_TORQUES = {
+    'constant': {
+      name: 'Constant torque (conveyor, hoist, compressor)',
+      note: 'Needs the same torque at standstill as at full speed. Star-delta gives only a third of the direct-on-line torque, so it will not start against a full belt unless the drive can be left unloaded first.'
+    },
+    'variable': {
+      name: 'Variable torque (fan, pump, blower)',
+      note: 'Torque rises with speed, so almost all of it is available at standstill anyway. This is the load a reduced-current start suits, and the reason fans and pumps are routinely started star-delta.'
+    },
+    'constantpower': {
+      name: 'Constant power (machine tool, test rig)',
+      note: 'Torque falls as speed rises, so a low-speed starter has to be rated for more than the running power. Check the drive against the full torque, not the kW.'
+    },
+    'inertia': {
+      name: 'High inertia (fan with long blades, large flywheel)',
+      note: 'Starts easily but accelerates slowly, so the inrush lasts far longer than a normal start. This is the case where an upstream device picks up even though the current is not unusual — the duration is the problem, not the peak.'
+    }
+  };
+
   /* The common vector groups, for the dropdown. */
   var VECTOR_GROUPS = [
     'Dyn11', 'Dyn1', 'Dyn5', 'Dyn7',
@@ -458,12 +530,35 @@ var LS = (function () {
       pf: num(p.pf, t.pf), demand: num(p.demand, 1), phases: ph,
       /* single-phase circuits are fed at the phase-to-neutral voltage */
       volt: num(p.volt, String(ph) === '1' ? 230 : 400),
-      start: p.start || 'DOL', contingency: num(p.contingency, 0),
+      /* Blank rather than DOL. A circuit that is not a motor has no starting
+         current, and defaulting to DOL gave every lighting and socket circuit a
+         7 x inrush that then appeared on the schedule. Blank means not stated,
+         which is the same convention the rest of the model uses: nothing is
+         asserted that has not been declared. */
+      start: p.start || '',
+      /* Set when the load is a rotating machine, or inferred from the panel type
+         and the starting method. The starting model is only applied where this
+         is true — a motor not declared as one gets no verdict rather than a
+         wrong one. */
+      isMotor: p.isMotor === undefined ? null : !!p.isMotor,
+      /* Set when this field came from a machine name rather than from a sheet or a
+         question asked. Not a label — the audit refuses to pass an inferred
+         starting method off as a decision, because a guess that reads like data
+         is worse than a blank that asks. */
+      startInferred: p.startInferred === undefined ? false : !!p.startInferred,
+      contingency: num(p.contingency, 0),
       /* Total harmonic distortion, as a percentage of the fundamental. Null
          unless a circuit declares it: assuming harmonic content for every motor
          would derate every cable on the project, and the great majority of
          circuits genuinely have little. */
       thd: p.thd === undefined || p.thd === null || p.thd === '' ? null : clamp(num(p.thd, 0), 0, 100),
+      /* Load torque characteristic. Decides whether a reduced-current start can
+         accelerate the machine at all, and is the thing to ask the vendor for. */
+      loadTorque: p.loadTorque || '',
+      /* Set when a circuit is one of several motors that will be started
+         together, and the others on this board are too. Two motors inrush at once
+         is a different problem from one, and it is invisible per-circuit. */
+      simultaneousStart: p.simultaneousStart === undefined ? null : (p.simultaneousStart ? Math.max(1, num(p.simultaneousStart, 2)) : null),
       /* the panel is normally fed from a PDP; `dbId` is the sub-board within
          that PDP it sits on, if any.
 
@@ -721,6 +816,7 @@ var LS = (function () {
     SIZES_A, SIZES_KVA, SIZES_KW, PHASES, VOLT_LV, VOLT_HV,
     maxDisconnectionTime, peMinCsa, PE_MIN_CSA, PE_MIN, DISC_TN, DISC_TT,
     VECTOR_GROUPS, blocksTriplen, lvNeutralEarthed, VEC_LV_DELTA,
+    START_METHODS, LOAD_TORQUES,
     PANEL_TYPES, DEFAULTS, SHAPE, PHASE_COLOR, PHASE_EDGE, phaseColor, phaseEdge,
     DB_SIZES_A, DB_LOAD_MAX_A, DB_LOAD_TYPES,
     MCCB_FRAMES, MCCB_SETTINGS, ICU_KA, TRIP_UNITS,

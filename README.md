@@ -250,6 +250,13 @@ the mapping is right, because the two numbers are arrived at independently.
    a real distribution board is rated on the diversified load, not on the sum of
    the frames. Each board's notes says so and gives the diversified figure.
    Replace them from the switchgear schedule.
+5. Which machines are motors, and what load torque they have, is inferred from
+   the machine name — 57 of the 97 circuits. The starting method is **not**:
+   the sheet's Starting Method column is empty on all 97 rows, so the 8 circuits
+   whose names carry a VSD are marked as driven and the other 49 motors are left
+   unstated and reported as unchecked. The importer previously defaulted
+   everything to DOL, which put a confirmed-looking 7 × inrush on 89 circuits
+   nobody had checked. That is worse than a blank, so it is gone.
 
 The cable columns in that sheet are headed *"Cable & Installation (to be
 completed)"*, so every circuit arrives without a feeder cable. The audit reports
@@ -320,6 +327,19 @@ Plus **selectivity** between a board and the one feeding it, and a note when a
 device cannot be protected by any cable. That last one matters: above about
 4,000 A no number of parallel cables is enough, and the audit says **busbar**
 rather than sending someone off to add another core.
+
+And the motor checks, each a different fix so they are reported separately:
+
+- **Starting current trips the board above** — the motor is capable of starting
+  on its own; the device feeding it disagrees. Soft starting or sequencing.
+- **Starting current exceeds its own device** — it trips on every start. Needs a
+  curve D MCB or an MCCB with its instantaneous setting above the inrush.
+- **Will not accelerate through the dip** — enough torque for the load at nominal
+  voltage, not enough once the board is pulled down. See [motor
+  starting](#motor-starting).
+- **Dip on its board** — advisory, because it affects every other circuit there.
+- **No starting method stated**, where a machine is declared and the method was
+  inferred from its name. Reported as unchecked rather than assumed.
 
 #### Selectivity, from curves
 
@@ -572,6 +592,62 @@ Third harmonic is taken as 60 % of the declared total distortion — typical of
 switch-mode supplies, and not always right. A circuit with a measured spectrum
 should override it, and the finding says so.
 
+### Motor starting
+
+Three things go wrong when a motor starts, and only one of them is the peak.
+
+**The peak.** Direct on line draws 6–8 × full load current (IEC 60034-1 locked
+rotor). The table uses the slow end of each range, because overshooting a
+starting current is safe and undershooting it trips a board.
+
+| Method | Multiple | Torque | Accelerating | Curve needed |
+|---|---|---|---|---|
+| DOL | 7 × | 2.5 × | ~4 s | D |
+| Star-delta | 2.3 × | 0.85 × | ~12 s | C |
+| Soft starter | 3 × | 1.6 × | ~15 s | C |
+| VFD | 1.4 × | 1.5 × | ~40 s | B |
+| Static / SVC | 1.2 × | 1.1 × | ~10 s | B |
+
+**The dip.** The Thevenin impedance looking into a board comes out of the fault
+level already calculated, so the two cannot drift apart:
+
+```
+ΔU = I_start × Z_th,   Z_th = V / (√3 · I_fault)
+```
+
+A 160 kW motor off a 1,000 kVA transformer dips the board 5%. The same motor
+off a 250 kVA transformer at 25% dips it 20%. Only the weak supply and the long
+feeder matter, which is why nothing is assumed.
+
+**The duration**, which is the one that catches people out. An upstream magnetic
+device clears in well under a second; a motor accelerating normally takes
+several seconds to draw inrush. So any inrush above the upstream pick-up trips
+it. A motor that starts perfectly well on its own can fail when other plant
+comes in at the same moment, and the fix is sequencing, not a bigger cable.
+
+**Torque** goes as the square of voltage, so a 10% dip costs 19% of the starting
+torque. A motor marginal at nominal voltage can stall on a dip — and a stalled
+motor draws more than one accelerating, which deepens the dip. That cascade is
+the failure mode, so the check compares available torque against what the load
+needs rather than printing a percentage. Load torque is a question for the
+vendor (`Load torque` in the properties panel), not something to infer.
+
+Three things are deliberately **not** inferred:
+
+- Whether a circuit is a motor. `DOL` alone does not make one — otherwise a
+  lighting circuit with the default method picks up a 7 × inrush. `Machine` is
+  set explicitly, or inferred from a non-default starting method, a stated load
+  torque, or a panel type that only holds rotating machinery.
+- The starting method itself. Blank means not stated, and the audit says so. The
+  real project has 49 motors whose sheet column is empty, and they are reported
+  as unchecked rather than assumed.
+- A machine with no rated load. A stand-by machine usually has no kW, and there
+  is no multiple to apply — reported as a gap, not as 0 A.
+
+Starting columns are in the load schedule and the CSV, suppressed where the
+method and the source impedance make them irrelevant. A board row carries one
+line for its motors: the worst dip and what they draw together.
+
 ### Fault levels
 
 The fault level at a board comes from the transformer's **impedance**, not its
@@ -752,7 +828,12 @@ changes the supply topology and should be a deliberate act.
 ## What is calculated
 
 - **Load** — design kVA = connected kW ÷ power factor × demand factor. Current from
-  kVA at the board voltage; single-phase circuits use the phase-to-neutral voltage.
+  kVA at the board voltage: `I = S / (√3 · V)` three-phase, `S / V` single-phase.
+  The power factor is **not** in that expression — it has already been applied to
+  get to kVA. It was, once, and every three-phase current in the app came out
+  1/pf too high: 90 A where 76 A was right at 45 kW and pf 0.85. That fed cable
+  sizing, board loading, incomer ratings, volt drop and starting current. The
+  arithmetic is now pinned by tests, which is how it should have been all along.
 - **Board loading** — aggregated up through sub-board → PDP → PDB → transformer, with
   utilisation, headroom, spare ways, per-phase kVA and current, and phase deviation.
   A sub-board reports only the circuits sitting on it; everything rolls up through
@@ -769,6 +850,9 @@ changes the supply topology and should be a deliberate act.
   stepped down by an assumed impedance per distribution stage.
 - **Incomer sizing** — `Auto-size` applies the design margin to the running load and
   rounds up to the next standard rating.
+- **Motor starting** — starting current by method, the board voltage dip it causes
+  (from the fault level), whether it picks up the device above or the motor's own,
+  and the torque left against what the load needs. See *Motor starting*.
 
 ---
 
@@ -822,10 +906,11 @@ test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        36 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
-test/protection-test.html 200 checks on fault levels, device proposals, cable
+test/protection-test.html 260 checks on fault levels, device proposals, cable
                           thermal withstand, selectivity from trip curves, earth
                           fault looping, the neutral conductor, reactive power,
-                          harmonics and the protection audit
+                          harmonics, motor starting, current from apparent power
+                          and the protection audit
 test/underlay-test.html   image/DXF/DWG loading and scale handling
 ```
 

@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=141"></script>
-<script src="../js/calc.js?v=141"></script>
+<script src="../js/data.js?v=165"></script>
+<script src="../js/calc.js?v=165"></script>
 <script>
 (function () {
   var results = [];
@@ -735,21 +735,196 @@
   check('the longest tag list is capped, because a list of ninety is not information',
     LC.MAX_LIST, 8);
 
-  /* And the two real grouped checks, end to end. */
-  var dz = site();
+  /* Current from apparent power. This test exists because there was no test for
+     it, and the function divided by power factor when handed kVA — applying it
+     twice and overstating every three-phase current by 1/pf. 18% at a typical
+     industrial power factor, through cable sizing, board loading and volt drop,
+     with the whole suite green. The arithmetic is now pinned. */
+  var cq = LS.newProject();
+  function cur(kw, pf, ph, v) {
+    var pn = LS.newPanel({ kw: kw, pf: pf, phases: ph, volt: v });
+    return LC.panelDemand(cq, pn).amp;
+  }
+  check('45 kW at 0.85 pf, 400 V three phase is 76 A not 90', Math.round(cur(45, 0.85, '3', 400)), 76);
+  check('the same circuit at unity power factor is smaller still, 65 A', Math.round(cur(45, 1, '3', 400)), 65);
+  check('4.5 kW at 0.95 pf, 230 V single phase is 21 A', Math.round(cur(4.5, 0.95, '1', 230)), 21);
+  check('160 kW at 0.85 pf is 272 A not 320', Math.round(cur(160, 0.85, '3', 400)), 272);
+  /* I = S / (√3 V) for three phase. Checked against the same number the other
+     way round, so a change to the formula that happens to preserve one figure
+     still fails. */
+  var kva45 = 45 / 0.85;
+  check('and it is kVA over √3·V exactly',
+    Math.abs(cur(45, 0.85, '3', 400) - (kva45 * 1000) / (Math.sqrt(3) * 400)) < 0.01, true);
+  /* The bug in one line: halving the apparent power must halve the current, and
+     applying pf a second time would break exactly that. */
+  check('and halving the kVA halves the current', Math.abs(cur(22.5, 0.85, '3', 400) * 2 - cur(45, 0.85, '3', 400)) < 0.01, true);
+  check('so current follows kVA alone, not kW and pf separately',
+    Math.abs(cur(45, 0.85, '3', 400) - (45 / 0.85) * 1000 / (Math.sqrt(3) * 400)) < 0.01, true);
+
+  /* Instantaneous pick-up, read off the trip curve rather than declared. */
+  check('a curve B device picks up at 5 × In', LC.curveInstantaneousMultiple({ kind: 'mcb', ir: 100, trip: 'B' }), 5);
+  check('a curve C device at 10', LC.curveInstantaneousMultiple({ kind: 'mcb', ir: 100, trip: 'C' }), 10);
+  check('a curve D device at 20, which is why motors want one', LC.curveInstantaneousMultiple({ kind: 'mcb', ir: 100, trip: 'D' }), 20);
+  check('a thermal-magnetic MCCB at 10', LC.curveInstantaneousMultiple({ kind: 'mccb', ir: 100, trip: 'TM' }), 10);
+  check('a long-time relay at 10', LC.curveInstantaneousMultiple({ kind: 'mccb', ir: 100, trip: 'LI' }), 10);
+  /* The LS is the case that matters: no instantaneous stage at all, which is the
+     whole reason for choosing it, and a plateau must not be read as a
+     threshold. */
+  check('an LS trip has no instantaneous stage at all', LC.curveInstantaneousMultiple({ kind: 'mccb', ir: 100, trip: 'LS' }), null);
+  check('an LS with S picked up at 10', LC.curveInstantaneousMultiple({ kind: 'mccb', ir: 100, trip: 'LSI' }), 10);
+
+  /* Starting current, by method. */
+  /* Every motor here needs a cable. The audit reports a missing feeder cable and
+     returns before it reaches the starting check, which is right for a schedule
+     but means a test circuit without one is never assessed at all. */
+  function motorAt(p, board, kw, pf, extra) {
+    var pn = load(p, board, kw, pf, Object.assign({
+      cable: { csa: 240, runs: 1, cores: 4, len: 80, method: 'XL-A1', group: 1, ambient: 40, sheathed: true }
+    }, extra || {}));
+    return pn;
+  }
+
+  var sz = site();
+  var sm = motorAt(sz.p, sz.pdp, 160, 0.85, { isMotor: true });
+  check('full load current is now 272 A', Math.round(LC.startingCurrentA(sz.p, sm).flc), 272);
+  sm.start = 'DOL';
+  check('direct on line takes 7 × full load', LC.startingCurrentA(sz.p, sm).multiple, 7);
+  check('which is 1902 A', Math.round(LC.startingCurrentA(sz.p, sm).amps), 1902);
+  check('and about 4 s to accelerate', LC.startingCurrentA(sz.p, sm).accel, 4);
+  sm.start = 'Star-delta';
+  check('star-delta takes about a third of that', Math.round(LC.startingCurrentA(sz.p, sm).amps), 625);
+  sm.start = 'VFD';
+  check('a drive takes barely more than full load', Math.round(LC.startingCurrentA(sz.p, sm).amps), 380);
+  sm.start = 'Static';
+  check('a static starter likewise', Math.round(LC.startingCurrentA(sz.p, sm).amps), 326);
+
+  /* The model only applies where it should. A lighting circuit declared with the
+     default starting method must get no inrush at all — this was how a 7 × figure
+     ended up on a 4 A luminaire circuit. */
+  var lit = LS.newPanel({ kw: 0.06, pf: 0.95, phases: '1', volt: 230, type: 'db_sk' });
+  check('a lighting circuit is not a motor', LC.isMotorLoad(lit), false);
+  check('and gets no starting current', LC.startingCurrentA(sz.p, lit), null);
+  check('so nothing is said about it', LC.startingCheck(sz.p, lit, 'panel'), null);
+  check('but declaring it a motor overrides that', LC.isMotorLoad(LS.newPanel({ kw: 5, isMotor: 'yes' })), true);
+  check('and so does declaring it is not', LC.isMotorLoad(LS.newPanel({ kw: 90, isMotor: 'no' })), false);
+  /* 'no' is a non-empty string, so a truthiness test would invert this silently */
+  check('the dropdown value "no" is not mistaken for yes', LC.isMotorLoad({ kw: 90, type: 'pump', isMotor: 'no' }), false);
+  check('a pump panel is taken as a motor when nothing says otherwise', LC.isMotorLoad({ kw: 90, type: 'pump' }), true);
+  check('a stated load torque is itself a declaration', LC.isMotorLoad({ kw: 90, loadTorque: 'variable' }), true);
+  check('but DOL alone does not make a motor — an undeclared circuit gets nothing',
+    LC.isMotorLoad({ kw: 90, start: 'DOL' }), false);
+
+  /* The dip, derived from the fault level rather than from a separate impedance
+     model, so the two cannot drift apart. */
+  var dzp = motorAt(sz.p, sz.pdp, 160, 0.85, { isMotor: true, start: 'DOL', loadTorque: 'constant' });
+  LC.protAll(sz.p, {});
+  var sr = LC.startingCheck(sz.p, dzp, 'panel');
+  check('the board has a fault level to derive the impedance from', sr.faultKA > 0, true);
+  check('and the impedance comes out of it', sr.dip.zth > 0, true);
+  check('a stiff supply barely dips — this is a 1000 kVA transformer', sr.dip.pct < 8, true);
+  check('the motor sees most of the nominal voltage', sr.dip.motorPct > 92, true);
+  check('and more starting torque than the load needs', sr.dip.torqueAvail > LC.torqueNeeded('constant'), true);
+
+  /* Torque goes as the square of voltage, which is the whole reason the dip is
+     worth computing rather than reporting as a percentage. */
+  /* Torque against voltage, at whatever dip this board actually has. A 10% dip
+     costing 19% of the torque is the whole reason the dip is worth computing
+     rather than just printing as a percentage. */
+  var sq = LC.startingCheck(sz.p, dzp, 'panel').dip;
+  check('torque falls as the square of the voltage it is left with',
+    Math.abs(sq.torqueAvail - 2.5 * Math.pow(sq.motorPct / 100, 2)) < 0.01, true);
+  check('and the loss is nearly all from the first few per cent',
+    Math.abs(sq.torqueAvail / 2.5 - Math.pow(1 - sq.pct / 100, 2)) < 0.01, true);
+
+  /* Torque each load type needs. */
+  check('a constant-torque load needs more than full-load torque', LC.torqueNeeded('constant'), 1.2);
+  check('a fan needs very little', LC.torqueNeeded('variable'), 0.4);
+  check('a constant-power machine needs least', LC.torqueNeeded('constantpower'), 0.3);
+  check('a high-inertia load is in between', LC.torqueNeeded('inertia'), 0.6);
+  check('an unstated load type asserts nothing', LC.torqueNeeded(''), null);
+
+  /* The dip that actually stops a machine. A weak source and a small motor. */
+  var wz = site({ impZ: 25, kva: 250 });
+  var wm = motorAt(wz.p, wz.pdp, 45, 0.85, { isMotor: true, start: 'DOL', loadTorque: 'constant' });
+  LC.protAll(wz.p, {});
+  var wr = LC.startingCheck(wz.p, wm, 'panel');
+  check('a weak supply dips far more than a stiff one', wr.dip.pct > 10, true);
+  check('and takes the torque with it', wr.dip.torqueAvail < LC.torqueNeeded('constant') * 1.35, true);
+  check('which the audit reports rather than leaves implicit',
+    LC.audit(wz.p).some(function (x) { return /dip|accelerate/.test(x.title); }), true);
+
+  /* Two motors inrush together: a different problem from one, and invisible
+     per-circuit. */
+  var gz = site();
+  var g1 = motorAt(gz.p, gz.pdp, 160, 0.85, { isMotor: true, start: 'DOL', simultaneousStart: 2 });
+  var g2 = motorAt(gz.p, gz.pdp, 160, 0.85, { isMotor: true, start: 'DOL', simultaneousStart: 2 });
+  check('one alone draws 1902 A', Math.round(LC.startingCurrentA(gz.p, g1).amps), 1902);
+  check('and the two together 3804', Math.round(LC.startingCurrentA(gz.p, g1).combined), 3804);
+  check('which dips the board more than either would alone',
+    LC.startingCheck(gz.p, g1, 'panel').dip.pct >
+    LC.startingCheck(gz.p, motorAt(gz.p, gz.pdp, 160, 0.85, { isMotor: true, start: 'DOL' }), 'panel').dip.pct, true);
+
+  /* A stand-by machine with no rated load. It is a real motor and will draw a
+     real inrush, but with no full load current there is no multiple to apply —
+     and "0 A starting" would read as a calculated figure rather than a gap. */
+  var nz = site();
+  var stby = motorAt(nz.p, nz.pdp, 0, 0.85, { isMotor: true, start: 'VFD' });
+  LC.protAll(nz.p, {});
+  var nsr = LC.startingCurrentA(nz.p, stby);
+  check('a motor with no rated load has no full load current', nsr.flc, 0);
+  check('and no starting current either, rather than zero', nsr.amps, null);
+  check('it says so rather than computing from nothing', nsr.noRating, true);
+  check('and the check declines to dip it', LC.startingCheck(nz.p, stby, 'panel').dip, null);
+  check('flagged rather than left to look calculated',
+    LC.audit(nz.p).some(function (x) { return /no rated load/.test(x.title); }), true);
+  check('and nothing in that audit is a NaN', /NaN/.test(JSON.stringify(LC.audit(nz.p))), false);
+
+  /* A group carries the unit of what it sums. The starting findings sum amps, and
+     labelling them kW printed 19965 kW on a project with 9525 kW of load. */
+  var uz = site({ impZ: 18, kva: 630 });
+  for (var u = 0; u < 4; u++) motorAt(uz.p, uz.pdp, 160, 0.85, { isMotor: true, start: 'DOL' });
+  LC.protAll(uz.p, {});
+  var ug = LC.groupFindings(LC.audit(uz.p)).filter(function (x) { return x.grouped && /dips/.test(x.title); });
+  check('the starting group is labelled in amps', /A between them/.test(ug[0].detail), true);
+  check('and never in kW', /kW/.test(ug[0].detail), false);
+
+  /* Inferred data is reported as inferred. 89 circuits on a real project carried
+     a starting method nobody had confirmed, and it read exactly like data. */
+  var iz = site();
+  var inferred = motorAt(iz.p, iz.pdp, 160, 0.85, { isMotor: true, start: '', startInferred: true });
+  var named = motorAt(iz.p, iz.pdp, 160, 0.85, { isMotor: true, start: 'VFD', startInferred: true });
+  LC.protAll(iz.p, {});
+  check('a motor with no stated method is reported as one',
+    LC.audit(iz.p).some(function (x) { return /no starting method/.test(x.title); }), true);
+  check('and one taken from a name is flagged as inferred, not as declared',
+    LC.audit(iz.p).some(function (x) { return /inferred from the machine name/.test(x.title); }), true);
+  check('which is a different severity from an unstated one',
+    LC.audit(iz.p).filter(function (x) { return /starting method inferred/.test(x.title); })[0].level, 'info');
+  /* A method that was actually stated carries no inference note at all — which is
+     what makes the note mean something when it does appear. */
+  var declaredOnly = site();
+  motorAt(declaredOnly.p, declaredOnly.pdp, 160, 0.85, { isMotor: true, start: 'VFD' });
+  LC.protAll(declaredOnly.p, {});
+  check('a declared method carries no inference note',
+    LC.audit(declaredOnly.p).some(function (x) { return /inferred/.test(x.title); }), false);
+
+  /* And the two real grouped checks, end to end: five similar motors on one
+     board fold into one row rather than five that say the same thing. */
+  /* A weak source, because on a stiff one the dip is 5% and correctly raises
+     nothing. Five 160 kW motors off a 630 kVA transformer at 18% do dip. */
+  var dz = site({ impZ: 18, kva: 630 });
   for (var m = 0; m < 5; m++) {
-    var mp = load(dz.p, dz.pdp, 120, 0.9);
-    mp.start = 'DOL';
+    motorAt(dz.p, dz.pdp, 160, 0.85, { isMotor: true, start: 'DOL' });
   }
   LC.protAll(dz.p, {});
   var draw = LC.audit(dz.p);
-  var dnotes = draw.filter(function (x) { return /DOL/.test(x.title); });
-  check('five large motors give five findings ungrouped', dnotes.length, 5);
+  var dnotes = draw.filter(function (x) { return /dips .*by/.test(x.title); });
+  check('five motors that dip their board give five findings ungrouped', dnotes.length, 5);
   check('that carry a group key so they can be folded', typeof dnotes[0].groupKey, 'string');
-  var dg = LC.groupFindings(draw).filter(function (x) { return x.grouped; });
+  var dg = LC.groupFindings(draw).filter(function (x) { return x.grouped && /dips/.test(x.title); });
   check('and one row when grouped', dg.length, 1);
-  check('counting all five', dg[0].title.slice(0, 1), '5');
-  check('with their combined load, 600 kW', Math.round(dg[0].kw), 600);
+  check('counting all five', dg[0].title.slice(0, 2), '5 ');
+  check('and naming them motors that dip their board', /dip/.test(dg[0].title), true);
 
   /* ------------------------------------------------------- everything at once */
   var z = site();

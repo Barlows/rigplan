@@ -190,6 +190,10 @@
     ['icu', ['breakingcapacityka', 'breakingcapacity', 'icu', 'kic', 'faultcapacity', 'ikc', 'breakingcapacitykic']],
     ['trip', ['tripunit', 'trip', 'relay', 'overload', 'trippingunit', 'adjustmentrange']],
     ['start', ['startingmethod', 'startmethod', 'starter', 'starting', 'start', 'dol', 'dolstart', 'drive', 'motors']],
+    ['loadTorque', ['loadtorque', 'loadorquetype', 'torquecharacteristic', 'torque', 'loadcharacteristic',
+                   'loaddescription', 'loadtype', 'momentofinertia']],
+    ['simultaneousStart', ['startingtogether', 'simultaneousstart', 'startsogether', 'startingwith',
+                            'simultaneous', 'numberstarting', 'startstogether']],
     ['csa', ['feedermm2', 'mm2', 'csa', 'cablesize', 'cable', 'crosssection', 'crosssectionalarea', 'size',
              'cablersize', 'feedersize', 'conductor', 'fittedcable', 'installedcable', 'supplycable',
              'cabletype', 'cablecore', 'conductorcrosssection', 'cablesizes']],
@@ -418,6 +422,21 @@
     return null;
   }
   CSVC.start = start;
+
+  /* Load torque characteristic. Matters because a reduced-current start cannot
+     accelerate a constant-torque load, and knowing which of the four this is
+     decides that before anyone orders the starter. Anything unrecognised is left
+     blank so nothing is asserted. */
+  function loadTorque(v) {
+    if (!v) return null;
+    var s = String(v).toLowerCase().trim();
+    if (/constant\s*power|constantpower|fixed\s*power/.test(s)) return 'constantpower';
+    if (/inertia|flywheel|high\s*inertia|large\s*inertia/.test(s)) return 'inertia';
+    if (/variable|quadratic|fan|pump|blower|centrifugal/.test(s)) return 'variable';
+    if (/constant\s*torque|constanttorque|conveyor|hoist|hoist|constant/.test(s)) return 'constant';
+    return null;
+  }
+  CSVC.loadTorque = loadTorque;
 
   /* Cable installation method from "XL-A1", "A1", "C", "clip". Not everything
      maps; an unknown method is left alone so the app's own default applies

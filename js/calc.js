@@ -319,10 +319,22 @@ var LC = (function () {
        here, and the offending circuits are named separately by the audit. */
     return { kw: kw, kva: kva, kvar: kvar, pf: kva > 0 ? D.clamp(kw / kva, 0, 1) : 1 };
   }
+  /* Current from apparent power. S = √3 · V · I, so I = S / (√3 · V) for three
+     phase and S / V for single — and neither has a power factor in it, because S
+     is kVA and the power factor has already been applied to get there.
+
+     This function divided by pf as well, applying it twice: a 45 kW circuit at
+     0.85 power factor and 400 V was reported as 90 A instead of 76 A. Every
+     three-phase current in the app was overstated by 1/pf — 18% at a typical
+     industrial power factor — and it fed cable sizing, board loading, incomer
+     ratings, volt drop and motor starting current, so the whole schedule was
+     built on it. The `pf` argument is kept in the signature so that a call site
+     passing it is not silently wrong in the other direction, but it is not used;
+     a caller with watts should divide by pf itself and pass watts, not kVA. */
   function currentFor(kva, pf, phases, volt) {
     var v = D.num(volt, 400) || 400;
-    if (String(phases) === '1') return (kva * 1000) / (v * pf);
-    return (kva * 1000) / (Math.sqrt(3) * v * pf);
+    if (String(phases) === '1') return (kva * 1000) / v;
+    return (kva * 1000) / (Math.sqrt(3) * v);
   }
   function voltFor(phases, volt) { return String(phases) === '1' ? D.num(volt, 400) : D.num(volt, 400); }
 
@@ -799,9 +811,11 @@ var LC = (function () {
        the same problem seen on two different items, which is what lets a check
        that fires on every circuit be reported as one line instead of ninety —
        see groupFindings(). Omit it and the finding stands on its own. */
-    var add = function (lvl, scope, id, t, d, key, kw) {
+    /* `kw` is whatever quantity the group is summing, and `unit` says which, so
+       that a group of starting-current findings does not print its amps as kW. */
+    var add = function (lvl, scope, id, t, d, key, kw, unit) {
       var rec = { level: lvl, scope: scope, id: id, title: t, detail: d,
-                  groupKey: key || null, groupKw: kw || null };
+                  groupKey: key || null, groupKw: kw || null, groupUnit: unit || 'kW' };
       /* The item and the board it sits on, so a grouped row can name where the
          problem is without the check having to word it that way. */
       if (id && id !== '-') {
@@ -1074,6 +1088,101 @@ var LC = (function () {
 
     function LC_ms(t) { return t >= 1 ? t.toFixed(2) + ' s' : (t * 1000).toFixed(0) + ' ms'; }
 
+    /* Motor starting. Three failures, reported separately because they have
+       different fixes: the upstream device picks up and trips, the motor's own
+       device does the same, or the board voltage dips far enough that the motor
+       cannot accelerate and draws even more current. */
+    function checkStarting(p, pn, kind) {
+      var r = startingCheck(p, pn, kind);
+      if (!r || !pn.prot) return;
+      var what = pn.tag;
+      var sc = r.sc, m = sc.method;
+      var groupWord = sc.group > 1 ? ' (' + sc.group + ' starting together)' : '';
+
+      /* 1. the upstream device. This is the failure that catches people out: the
+            motor is perfectly capable of starting on its own, and trips the board
+            because of what the board above it can see. */
+      if (r.tripsUpstream) {
+        add('bad', kind, pn.id, what + ' starting current trips ' + (r.up ? r.up.tag : 'the board above'),
+          'Starting at ' + sc.amps.toFixed(0) + ' A' + (sc.group > 1 ? ' per circuit and ' + sc.combined.toFixed(0) +
+            ' A together' : '') + ' — ' + sc.multiple + ' × full load — which is above the ' +
+          (r.up ? r.up.tag : 'upstream') + ' device\'s pick-up at ' + r.upPickup + ' × its ' + r.upIr +
+          ' A setting. That device clears in ' + LC_ms(r.upClears) + ' and the motor takes about ' +
+          sc.accel + ' s to accelerate, so the upstream device wins. Soft starting, star-delta or a drive ' +
+          'brings the current below the pick-up; staggering the start so nothing else lands on that board ' +
+          'at the same moment also works, and costs nothing.', 'start-upstream', sc.amps, 'A');
+        return;
+      }
+      /* 2. the motor's own device. */
+      if (r.tripsSelf) {
+        add('bad', kind, pn.id, what + ' starting current exceeds its own device\'s pick-up',
+          'The motor draws ' + sc.amps.toFixed(0) + ' A starting, ' + sc.multiple +
+          ' × its full load current, against a ' + (pn.prot.kind === 'mcb' ? 'curve ' + (pn.prot.trip || 'C') :
+            (pn.prot.trip || 'TM')) + ' device whose magnetic stage picks up at ' + r.ownPickup +
+          ' × In. It will operate during every start. A curve ' + m.needsCurve + ' device, or an MCCB with ' +
+          'its instantaneous setting taken above ' + sc.amps.toFixed(0) + ' A, is what this needs.',
+          'start-own', sc.amps, 'A');
+        return;
+      }
+      /* 3. A machine with no rated load. The starting check needs a full load
+            current to take a multiple of, and there is nothing to take it of. */
+      if (r.noRating) {
+        add('info', kind, pn.id, what + ' has no rated load to check its starting current against',
+          'The sheet gives this machine no kW, which is what a stand-by machine usually means. ' +
+          'It still draws a full inrush when it starts, so the question worth asking is the vendor\'s ' +
+          'rated current and starting method rather than anything the schedule can work out here.');
+        return;
+      }
+      /* 4. Inferred data, reported before anything is computed from it. A motor
+            whose starting method came from a machine name has no assessed dip in
+            this design yet, and the fix is to ask the vendor — which is a
+            different action from anything below. */
+      if (pn.startInferred && !pn.start) {
+        add('warn', kind, pn.id, what + ' is a motor with no starting method',
+          'The machine name suggests rotating equipment, but nothing states how it starts. ' +
+          'Direct on line takes about ' + D.START_METHODS.DOL.multiple + ' × full load current, ' +
+          'which is the figure that decides whether the board above survives it — so this circuit ' +
+          'has not actually been checked. Set the starting method from the vendor\'s data.',
+          'start-unstated', r.sc.flc, 'A full load');
+        return;
+      }
+      if (pn.startInferred && pn.start) {
+        add('info', kind, pn.id, what + ' starting method inferred from the machine name',
+          'Taken as ' + pn.start + ' because the name implies a drive, not because a sheet says so. ' +
+          'Worth confirming — it moves the starting current from about ' +
+          r.sc.amps.toFixed(0) + ' A down to ' +
+          (r.sc.amps / D.START_METHODS.DOL.multiple * D.START_METHODS[pn.start].multiple).toFixed(0) +
+          ' A, and that is the difference between keeping the board and tripping it.',
+          'start-inferred', r.sc.flc, 'A full load');
+      }
+
+      /* 5. The dip, and whether there is enough torque left to accelerate. */
+      if (!r.dip) return;
+      var need = torqueNeeded(pn.loadTorque);
+      if (need !== null && r.dip.torqueAvail < need) {
+        add('bad', kind, pn.id, what + ' will not accelerate — the dip leaves too little torque',
+          'At ' + r.dip.pct.toFixed(1) + '% dip on ' + (r.board ? r.board.tag : 'its board') +
+          ' the motor has ' + r.dip.motorV.toFixed(0) + ' V across it, so its starting torque falls to ' +
+          r.dip.torqueAvail.toFixed(2) + ' of full load against the ' + need +
+          ' this load needs. Torque goes as the square of voltage, which is why a dip that looks ' +
+          'modest on the schedule matters. The motor will stall, and a stalled motor draws more current ' +
+          'than one accelerating, so the dip deepens. Reduce the starting current — a drive or soft ' +
+          'starter — or improve the supply at that board.', 'start-torque', sc.amps, 'A');
+        return;
+      }
+      if (r.dip.pct > 10 && sc.multiple >= 4) {
+        add('warn', kind, pn.id, what + ' starting dips ' + (r.board ? r.board.tag : 'its board') + ' by ' + r.dip.pct.toFixed(1) + '%',
+          sc.multiple + ' × full load current' + groupWord + ' pulls the board down by ' +
+          r.dip.volts.toFixed(0) + ' V, leaving ' + r.dip.motorV.toFixed(0) + ' V during the start and ' +
+          r.dip.torqueAvail.toFixed(2) + ' × full load torque' +
+          (need === null ? '' : ', against the ' + need + ' this load needs') + '. Every other circuit on ' +
+          'that board sees the dip as well, and a contactor elsewhere drops out if it is already close ' +
+          'to its holding voltage. The impedance comes from the ' + r.faultKA.toFixed(1) +
+          ' kA fault level at this board, so it is only as good as that — and the fault level rests on ' +
+          'the assumed transformer impedance.', 'start-dip', sc.amps, 'A');
+      }
+    }
+
     /* The neutral. Reported per board, from the declared harmonic content of
        the single-phase circuits on it. */
     function checkNeutral(p, item, kind, st) {
@@ -1245,6 +1354,7 @@ var LC = (function () {
       checkHarmonics(p, pn, 'panel');
       checkImpossiblePf(p, pn);
       checkEarthFault(p, pn, 'panel');
+      checkStarting(p, pn, 'panel');
     });
 
     /* Coordination across a supply chain: the device downstream must be able to
@@ -1320,14 +1430,6 @@ var LC = (function () {
          sub-board, or a main board directly. */
       if (!pn.pdpId && !pn.pdbId) { add('warn', 'panel', pn.id, pn.tag + ' not assigned to a board', 'Set a grid reference or press Auto-assign.'); return; }
       if (pn.phases === '1' && D.num(pn.volt, 400) < 230) add('info', 'panel', pn.id, pn.tag + ' single phase at ' + pn.volt + ' V', 'Check the phase-to-neutral voltage.');
-      /* Every large motor gets this note, so on a real project it fires on a
-         fifth of the circuits and says the same thing each time. The group key
-         folds them into one line carrying the total load, which is the number
-         that tells you whether the starting problem is one machine or a
-         cluster that has to be sequenced. */
-      if (pn.kw > 90 && String(pn.start) === 'DOL') add('info', 'panel', pn.id, pn.tag + ' large DOL starting load',
-        'Confirm the incomer and contactor withstand the starting current and check voltage dip.',
-        'dol-start', num(pn.kw, 0));
       /* a reserved circuit with no load yet (e.g. a generator connection
          point) is a placeholder, not a missing design decision */
       var placeholder = d.kw <= 0 && d.kva <= 0;
@@ -1515,6 +1617,224 @@ function clearingTimeAt(prot, multiple) {
      full-size neutral. */
   function neutralCsaFor(phaseCsa) {
     return D.num(phaseCsa, 0) || null;
+  }
+
+/* ========================================================= motor starting =====
+     Three things go wrong when a motor starts, and only one of them is the peak.
+
+     **The peak.** Direct on line draws 6 to 8 times full load current. That is
+     what the starting method table is for, and the design figures used are the
+     slow end of each range: overshooting a starting current is safe, undershooting
+     it trips a board.
+
+     **The dip.** A large current through the source impedance pulls the board
+     voltage down, and every other circuit on that board sees it. From the fault
+     level already calculated, the Thevenin impedance looking into the board is
+     known, so the dip during starting is
+
+         ΔU = I_start × Z_th
+
+     which is only large when the supply is weak or the feeder is long — the two
+     cases where it matters, and neither of which can be guessed at.
+
+     **The duration**, which is the one that catches people out. An upstream
+     magnetic device clears in well under a second. A motor accelerating normally
+     takes several seconds to draw inrush, so any inrush above the upstream
+     pick-up trips it — unless the motor's own impedance is inside the upstream
+     device's thermal band, which it is not. This is why a motor that starts
+     perfectly well on its own can fail to start when other plant comes in at the
+     same moment, and why the fix is sequencing rather than a bigger cable.
+
+     Torque is the fourth, and the reason any of this is worth doing: torque goes
+     as the square of voltage, so a 10 % dip is a 19 % loss of starting torque. A
+     motor that is marginal at nominal voltage can stall on a dip — and a stalled
+     motor draws more current than one accelerating, which makes the dip worse.
+     That cascade is the actual failure mode, and it is why the check compares the
+     available torque against what the load needs rather than only reporting a
+     percentage. */
+  /* Whether the starting model applies at all. A rotating machine draws an
+     inrush; a lighting circuit does not, and applying a motor model to one is
+     how a schedule ends up with a 7 x figure on a 4 A luminaire circuit.
+
+     Declared wins. Failing that, a non-default starting method is itself the
+     declaration — nobody types "VFD" against a socket outlet — and so is a
+     panel type that only ever contains rotating machines. A motor that is
+     simply a motor in a panel typed "Plant" gets nothing, which is the correct
+     outcome for undeclared data. */
+  function isMotorLoad(pn) {
+    /* The properties panel writes this from a dropdown, so it arrives as 'yes'
+       or 'no' rather than a boolean. Both are accepted; 'no' being a non-empty
+       string is exactly the trap that would silently invert the whole model. */
+    if (pn.isMotor === false || pn.isMotor === 'no') return false;
+    if (pn.isMotor === true || pn.isMotor === 'yes') return true;
+    var st = String(pn.start || '');
+    if (st && D.START_METHODS[st] && D.START_METHODS[st].multiple < 2) return true;
+    if (st && st !== 'DOL') return true;
+    if (pn.loadTorque) return true;
+    return MOTOR_PANEL_TYPES[String(pn.type || '')] === true;
+  }
+
+  /* Panel types whose load is rotating machinery. Not exhaustive and not
+     exclusive — a lighting board is never a motor, but an "Other" panel might
+     be, which is why the declaration above can override this either way. */
+  var MOTOR_PANEL_TYPES = {
+    mcc: true, ahu: true, pump: true, chiller: true, boiler: true, lift: true, gen: false
+  };
+
+  function startMethod(pn) {
+    return D.START_METHODS[String(pn.start || 'DOL')] || D.START_METHODS.DOL;
+  }
+
+  /* Full load current, which is the base every multiple is taken against. */
+  function startingCurrentA(p, pn) {
+    if (!isMotorLoad(pn)) return null;
+    var d = panelDemand(p, pn);
+    /* A stand-by machine with no rated load on the sheet. It is a real motor and
+       it will draw real inrush when it starts — but with no rated current there
+       is no multiple to apply, and printing "0 A starting" would read as a
+       figure that had been calculated. Flagged instead. */
+    if (!(d.amp > 0)) {
+      return {
+        method: startMethod(pn), flc: 0, amps: null, multiple: null,
+        torque: startMethod(pn).torque, accel: startMethod(pn).accel,
+        group: 1, combined: null, volt: D.num(pn.volt, 400), noRating: true
+      };
+    }
+    var m = startMethod(pn);
+    var group = num(pn.simultaneousStart, 1) > 1 ? num(pn.simultaneousStart, 1) : 1;
+    return {
+      method: m,
+      flc: d.amp,
+      amps: d.amp * m.multiple,
+      multiple: m.multiple,
+      torque: m.torque,
+      accel: m.accel,
+      group: group,
+      /* what the board sees if several of these come in together */
+      combined: d.amp * m.multiple * group,
+      volt: D.num(pn.volt, 400)
+    };
+  }
+
+  /* The Thevenin impedance looking into a supply point, derived from the fault
+     level already calculated rather than from a separate impedance model.
+
+     Ssc = V² / Z_th, and the fault level the app computes is exactly that. So
+     the impedance falls straight out of it, and the two numbers stay consistent
+     — a separate source impedance would drift out of step with the fault level
+     the moment either was edited. */
+  function sourceImpedanceAt(faultKA, volt) {
+    var v = D.num(volt, 400) || 400;
+    var ifl = (D.num(faultKA, 0) || 0) * 1000;
+    if (!(ifl > 0)) return null;
+    /* per-phase: Z = V / (√3 · I) */
+    return v / (Math.sqrt(3) * ifl);
+  }
+
+  /* The whole picture for one motor. Returns null when there is nothing to
+     assess — no device to trip, or no fault level to derive the impedance from. */
+  function startingCheck(p, pn, kind) {
+    var sc = startingCurrentA(p, pn);
+    if (!sc) return null;
+    /* The supply point the motor starts from: its own board, which is where the
+       dip is felt by everything else on it. */
+    var ch = chain(p, pn);
+    var board = pn.dbId ? get(p, 'db', pn.dbId) : (ch.pdp || ch.pdb || get(p, 'pdb', pn.pdbId));
+    var boardKind = board ? (board.__kind || kindOf(board)) : null;
+    var fKA = board ? faultAt(p, board, boardKind) : null;
+    /* A main board with no voltage of its own falls back to 400 V rather than
+       to 0 — which produced a NaN dip on the real project, where the biggest
+       motor sits straight off PDB7. num() returns 0 for a missing value, and a
+       zero denominator hides the answer rather than giving a wrong one. */
+    var volt = board ? (D.num(board.volt, 0) || 400) : sc.volt;
+    var zth = sourceImpedanceAt(fKA, volt);
+
+    /* The device above the motor — the one that sees the inrush as a fault. */
+    var up = null, upKind = null;
+    if (kind === 'pdp' || kind === 'db') {
+      up = kind === 'pdp' ? get(p, 'pdb', pn.pdbId) : get(p, 'pdb', (get(p, 'pdp', pn.pdpId) || {}).pdbId);
+      upKind = 'pdb';
+    } else {
+      if (pn.dbId) up = get(p, 'db', pn.dbId);
+      else if (ch.pdp) up = ch.pdp;
+      else if (ch.pdb) up = ch.pdb;
+    }
+
+    var upIr = up && up.prot ? D.num(up.prot.ir, 0) : 0;
+    var upPickup = null, upClears = null;
+    if (up && up.prot && upIr > 0) {
+      /* The multiple at which the upstream device's magnetic stage picks up —
+         the last point of its curve before it drops into the instantaneous band.
+         Beyond it the device operates, and the question is whether it operates
+         before the motor has finished accelerating. */
+      upPickup = curveInstantaneousMultiple(up.prot);
+      if (upPickup) {
+        var over = sc.combined / upIr;
+        upClears = over > upPickup ? clearingTimeAt(up.prot, over) : null;
+      }
+    }
+    var ownPickup = pn.prot ? curveInstantaneousMultiple(pn.prot) : null;
+
+    var dip = null;
+    if (zth && zth > 0 && volt > 0) {
+      var dropV = sc.combined * zth;
+      dip = {
+        zth: zth,
+        volts: dropV,
+        pct: (dropV / volt) * 100,
+        /* what the motor actually gets, and what it can then produce */
+        motorV: Math.max(0, volt - dropV),
+        motorPct: Math.max(0, 100 - (dropV / volt) * 100),
+        torqueAvail: sc.torque * Math.pow(Math.max(0, 1 - dropV / volt), 2)
+      };
+    }
+    if (sc.noRating) {
+      return { sc: sc, board: board, up: up, upKind: upKind, dip: null, faultKA: fKA,
+        upIr: upIr, upPickup: null, upClears: null, ownPickup: ownPickup,
+        tripsUpstream: false, tripsSelf: false, kind: kind, pn: pn, noRating: true };
+    }
+    return {
+      sc: sc, board: board, up: up, upKind: upKind, dip: dip, faultKA: fKA,
+      upIr: upIr, upPickup: upPickup, upClears: upClears, ownPickup: ownPickup,
+      /* the upstream operates on this inrush, and does it so faster than the
+         motor accelerates */
+      tripsUpstream: upClears !== null && sc.accel > upClears,
+      /* the motor's own device operates on its own inrush */
+      tripsSelf: ownPickup !== null && sc.multiple > ownPickup,
+      kind: kind, pn: pn
+    };
+  }
+
+  /* The multiple at which a device's magnetic or instantaneous stage picks up:
+     the last point on its curve before the drop. Null when the curve has no such
+     stage — an LS without instantaneous holds its plateau to the end. */
+  function curveInstantaneousMultiple(prot) {
+    var ck = D.curveKeyFor(prot);
+    var curve = ck && D.TRIP_CURVES[ck];
+    if (!curve) return null;
+    var pts = curve.points;
+    if (pts.length < 2) return null;
+    var last = pts[pts.length - 1];
+    var prev = pts[pts.length - 2];
+    /* A curve that ends on a plateau has no instantaneous stage at all — that is
+       the whole point of an LS trip unit, and it is why the plateau must not be
+       mistaken for a threshold. A 30% fall on the final segment is enough to
+       call it a drop: a magnetic pickup modelled as a threshold shows up as a
+       two-fold step, and demanding a four-fold one missed every MCCB. */
+    return (last[1] < prev[1] * 0.7) ? last[0] : null;
+  }
+
+  /* Torque a machine needs to accelerate, as a fraction of full load. A figure to
+     judge against rather than a standard: an unloaded fan needs very little, a
+     loaded conveyor needs more than full-load torque before it will move at all. */
+  function torqueNeeded(loadTorque) {
+    switch (String(loadTorque || '')) {
+      case 'constant': return 1.2;
+      case 'variable': return 0.4;
+      case 'constantpower': return 0.3;
+      case 'inertia': return 0.6;
+      default: return null;      // not stated, so nothing is asserted
+    }
   }
 
 /* ==================================================== earth fault loop =====
@@ -1768,7 +2088,11 @@ function selectivityBand(s) {
       tags: tags,
       kw: kw,
       where: board,
-      load: kw > 0 ? kw.toFixed(0) + ' kW between them' : ''
+      /* The unit travels with the group. The starting findings sum amps, and
+         labelling that "kW" would print 19965 kW on a project with 9525 kW of
+         load on it — a number larger than the site. */
+      load: kw > 0 ? kw.toFixed(0) + ' ' + (findings[0].groupUnit || 'kW') +
+        (findings[0].groupUnit && findings[0].groupUnit.indexOf('full load') >= 0 ? ' of full load current in total' : ' between them') : ''
     };
   }
 
@@ -1799,7 +2123,7 @@ function selectivityBand(s) {
           ? 'On ' + w.where.join(', ') + '.' + (w.load ? ' ' + w.load + '.' : '')
           : (w.load ? w.load + '.' : 'Expand the row for the individual items.'),
         groupKey: g.groupKey, grouped: true, members: g.members,
-        tags: w.tags, kw: w.kw
+        tags: w.tags, kw: w.kw, groupUnit: g.sample.groupUnit
       });
     });
     out.sort(function (a, b) { return order[a.level] - order[b.level]; });
@@ -1824,7 +2148,12 @@ function selectivityBand(s) {
   }
 
   function groupTitle(key, w) {
-    if (key === 'dol-start') return 'large DOL starting load';
+    if (key === 'start-upstream') return 'motor whose starting current trips the board above';
+    if (key === 'start-own') return 'motor whose starting current exceeds its own device';
+    if (key === 'start-torque') return 'motor that will not accelerate through the dip';
+    if (key === 'start-dip') return 'motor starting that dips its board';
+    if (key === 'start-unstated') return 'motor with no starting method stated';
+    if (key === 'start-inferred') return 'starting method taken from the machine name';
     if (key === 'withstand') return 'cable that cannot survive the fault';
   if (key === 'power-factor') return 'board below the power factor limit';
   if (key === 'harmonics') return 'circuit carrying harmonic content';
@@ -2531,6 +2860,8 @@ function selectivityBand(s) {
     groupFindings, worstLevel, groupTitle, boardTagOf, MIN_GROUP, MAX_LIST,
     clearingTimeAt, selectivity, selectivityMessage, selectivityBand, selectivityLadder, reactive,
     earthLoop, disconnectionMultipleAt, earthFaultCheck, neutralCurrent, neutralCsaFor,
+    startMethod, startingCurrentA, startingCheck, sourceImpedanceAt, curveInstantaneousMultiple, torqueNeeded,
+    isMotorLoad,
     SELECTIVITY_STEPS,
     choosePdp, assignPanel, createPdpFor, feederLen, syncLen,
     sizeCablesFor, sizeCablesForPdb, sizeCablesForDb, suggestDbFeeder, sizeCableForPanel, sizeAll, feederAmp, needsSizing,

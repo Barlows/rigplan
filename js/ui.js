@@ -967,8 +967,63 @@
       fRow('Demand factor', nIn('panel', o.id, 'demand', o.demand, { step: 0.05 })) +
       fRow('Phases', selIn('panel', o.id, 'phases', o.phases, LS.PHASES, function (v) { return v + ' phase' + (v === '1' ? ' (L–N)' : ''); })) +
       fRow('Voltage', '<span class="unit">' + selIn('panel', o.id, 'volt', o.volt, LS.VOLT_LV, function (v) { return v + ' V'; }) + '</span>') +
-      fRow('Starting', selIn('panel', o.id, 'start', o.start, ['DOL', 'Star-delta', 'Soft starter', 'VFD', 'Static'], function (v) { return v; })) +
+      /* Whether this is a rotating machine. Nothing infers it silently: a
+         circuit typed as "Other" containing a motor gets no verdict, and the
+         properties panel says so rather than guessing from the description. */
+      fRow('Machine', selIn('panel', o.id, 'isMotor', o.isMotor === true ? 'yes' : (o.isMotor === false ? 'no' : ''),
+        ['', 'yes', 'no'], function (v) { return v === '' ? 'not stated — inferred' : (v === 'yes' ? 'motor' : 'not a motor'); })) +
+      fRow('Starting', selIn('panel', o.id, 'start', o.start,
+        [''].concat(Object.keys(LS.START_METHODS)), function (v) {
+          return v === '' ? 'not stated — assumed DOL' : (v === 'Static' ? 'Static / SVC' : v);
+        })) +
+      /* Load torque is what decides whether a reduced-current start can
+         accelerate the machine at all, and it is a question for the vendor, not
+         something the app can infer. Left blank it asserts nothing; filled in it
+         turns the voltage-dip check into a verdict. */
+      fRow('Load torque', selIn('panel', o.id, 'loadTorque', o.loadTorque || '',
+        ['', 'constant', 'variable', 'constantpower', 'inertia'],
+        function (v) { return v ? (LS.LOAD_TORQUES[v] || {}).name || v : 'not stated'; })) +
+      fRow('Starting together', '<span class="unit">' +
+        nIn('panel', o.id, 'simultaneousStart', o.simultaneousStart === null || o.simultaneousStart === undefined ? '' : o.simultaneousStart,
+          { step: 1, min: 1 }) + '<span class="u">at once</span></span>') +
       fRow('Future / conting.', '<span class="unit">' + nIn('panel', o.id, 'contingency', o.contingency, { step: 1, unit: '%' }) + '<span class="u">%</span></span>') +
+      /* What the starting method actually costs, spelled out. The table in the
+         data file is a range and the schedule needs a single number, so the
+         chosen figure is shown next to the consequence rather than the range
+         left for the reader to interpret. */
+      (function () {
+        var r = LC.startingCheck(S, o, 'panel');
+        if (!r) {
+          return '<div style="font-size:11px;color:var(--fg-mute);margin:2px 0 6px;line-height:1.5">' +
+            'Not assessed — this is not declared as a rotating machine, so it is given no starting ' +
+            'current. Set <b>Machine</b> above if it is one.</div>';
+        }
+        var m = r.sc.method, rows = [];
+        if (r.noRating || !r.dip) {
+          return '<div style="font-size:11px;color:var(--fg-dim);margin:2px 0 6px;line-height:1.5">' +
+            (r.noRating ? 'No rated load, so no starting current can be worked out — a stand-by machine ' +
+              'is usually entered like this. Its rated current and starting method are worth asking the ' +
+              'vendor for.'
+             : 'Starting at about ' + r.sc.amps.toFixed(0) + ' A, ' + r.sc.multiple + ' × full load, but ' +
+              'there is no fault level at this board to derive the voltage dip from. The peak is known; ' +
+              'the dip is not, and the dip is what decides whether other plant on the board notices.') +
+            '</div>';
+        }
+        rows.push('<div style="font-size:11px;color:var(--fg-dim);margin:2px 0 6px;line-height:1.5">' +
+          m.name + ' takes about <b style="color:var(--fg)">' + r.sc.amps.toFixed(0) + ' A</b> starting, ' +
+          m.multiple + ' × the ' + r.sc.flc.toFixed(0) + ' A full load current, over about ' + m.accel +
+          ' s. ' + m.note + '</div>');
+        if (r.dip) {
+          rows.push('<div style="font-size:11px;color:var(--fg-dim);margin:0 0 6px;line-height:1.5">' +
+            'The board pulls down by <b style="color:' + (r.dip.pct > 10 ? 'var(--bad)' : 'var(--fg)') + '">' +
+            r.dip.pct.toFixed(1) + '%</b> during the start — ' + r.dip.volts.toFixed(0) + ' V, leaving ' +
+            r.dip.motorV.toFixed(0) + ' V at the motor and ' + r.dip.torqueAvail.toFixed(2) +
+            ' × full load torque.' +
+            (r.tripsUpstream ? ' <b style="color:var(--bad)">Above the ' + (r.up ? r.up.tag : '') +
+              ' pick-up, so it trips.</b>' : '') + '</div>');
+        }
+        return rows.join('');
+      })() +
       /* Reactive power is derived, not entered — S² = P² + Q² — so it is shown
          rather than typed. Entering it would give two numbers that can disagree
          with each other, and the one that gets used silently would be the wrong
@@ -1108,7 +1163,8 @@
     h += '<table class="grid"><thead><tr>' +
       th('tag', 'Ref', 'l') + th('', 'Board', 'l') + th('', 'Description', 'l') + th('', 'kW') + th('kva', 'kVA') +
       th('', 'kvar') + th('', 'pf') + th('', 'Ph') + th('', 'I (A)') + th('', 'Device') + th('', 'Icu') + th('', 'Cable mm²') + th('', 'Rated A') + th('', '%') +
-      th('', 'Drop %') + th('pos', 'Grid ref', 'l') + th('', 'Status') + '</tr></thead><tbody>';
+      th('', 'Drop %') + th('', 'Start A', 'start') + th('', 'Dip %', 'start') +
+      th('pos', 'Grid ref', 'l') + th('', 'Status') + '</tr></thead><tbody>';
 
     groups.forEach(function (g) {
       var sd = LC.boardStats(S, g.pdp, 'pdp');
@@ -1116,7 +1172,7 @@
         '<td class="l" colspan="3">▤ ' + esc(g.pdp.tag) + ' — ' + esc(g.pdp.name) + '</td>' +
         '<td>' + sd.kw.toFixed(0) + '</td><td>' + sd.kva.toFixed(1) + '</td><td>' + sd.kvar.toFixed(0) + '</td><td>' + sd.pf.toFixed(2) + '</td><td>' + g.pdp.phases + '</td>' +
         '<td>' + sd.amp.toFixed(0) + '</td><td colspan="3">incomer ' + g.pdp.incomerA + ' A</td><td colspan="2">E' + LS.r1(g.pdp.pos.x).toFixed(1) + ' N' + LS.r1(g.pdp.pos.y).toFixed(1) + '</td>' +
-        '<td>' + utilBadge(sd.util) + '</td></tr>';
+        '<td>' + utilBadge(sd.util) + '</td><td colspan="2">' + startSummary(g.panels) + '</td></tr>';
 
       /* sub-distribution boards sit under their PDP, then the circuits that
          feed straight off the PDP itself */
@@ -1127,8 +1183,8 @@
           '<td class="l" colspan="3" style="padding-left:22px">▥ ' + esc(b.tag) + ' — ' + esc(b.name) +
           (b.enclosure ? ' <span style="color:var(--fg-mute)">(' + esc(b.enclosure) + ')</span>' : '') + '</td>' +
           '<td>' + sb.kw.toFixed(1) + '</td><td>' + sb.kva.toFixed(1) + '</td><td>' + sb.kvar.toFixed(0) + '</td><td>' + sb.pf.toFixed(2) + '</td><td>' + b.phases + '</td>' +
-          '<td>' + sb.amp.toFixed(1) + '</td><td colspan="3">' + b.incomerA + ' A · ' + sb.panels.length + '/' + sb.spare + ' ways</td><td colspan="2">E' + LS.r1(b.pos.x).toFixed(1) + ' N' + LS.r1(b.pos.y).toFixed(1) + '</td>' +
-          '<td>' + utilBadge(sb.util) + '</td></tr>';
+          '<td>' + sb.amp.toFixed(1) + '</td><td colspan="3">' + b.incomerA + ' A · ' + sb.panels.length + '/' + b.spare + ' ways</td><td colspan="2">E' + LS.r1(b.pos.x).toFixed(1) + ' N' + LS.r1(b.pos.y).toFixed(1) + '</td>' +
+          '<td>' + utilBadge(sb.util) + '</td><td colspan="2">' + startSummary(on) + '</td></tr>';
         on.forEach(function (pn) { h += panelRow(pn, b); });
       });
 
@@ -1162,6 +1218,26 @@
     if (!S.panels.length) h = '<div class="empty">No control panels yet.<br>Choose <b>▣ Panel</b> in the toolbar and click a grid reference on the plan, or press <b>Sample</b>.</div>';
     return h;
   }
+  /* One line per board saying what its motors do at starting, because the
+     question is never about one machine — it is whether the worst of them, or
+     all of them together, upsets the board. Anything not a motor is ignored:
+     a lighting circuit has no starting current and would drag the figure down. */
+  function startSummary(pans) {
+    /* startingCheck returns null for anything the model does not apply to, which
+       is how a lighting circuit drops out here without needing its own filter. */
+    var motors = pans.map(function (pn) {
+      return LC.startingCheck(S, pn, 'panel');
+    }).filter(function (r) { return r && !r.noRating; });
+    if (!motors.length) return '';
+    var worst = motors.reduce(function (a, b) { return b.dip.pct > a.dip.pct ? b : a; });
+    var together = motors.reduce(function (a, r) { return a + r.sc.amps; }, 0);
+    var dips = motors.map(function (r) { return r.dip.pct; });
+    var bad = motors.some(function (r) { return r.tripsUpstream || r.tripsSelf; });
+    return '<span class="mono" style="font-size:10.5px;color:' + (bad ? 'var(--bad)' : 'var(--fg-dim)') + '">' +
+      motors.length + (motors.length === 1 ? ' motor, worst dip ' : ' motors, worst dip ') +
+      Math.max.apply(null, dips).toFixed(1) + '%, ' + together.toFixed(0) + ' A together</span>';
+  }
+
   function panelRow(pn, pdp) {
     var d = LC.panelDemand(S, pn);
     var cab = pn.cable && pn.cable.csa ? LC.cableRating(pn.cable) : null;
@@ -1197,6 +1273,33 @@
       '<td>' + (cab ? cab.derated.toFixed(0) : '—') + '</td>' +
       '<td class="' + utilCls(cu) + '">' + (cu === null ? '—' : cu.toFixed(0) + '%') + '</td>' +
       '<td class="' + (vd && vd.pct > num(S.design.vdropLimitLv, 3) ? 'num-warn' : '') + '">' + (vd ? vd.pct.toFixed(2) : '—') + '</td>' +
+      /* Starting current, and what that current does to the board it starts from.
+         Only shown when the method is anything other than direct on line or the
+         board is stiff enough that the dip does not matter — a column of 7x
+         figures that never affects anything is noise on a schedule. */
+      (function () {
+        var r = LC.startingCheck(S, pn, 'panel');
+        if (!r) return '<td>—</td><td>—</td>';
+        if (r.noRating) return '<td class="l" style="color:var(--fg-mute);font-size:10.5px">no rating</td><td>—</td>';
+        /* No dip means no fault level to derive the impedance from, which is a
+           gap in the data rather than a result — so the starting current is still
+           worth showing on its own. */
+        if (!r.dip) return '<td class="l">' + r.sc.amps.toFixed(0) +
+          ' A<br><span style="font-size:10px;color:var(--fg-mute)">' + r.sc.method.multiple + '× · ' +
+          r.sc.method.name + '</span></td><td class="l" style="color:var(--fg-mute);font-size:10.5px">no fault level</td>';
+        var matters = r.dip.pct > 5 || r.tripsUpstream || r.tripsSelf ||
+          (LC.torqueNeeded(pn.loadTorque) !== null && r.dip.torqueAvail < LC.torqueNeeded(pn.loadTorque));
+        if (!matters) return '<td class="l" style="color:var(--fg-mute);font-size:10.5px">' +
+          r.sc.amps.toFixed(0) + ' A</td><td style="color:var(--fg-mute)">' + r.dip.pct.toFixed(1) + '</td>';
+        var bad = r.tripsUpstream || r.tripsSelf ||
+          (LC.torqueNeeded(pn.loadTorque) !== null && r.dip.torqueAvail < LC.torqueNeeded(pn.loadTorque));
+        return '<td class="' + (r.tripsUpstream || r.tripsSelf ? 'num-bad' : 'l') + '" style="white-space:nowrap">' +
+          r.sc.amps.toFixed(0) + ' A<br><span style="font-size:10px;color:var(--fg-mute)">' +
+          r.sc.method.multiple + '× · ' + r.sc.method.name + '</span></td>' +
+          '<td class="' + (r.dip.pct > 10 ? 'num-warn' : bad ? 'num-bad' : '') + '">' +
+          r.dip.pct.toFixed(1) + (r.dip.pct > 10 ? '<br><span style="font-size:10px">' +
+            r.dip.motorV.toFixed(0) + ' V</span>' : '') + '</td>';
+      })() +
       '<td class="l" style="font-size:10.5px">E' + LS.r1(pn.pos.x).toFixed(1) + ' N' + LS.r1(pn.pos.y).toFixed(1) + '</td>' +
       '<td><span class="badge ' + status + '">' + sTxt + '</span></td></tr>';
   }
@@ -2453,6 +2556,8 @@
       demand: CSVC.num(g('demand')),
       phases: CSVC.phases(g('phases')), volt: CSVC.volt(g('volt')),
       prot: CSVC.device(g('prot')), start: CSVC.start(g('start')),
+      loadTorque: CSVC.loadTorque(g('loadTorque')),
+      simultaneousStart: CSVC.num(g('simultaneousStart')),
       csa: CSVC.num(g('csa')), runs: CSVC.num(g('runs')), cores: CSVC.num(g('cores')),
       /* A cable cell may carry its own run count, which has to win over the
          single-run default or the feeder comes in four times too small. */
@@ -2462,6 +2567,11 @@
       pos: CSVC.pos(g('easting'), g('northing'), g('grid'))
     };
   }
+
+  /* Trailing empty cells. The CSV is read back by position, so a short row shifts
+     every value after it — and the round-trip test is the only thing that catches
+     that, which is why the subtotals are padded rather than trimmed. */
+  function blank(n) { var a = []; for (var i = 0; i < n; i++) a.push(''); return a; }
 
   function csvDialog(fileName) {
     var m = csvMap;
@@ -2572,6 +2682,8 @@
         kw: rec.kw || 0, kva: rec.kva || null, pf: rec.pf || 0.9,
         demand: rec.demand || 1, volt: rec.volt || 400,
         phases: rec.phases || '3', start: rec.start || 'DOL',
+        loadTorque: rec.loadTorque || '',
+        simultaneousStart: rec.simultaneousStart || null,
         ref: rec.ref || '', pdbId: null, pdpId: null, dbId: null
       });
       pn.__kind = 'panel';
@@ -2747,7 +2859,7 @@
     L.push(csvRow([S.name])); L.push(csvRow(['Client', S.client, 'Project', S.ref, 'Designer', S.designer, 'Date', S.date]));
     L.push('');
     L.push(csvRow(['LOAD SCHEDULE']));
-    L.push(csvRow(['Reference', 'Board', 'Board description', 'Description', 'Type', 'Connected kW', 'Design kVA', 'kvar', 'pf', 'Demand', 'Phases', 'Voltage V', 'Current A', 'THD %', 'Protective device', 'Device frame A', 'Breaking capacity kA', 'Trip unit', 'Feeder runs', 'Feeder mm2', 'Cores', 'Length m', 'Installation', 'Rated A', 'Utilisation %', 'Volt drop %', 'PE mm2', 'R1+R2 ohm', 'Loop A', 'Max t s', 'Actual t s', 'Grid ref E', 'Grid ref N', 'Status']));
+    L.push(csvRow(['Reference', 'Board', 'Board description', 'Description', 'Type', 'Connected kW', 'Design kVA', 'kvar', 'pf', 'Demand', 'Phases', 'Voltage V', 'Current A', 'THD %', 'Protective device', 'Device frame A', 'Breaking capacity kA', 'Trip unit', 'Feeder runs', 'Feeder mm2', 'Cores', 'Length m', 'Installation', 'Rated A', 'Utilisation %', 'Volt drop %', 'PE mm2', 'R1+R2 ohm', 'Loop A', 'Max t s', 'Actual t s', 'Motor', 'Starting method', 'Starting source', 'Load torque', 'Starting together', 'Full load A', 'Starting A', 'All together A', 'Board at start V', 'Dip %', 'Torque at start', 'Grid ref E', 'Grid ref N', 'Status']));
     var un = [];
     /* One row per circuit, wherever it is fed from. Declared up here because
        the main-board circuits are written before the distribution boards. */
@@ -2758,6 +2870,15 @@
       var cu = cab ? (dm.amp / cab.derated) * 100 : '';
       var stt = (dm.amp <= (cab ? cab.derated : 0)) && (vd ? vd.pct <= num(S.design.vdropLimitLv, 3) : true) ? 'OK' : 'CHECK';
       var pr = pn.prot || null;
+      /* Six starting columns, or six blanks — never a short row, because the CSV
+         parser reads by position and a missing field shifts everything after it. */
+      var st6 = ['', '', '', '', '', ''];
+      if (LC.isMotorLoad(pn)) {
+        var sr = LC.startingCheck(S, pn, 'panel');
+        if (sr && !sr.noRating) st6 = [sr.sc.flc.toFixed(0), sr.sc.amps.toFixed(0),
+          sr.sc.group > 1 ? sr.sc.combined.toFixed(0) : '',
+          sr.dip.motorV.toFixed(0), sr.dip.pct.toFixed(1), sr.dip.torqueAvail.toFixed(2)];
+      }
       L.push(csvRow([pn.tag, board.tag, board.name, pn.name, LS.PANEL_TYPES[pn.type] ? LS.PANEL_TYPES[pn.type].name : pn.type,
         dm.kw.toFixed(1), dm.kva.toFixed(1), dm.kvar.toFixed(1), dm.pf, pn.demand, pn.phases, pn.volt, dm.ampHarm.toFixed(1),
         pn.thd === null || pn.thd === undefined || pn.thd === '' ? '' : pn.thd,
@@ -2769,6 +2890,15 @@
         cab ? cab.runs : '', cab ? cab.csa : '', pn.cable.cores, pn.cable.len, cab ? cab.method.name : pn.cable.method,
         cab ? cab.derated.toFixed(0) : '', cu === '' ? '' : cu.toFixed(0), vd ? vd.pct.toFixed(2) : '',
         loopOf(pn, 'panel'),
+        /* Starting. Empty for anything the model does not apply to, so the column
+           is never a guess — and the source column says whether a stated method
+           came off a sheet or out of a machine name. */
+        LC.isMotorLoad(pn) ? 'yes' : '',
+        LC.isMotorLoad(pn) ? (pn.start || 'not stated') : '',
+        LC.isMotorLoad(pn) ? (pn.startInferred ? 'inferred from name' : (pn.start ? 'declared' : '')) : '',
+        pn.loadTorque || '',
+        pn.simultaneousStart || '',
+        st6[0], st6[1], st6[2], st6[3], st6[4], st6[5],
         pn.pos.x, pn.pos.y, stt]));
     }
     /* Circuits fed straight off a main board come first — they are one way on
@@ -2779,20 +2909,20 @@
       L.push(csvRow([b.tag + ' — circuits fed directly from this main board', b.tag, b.name]));
       here.forEach(function (pn) { row(pn, b); });
       var sb = LC.boardStats(S, b, 'pdb');
-      L.push(csvRow([b.tag + ' DIRECT SUBTOTAL', b.tag, b.name, '', '', '', sb.kw.toFixed(1), sb.kva.toFixed(1), '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']));
+      L.push(csvRow([b.tag + ' DIRECT SUBTOTAL', b.tag, b.name, '', '', '', sb.kw.toFixed(1), sb.kva.toFixed(1), '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''] + blank(9)));
     });
     S.pdps.forEach(function (d) {
       var list = LC.panelsOf(S, d.id);
       /* sub-boards first, then the circuits fed straight off the PDP */
       LC.dbOfPdp(S, d.id).forEach(function (b) {
-        L.push(csvRow([b.tag + ' — sub-distribution board', b.tag, b.name, (b.enclosure || '') + ' ' + b.incomerA + ' A', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '']));
+        L.push(csvRow([b.tag + ' — sub-distribution board', b.tag, b.name, (b.enclosure || '') + ' ' + b.incomerA + ' A'] + blank(40)));
         LC.panelsOnDb(S, b.id).forEach(function (pn) { row(pn, b); });
         var sb = LC.boardStats(S, b, 'db');
-        L.push(csvRow([b.tag + ' SUBTOTAL', b.tag, b.name, '', '', '', '', sb.kw.toFixed(1), sb.kva.toFixed(1), '', '', '', '', sb.amp.toFixed(1), '', '', '', '', '', b.incomerA + ' A incomer', '', '', '', '', sb.util.toFixed(0) + '%']));
+        L.push(csvRow([b.tag + ' SUBTOTAL', b.tag, b.name, '', '', '', '', sb.kw.toFixed(1), sb.kva.toFixed(1), '', '', '', '', sb.amp.toFixed(1), '', '', '', '', '', b.incomerA + ' A incomer', '', '', '', '', sb.util.toFixed(0) + '%'] + blank(14)));
       });
       list.filter(function (pn) { return !pn.dbId || !LC.get(S, 'db', pn.dbId); }).forEach(function (pn) { row(pn, d); });
       var sd = LC.boardStats(S, d, 'pdp');
-      L.push(csvRow([d.tag + ' SUBTOTAL', d.tag, d.name, '', '', '', '', sd.kw.toFixed(1), sd.kva.toFixed(1), '', '', '', '', sd.amp.toFixed(1), '', '', '', '', '', d.incomerA + ' A incomer', '', '', '', '', sd.util.toFixed(0) + '%']));
+      L.push(csvRow([d.tag + ' SUBTOTAL', d.tag, d.name, '', '', '', '', sd.kw.toFixed(1), sd.kva.toFixed(1), '', '', '', '', sd.amp.toFixed(1), '', '', '', '', '', d.incomerA + ' A incomer', '', '', '', '', sd.util.toFixed(0) + '%'] + blank(14)));
     });
     S.panels.forEach(function (pn) { if (!pn.pdpId && !pn.pdbId) un.push(pn); });
     if (un.length) {

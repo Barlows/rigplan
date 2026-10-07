@@ -72,6 +72,56 @@ TYPE_BY_AREA = {
     "Spare": "other",
 }
 
+# Whether a machine is a rotating one, and how it starts, inferred from its name.
+# The sheet's Starting Method column is blank on all 97 rows, so both of these are
+# guesses — but a guess from a name that says "Compressor" is a good one, and it is
+# far better than asserting nothing and leaving every motor unassessed. What is
+# NOT done is defaulting everything to DOL: an unrecognised machine gets no
+# starting method and no motor flag, so the app says "not stated" and asks.
+#
+# The distinction matters because an unstated starting method asserts nothing
+# while a wrong one produces a wrong number that looks authoritative. VSD in a name
+# is a real signal from the vendor's own naming; DOL is the absence of evidence.
+MOTOR_WORDS = (
+    "compressor", "pump", "fan", "blower", "hoist", "conveyor", "motor",
+    "chiller", "cooler", "cooling", "miller", "agitator", "mixer", "crusher",
+    "granulator", "centrifuge", "press", "winder", "unwinder", "coiler",
+    "decanter", "vacuum", "exhauster", "scrubber", "bodymaker", "trimmer",
+    "inverter", "decorator", "spray", "auger", "screw", "feeder", "winch",
+    "tank", "oven", "kiln", "dryer", "vac", "air", "water",
+)
+
+# A machine with a VSD in its name has, in the vendor's own terminology, a drive.
+VSD_WORDS = ("vsd", "vfd", "inverter", "drive")
+
+
+def is_motor_name(machine, desc):
+    t = (machine or "") + " " + (desc or "")
+    t = t.lower()
+    return any(w in t for w in MOTOR_WORDS)
+
+
+def start_from_name(machine, desc):
+    # Compared against an uppercased string, so the words must be uppercased too.
+    # Lowercase patterns against uppercase text match nothing, silently — which is
+    # how all eight VSD air compressors came through as unstated.
+    t = ((machine or "") + " " + (desc or "")).upper()
+    if any(w.upper() in t for w in VSD_WORDS):
+        return "VFD"
+    return None
+
+
+def load_torque_from_name(machine, desc):
+    """Whether the load rises with speed, which is what decides if a reduced-current
+    start will accelerate it at all. Fans and pumps yes; anything driven through a
+    hoist or a belt, no."""
+    t = ((machine or "") + " " + (desc or "")).lower()
+    if any(w in t for w in ("fan", "blower", "pump", "exhauster", "cooling", "vacuum", "centrifugal")):
+        return "variable"
+    if any(w in t for w in ("hoist", "conveyor", "crusher", "press", "winder", "coiler", "granulator")):
+        return "constant"
+    return ""
+
 
 def fnum(v, d=0.0):
     try:
@@ -313,7 +363,14 @@ def main():
             "type": TYPE_BY_AREA.get(r["area"], "other"),
             "kw": kw, "kva": None, "pf": pf, "demand": demand,
             "phases": "3", "volt": int(r["volts"]) or 400,
-            "start": "VFD" if "VSD" in r["machine"].upper() or "VSD" in r["desc"].upper() else "DOL",
+            # Inferred from the machine name, and recorded as inferred. The app
+            # raises this as a finding so the guess gets checked rather than
+            # quietly relied on — which is how 89 circuits ended up carrying a
+            # DOL nobody had confirmed.
+            "isMotor": is_motor_name(r["machine"], r["desc"]),
+            "start": start_from_name(r["machine"], r["desc"]) or "",
+            "startInferred": True,
+            "loadTorque": load_torque_from_name(r["machine"], r["desc"]),
             "contingency": 0,
             "pdbId": pdb_ids[host_main] if on_main else None,
             "pdpId": None if on_main else pdp_ids[r["db"]],
