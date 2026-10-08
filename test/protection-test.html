@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=217"></script>
-<script src="../js/calc.js?v=217"></script>
+<script src="../js/data.js?v=235"></script>
+<script src="../js/calc.js?v=235"></script>
 <script>
 (function () {
   var results = [];
@@ -1332,6 +1332,87 @@
   var t3 = LC.totals(tm.p);
   check('a mixed project gives a power factor within range', t3.pf > 0.85 && t3.pf < 1, true);
   check('and a positive kvar', t3.kvar > 0, true);
+
+  /* ------------------------------------------------- PF correction ----------
+     Sizing is exact: Qc = P·(tan φ1 − tan φ2). The engineering is the resonance,
+     because a capacitor is a reactance and the supply is an inductance. */
+  var pz = site({ kva: 2500 });
+  for (var pi = 0; pi < 10; pi++) load(pz.p, pz.pdp, 100, 0.8);
+  var pst = LC.boardStats(pz.p, pz.pdp, 'pdp');
+  var fit = LC.pfCorrection(pz.p, pst, 0.98, 0);
+  check('1000 kW at pf 0.8', Math.round(fit.kw), 1000);
+  check('carries 750 kvar — 1000·tan(acos 0.8)', Math.round(fit.kvarNow), 750);
+  /* 1000 kW at 0.8 is 1250 kVA and 750 kvar; at 0.98 it wants 203 kvar, so the
+     bank is 547 kvar and the released capacity is 230 kVA. Checked against the
+     relation rather than a remembered figure, so a change to either side fails. */
+  check('1000 kW at 0.8 is 1250 kVA', Math.round(fit.kva), 1250);
+  check('to reach 0.98 the bank is 547 kvar', Math.round(fit.kvarNeeded), 547);
+  check('which releases 230 kVA', Math.round(fit.kvaSaving), 230);
+  check('and the arithmetic is exact, not approximated',
+    Math.abs(fit.kvarNeeded - 1000 * (Math.sqrt(1/0.8**2 - 1) - Math.sqrt(1/0.98**2 - 1))) < 1, true);
+
+  /* Over-correction exports reactive power rather than correcting it. */
+  check('a bank larger than the load kvar is over-corrected',
+    LC.pfCorrection(pz.p, pst, 0.98, 900).overCorrected, true);
+  check('a bank the size of the load kvar is not',
+    LC.pfCorrection(pz.p, pst, 0.98, 750).overCorrected, false);
+  check('and a bank short of it is not',
+    LC.pfCorrection(pz.p, pst, 0.98, 400).overCorrected, false);
+
+  /* Resonance. An undetuned bank resonates with the supply's inductance at
+     √(Ssc/Qc) times the fundamental; a detuned one at 1/√p regardless of the
+     system, which is the whole point of a detuning reactor. */
+  /* 25 MVA of short-circuit power. capResonance takes the fault level in kA, and
+     Ssc = √3·V·I, so 25 MVA at 400 V is 36.1 kA. */
+  var kA25 = (25e6 / (Math.sqrt(3) * 400)) / 1000;
+  var Ssc = 25000e3;
+  var r1 = LC.capResonance({ design: {} }, kA25, 500, 0);
+  check('an undetuned 500 kvar bank on a 25 MVA source resonates at 7.07 × the fundamental',
+    Math.round(r1.f * 100) / 100, 7.07);
+  /* 7.07 is the 7th harmonic of a six-pulse converter, to within 1%. That is the
+     whole point of the calculation: an ordinary bank size, an ordinary source,
+     and the resonance lands on a harmonic the site produces in quantity. */
+  check('which is the 7th harmonic a six-pulse drive produces', r1.onHarmonic, true);
+  check('√(Ssc/Qc) exactly', Math.abs(r1.f - Math.sqrt(Ssc / 500e3)) < 0.01, true);
+  /* A 7% reactor puts it at 1/√0.07 = 3.78, which is where the textbook figure
+     comes from — below the 5th harmonic of a six-pulse drive. */
+  var r7 = LC.capResonance({ design: {} }, kA25, 500, 7);
+  check('a 7% detuning reactor puts it at 3.78 ×', Math.round(r7.fDetuned * 100) / 100, 3.78);
+  check('and 1/√p exactly, independent of the system', Math.abs(r7.fDetuned - 1 / Math.sqrt(0.07)) < 0.01, true);
+  check('which is below the 5th, where a drive produces nothing', r7.belowFirst, true);
+  check('so the position a detuned bank is chosen to reach is not a harmonic',
+    r7.onHarmonicDetuned, false);
+  /* A 5% reactor puts it at 4.47, and the 5th harmonic is close enough to
+     matter — which is why 5% is not the figure used. */
+  var r5 = LC.capResonance({ design: {} }, kA25, 500, 5);
+  check('a 5% reactor gives 4.47 ×', Math.round(r5.fDetuned * 100) / 100, 4.47);
+  /* 4.47 is within 11% of the 5th harmonic — close enough to amplify it, which
+     is why 7% is specified and 5% is not. A position merely below the harmonic
+     is not the same as being safely clear of it. */
+  check('but 4.47 is within 11% of the 5th, so it amplifies it',
+    Math.abs(r5.nearestDetuned.ratio - 1) < 0.15, true);
+  check('and is flagged as on a harmonic for that reason', r5.onHarmonicDetuned, true);
+  check('whereas 7% at 3.78 is 24% clear of it', Math.abs(r7.nearestDetuned.ratio - 1) > 0.2, true);
+  /* The reactor costs output. */
+  check('and a 7% reactor delivers 93% of the bank output',
+    Math.round(r7.delivered), 465);
+
+  /* A bank sized onto a drive harmonic is the failure this exists to catch. */
+  function resAt(kvar, det) {
+    return LC.capResonance({ design: {} }, kA25, kvar, det);
+  }
+  /* Swept rather than sampled at guessed sizes: the bank size moves the
+     resonance continuously, so the sizes where it lands on a harmonic are
+     intervals, not points. */
+  check('1000 kvar lands exactly on the 5th', Math.abs(resAt(1000, 0).nearest.ratio - 1) < 0.02, true);
+  check('500 kvar lands exactly on the 7th', Math.abs(resAt(500, 0).nearest.ratio - 1) < 0.02, true);
+  check('and both are flagged', resAt(1000, 0).onHarmonic && resAt(500, 0).onHarmonic, true);
+  check('while 300 kvar sits at 9.13, well clear', resAt(300, 0).onHarmonic, false);
+  check('and 1500 kvar at 4.08 is clear of the 5th by enough', resAt(1500, 0).onHarmonic, false);
+  /* The band is tight, not wide: 3.78 is near the 5th but below it, and that is
+     the position a detuned bank is chosen to reach. */
+  check('3.78 is not flagged merely for being near the 5th',
+    resAt(500, 7).onHarmonicDetuned, false);
 
   /* ------------------------------------------------------- everything at once */
   var z = site();

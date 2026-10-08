@@ -220,6 +220,31 @@ var LS = (function () {
     pfLimit        : 0.90,   // aggregate power factor below which a board is flagged
     thdWatch       : 15,     // % harmonic distortion above which a circuit is flagged
 
+    /* ---------------------------------------------------- PF correction -----
+       Whether a power factor is worth correcting, and to what. The economics are
+       a supplier's tariff rather than physics, so the target is a setting with
+       a stated basis rather than a constant buried in the code. */
+    pfTarget      : 0.98,   // what to correct to when a bank is fitted
+    /* Above this the supply authority or the transformer owner will usually
+       charge for it, so it is the point at which correction starts to pay. */
+    pfPenaltyLimit: 0.95,
+    /* A drive-fed site changes the answer, because a capacitor bank resonates
+       with the system inductance and the resonance can land on the 5th or 7th
+       harmonic a bank of drives produces. Below this much non-linear load the
+       resonance is treated as a low risk. */
+    capHarmonicWatch: 20,   // % of load on non-linear circuits, above which the
+                            // resonance of a capacitor bank is a live concern
+    /* Detuning reactor, as a percentage of the capacitor's reactance at 50 Hz.
+       This is what moves the resonance above the harmonics instead of onto
+       them. 7% is the usual figure and puts the resonance near 3.8× the
+       fundamental, comfortably above the 7th. */
+    capDetune     : 7,
+    /* Allowed voltage rise on a capacitor under harmonic magnification. IEC
+       60831-1 allows 110% of rated at the fundamental; a detuned bank on a
+       harmonic-rich supply can exceed it, and 110% is the figure that decides
+       whether the bank needs an overrating. */
+    capVoltageLimit: 110,
+
     /* ------------------------------------------------ earth fault looping --
        Automatic disconnection of a faulty circuit is a two-part requirement: the
        loop has to be low enough that the device carries enough current to
@@ -391,6 +416,12 @@ var LS = (function () {
       ref: p.ref === undefined || p.ref === null ? '' : p.ref,
       txId: p.txId || null, incomerA: num(p.incomerA, 1600), phases: '3', spareWays: 0,
       pos: p.pos || { x: 10, y: 12 }, notes: '',
+      /* Power factor correction connected at this board. A bank is specified by
+         its output and its detuning, because the detuning is not an accessory —
+         it decides where the bank's resonance sits relative to the harmonics the
+         supply already carries. Blank means no bank, which is a real and common
+         answer rather than an omission. */
+      capacitors: p.capacitors || [],
       cable: p.cable || { csa: null, cores: 3, len: 0, method: 'XL-A1', group: 1, ambient: 30, sheathed: true }
     }, p);
   }

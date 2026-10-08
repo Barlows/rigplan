@@ -720,6 +720,44 @@ earth conductor — which is TN-C-S from that board down whatever it is called
 upstream. So the app asks which it is (`PE in this cable`) rather than asserting,
 and raises it at info, grouped.
 
+### Power factor correction
+
+Sizing is exact arithmetic — `Qc = P·(tan φ₁ − tan φ₂)`. The engineering is
+everything around it, and on a drive-fed site the resonance is the whole thing:
+
+```
+f_r = √(S_sc / Q_c)      an undetuned bank, in multiples of 50 Hz
+f_r = 1 / √k             a detuned branch, k = the reactor's fraction
+```
+
+A capacitor is a reactance and the supply is an inductance; put them together and
+they resonate. A six-pulse drive's characteristic harmonics are the **5th and 7th**,
+so a bank that resonates between about 4× and 8× sits directly on them.
+
+The second formula is why **7% is the standard figure**: a series reactor-capacitor
+branch has an impedance of `j(h·k − 1/h)`, zero when `h² = 1/k`, so 7% puts the
+resonance at **3.78× (189 Hz) — below the 5th, where a six-pulse drive produces
+nothing** — and it does so *regardless of what the system is doing*. A 5% reactor
+gives 4.47×, within 11% of the 5th, which amplifies it. That is why 5% is not used.
+
+On the real project, a 25–50 MVA source and ordinary bank sizes:
+
+| Bank | Resonance | Verdict |
+|---|---|---|
+| 300 kvar | 9.13× | clear |
+| 500 kvar | 7.07× | **on the 7th** |
+| 1000 kvar | 5.00× | **on the 5th** |
+| 1500 kvar | 4.08× | clear |
+
+A bank is specified by output and detuning (`Bank output`, `Detuning` on the main
+board). The audit reports over-correction as an error — a bank larger than the
+load's own kvar *exports* reactive power, the power factor leads, and some
+supplies treat that as a fault — and a resonance on a harmonic as an error, since
+that is what fails capacitors.
+
+The 7% reactor costs about 7% of output and is normally in the bank price rather
+than an accessory.
+
 ### Motor starting
 
 Three things go wrong when a motor starts, and only one of them is the peak.
@@ -1038,7 +1076,7 @@ test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        36 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
-test/protection-test.html 344 checks on fault levels, device proposals, cable
+test/protection-test.html 383 checks on fault levels, device proposals, cable
                           thermal withstand, selectivity from trip curves, earth
                           fault looping, the neutral conductor on 3P+N feeders,
                           the earthing arrangement, reactive power, harmonics,

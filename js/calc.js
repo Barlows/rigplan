@@ -320,16 +320,29 @@ var LC = (function () {
      the average of the individual factors — a board of good circuits and one
      bad circuit is judged on the arithmetic, not on the best of them. */
   function reactive(p, panels) {
-    var kw = 0, kva = 0;
+    /* Connected kW and diversified kVA again — the same trap as in totals().
+       Adding them gives a power factor above 1, and the kvar comes out as zero
+       because kva² < kw². On the real project every board reported pf 1.00 and
+       0 kvar, so the reactive-power finding never fired and a capacitor
+       calculation had nothing to work from. The clamp below was hiding it by
+       pinning the result to 1. */
+    var kw = 0, kva = 0, kwDiv = 0;
     panels.forEach(function (pn) {
       var d = panelDemand(p, pn);
       kw += d.kw; kva += d.kva;
+      kwDiv += d.kw * (d.demand === undefined || d.demand === null ? 1 : d.demand);
     });
-    var kvar = Math.sqrt(Math.max(0, kva * kva - kw * kw));
-    /* A kVA total below the kW total cannot happen in a real installation, and
-       reporting a power factor of 2.3 is worse than reporting nothing. Clamped
-       here, and the offending circuits are named separately by the audit. */
-    return { kw: kw, kva: kva, kvar: kvar, pf: kva > 0 ? D.clamp(kw / kva, 0, 1) : 1 };
+    /* The kW that shares the kVA's basis is the only one a power factor can be
+       taken against. */
+    var kwForPf = kwDiv < kw * 0.999 ? kwDiv : kw;
+    var pf = kva > 0 ? D.clamp(kwForPf / kva, 0, 1) : 1;
+    var kvar = Math.sqrt(Math.max(0, kva * kva - kwForPf * kwForPf));
+    return {
+      kw: kw, kwDiv: kwDiv, kva: kva, kvar: kvar, pf: pf,
+      /* a kVA below the kW on the same basis is a data error, reported by the
+         audit against the circuits rather than papered over here */
+      diversified: kwDiv < kw * 0.999
+    };
   }
   /* Current from apparent power. S = √3 · V · I, so I = S / (√3 · V) for three
      phase and S / V for single — and neither has a power factor in it, because S
@@ -790,7 +803,13 @@ var LC = (function () {
       thdPanels.push(pn);
     });
     return {
-      panels: sort, kw: kw, kva: kva, kvar: rq.kvar, pf: rq.pf, amp: amp, ampSum: ampSum,
+      panels: sort, kw: kw,
+      /* the diversified kW and whether the two bases differ, passed through so a
+         power-factor calculation is not handed connected kW against diversified
+         kVA — which is how a board reported 1.000 pf and 0 kvar on a real project
+         carrying 600 kvar of reactive power */
+      kwDiv: rq.kwDiv, diversified: rq.diversified,
+      kva: kva, kvar: rq.kvar, pf: rq.pf, amp: amp, ampSum: ampSum,
       neutral: neut, neutralCsa: neutCsa, vectorGroup: upTx ? (upTx.vecGroup || 'Dyn11') : null,
       /* the neutral conductor the board's own circuits imply, which is the
          largest phase conductor going into it */
@@ -1607,6 +1626,77 @@ var LC = (function () {
         'vector-group', nThreePN, 'circuits');
     });
 
+    /* Power factor correction, assessed where a bank is actually connected: at
+       the main board, against the whole site. Sizing it is exact arithmetic; the
+       finding that matters is whether the bank's resonance lands on a harmonic
+       the site produces, which is a drive-fed site's standing problem. */
+    p.pdbs.forEach(function (pdb) {
+      if (!pdb.txId) return;
+      var banks = pdb.capacitors || [];
+      var fitted = banks.length ? num(banks[0].kvar, 0) : 0;
+      var st = boardStats(p, pdb, 'pdb');
+      var fit = pfCorrection(p, st, num(p.design.pfTarget, 0.98), fitted);
+      if (!fit) return;
+
+      if (!fitted) {
+        /* Only worth raising when it is worth doing. Inside the penalty limit
+           the arithmetic is interesting and the answer is "no". */
+        if (!fit.worthIt || fit.kvarNeeded < 1) return;
+        add('info', 'tx', pdb.txId, 'site power factor ' + fit.pfNow.toFixed(3) + ' — ' +
+          fit.kvarNeeded.toFixed(0) + ' kvar of correction available',
+          'At the target power factor of ' + fit.target + ' this supply would take about ' +
+          fit.kvarNeeded.toFixed(0) + ' kvar of correction and release ' + fit.kvaSaving.toFixed(0) +
+          ' kVA of transformer and feeder capacity. On a drive-fed supply that bank would be ' +
+          'detuned: every circuit below this board is a drive panel, and an undetuned bank ' +
+          'resonates against the source at a multiple of 50 Hz that can land on the 5th or 7th ' +
+          'harmonic a six-pulse converter produces. Nothing is specified here — this is the ' +
+          'arithmetic, and whether to spend on it is a commercial decision.',
+          'pf-available', fit.kvarNeeded, 'kvar');
+        return;
+      }
+
+      var res = capResonance(p, faultAt(p, pdb, 'pdb'), fitted, banks[0].detune);
+      var where = 'A ' + fitted.toFixed(0) + ' kvar bank at ' + pdb.tag;
+
+      if (fit.overCorrected) {
+        add('bad', 'pdb', pdb.id, pdb.tag + ' capacitor bank larger than the reactive load',
+          where + ' supplies more than the ' + fit.kvarNow.toFixed(0) + ' kvar of reactive power on ' +
+          'the load. The surplus goes back up the supply: the power factor leads, the reactive ' +
+          'quarter of the meter runs backwards, and some supplies treat that as a fault rather ' +
+          'than as correction. Size the bank to the measured kvar, not to the calculated one.');
+        return;
+      }
+      var res7 = capResonance(p, faultAt(p, pdb, 'pdb'), fitted, 7);
+      if (res && res.onHarmonicDetuned) {
+        add('bad', 'pdb', pdb.id, pdb.tag + ' capacitor bank resonates on a drive harmonic',
+          where + ', with a ' + (res.detune || 0) + '% detuning reactor, resonates at ' +
+          (res.fDetuned * 50).toFixed(0) + ' Hz — ' + res.fDetuned.toFixed(2) + ' × the ' +
+          'fundamental, which is the ' + res.nearestDetuned.order + 'th harmonic. Every circuit ' +
+          'on this supply is a drive panel, and a six-pulse converter produces that harmonic in ' +
+          'quantity. At resonance the harmonic current sees a low impedance and the voltage ' +
+          'across the capacitor rises, which is what fails capacitors. A 7% reactor would put ' +
+          'it at ' + (res7 ? res7.fDetuned.toFixed(2) : '3.78') + ' × — below the 5th, where a ' +
+          'six-pulse drive produces nothing.');
+        return;
+      }
+      if (res && !res.belowFirst) {
+        add('warn', 'pdb', pdb.id, pdb.tag + ' capacitor bank resonance close to a drive harmonic',
+          where + ' resonates at ' + (res.fDetuned * 50).toFixed(0) +
+          ' Hz, ' + res.fDetuned.toFixed(2) + ' × the fundamental. That is between the harmonics ' +
+          'rather than on one, but above the 5th where the drives produce their largest, and it is ' +
+          'not where a bank is usually chosen to sit. A 7% reactor would move it to ' +
+          (res7 ? res7.fDetuned.toFixed(2) : '3.78') + ' × — below the 5th — at a cost of about ' +
+          (fitted * 0.07).toFixed(0) + ' kvar of output.');
+        return;
+      }
+      add('info', 'pdb', pdb.id, pdb.tag + ' power factor corrected to ' + fit.achieved.toFixed(3),
+        where + ' brings ' + fit.pfNow.toFixed(3) + ' to ' +
+        fit.achieved.toFixed(3) + ', releasing ' + fit.releasedKva.toFixed(0) + ' kVA of ' +
+        'transformer and feeder capacity. Its resonance is at ' + (res.fDetuned * 50).toFixed(0) +
+        ' Hz, ' + res.fDetuned.toFixed(2) + ' × the fundamental — below the 5th harmonic, which ' +
+        'is where a drive-fed supply wants it' + (res.detune ? ', with a ' + res.detune.toFixed(0) +
+        '% detuning reactor delivering ' + res.delivered.toFixed(0) + ' kvar of the ' + fitted.toFixed(0) : '') + '.');
+    });
     p.pdps.forEach(function (b) { if (!b.pdbId) add('bad', 'pdp', b.id, b.tag + ' orphaned', 'No parent main board selected.'); });
     p.dbs.forEach(function (b) { if (!b.pdpId) add('bad', 'db', b.id, b.tag + ' orphaned', 'No parent distribution board selected.'); });
     /* a panel on a sub-board must also sit on that board's PDP, otherwise the
@@ -2242,6 +2332,165 @@ function clearingTimeAt(prot, multiple) {
     };
   }
 
+/* ========================================================= PF correction =====
+     Correcting a power factor is arithmetic; knowing whether it is safe to do is
+     not, and the safety is where the engineering actually is.
+
+     **The arithmetic.** To move from pf1 to pf2 at a load of P kW:
+
+         Q1 = P·tan(φ1)      the reactive power now
+         Q2 = P·tan(φ2)      the reactive power wanted
+         Qc = Q1 − Q2        what the bank supplies
+
+     That is the whole sizing calculation and it is exact.
+
+     **The risk.** A capacitor is a reactance. The supply is an inductance. Put
+     them together and they resonate, and at resonance the harmonic currents a
+     bank of drives produces are amplified rather than absorbed:
+
+         f_r = √(S_sc / Qc)     for an undamped bank, in multiples of 50 Hz
+
+     This is not a theoretical concern on a drive-fed site. A six-pulse drive's
+     characteristic harmonics are the 5th (250 Hz) and 7th (350 Hz), so a bank
+     whose resonance lands between about 4× and 8× the fundamental sits directly
+     on them. On the real project, 1,300 kvar of correction on a source of about
+     50 MVA resonates near the 7th — which is one of the two frequencies the
+     drives produce most of.
+
+     **The fix is a detuning reactor**, which puts a series inductor in front of
+     each capacitor to move the resonance up and out of the way:
+
+         f_r = 1 / √k        for a detuned branch, k = the reactor's fraction
+
+     Per unit on the capacitor's reactance, a series reactor-capacitor branch has
+     an impedance of j(h·k − 1/h) at harmonic h, which vanishes when h² = 1/k. So
+     a 7% reactor puts the resonance at 3.79× the fundamental — clear above the 7th
+     — and it does so regardless of what the system impedance is doing. That is
+     the point of a detuning reactor: it sets the frequency rather than hoping the
+     source happens to be stiff enough. The cost is about 1.7% of the capacitor's
+     output, which is a small price for taking the resonance off a harmonic.
+
+     **Why it matters physically.** At resonance the harmonic current sees a low
+     impedance and the voltage across the capacitor rises. The standard allows
+     110% of rated; a resonant bank can exceed that, and the capacitor fails. It
+     is also loud, and the losses go up. Every serious capacitor application on a
+     drive-fed site is detuned for this reason, and the cost of the reactors is
+     part of the bank, not an accessory. */
+  function pfCorrection(p, load, targetPf, capKvar) {
+    /* The kW that shares the kVA's basis. `load.kw` is connected and `load.kva`
+       is diversified, so using the former gave a ratio of 3.2 on the real project,
+       which clamped to a power factor of 1 and a kvar of zero — and a capacitor
+       calculation that cannot see the reactive power it exists to cancel. */
+    var kva = load.kva;
+    var kw = (load.diversified && load.kwDiv > 0) ? load.kwDiv : load.kw;
+    if (!(kw > 0) || !(kva > 0)) return null;
+    var pfNow = D.clamp(kw / kva, 0.01, 1);
+    var tgt = Math.min(0.999, Math.max(0.5, num(targetPf, 0.98)));
+    /* tan(φ) = √(1/pf² − 1), which is also the kvar per kW. */
+    var tanNow = Math.sqrt(Math.max(0, 1 / (pfNow * pfNow) - 1));
+    var tanTgt = Math.sqrt(Math.max(0, 1 / (tgt * tgt) - 1));
+    var qNow = kw * tanNow, qTgt = kw * tanTgt;
+    var needed = qNow - qTgt;
+    /* A bank larger than the whole reactive load leaves the supply exporting
+       reactive power, which is as wrong as being under-corrected and is harder
+       to detect. */
+    var fitted = num(capKvar, 0);
+    /* A bank larger than the load's own reactive power exports reactive power
+       rather than correcting it. 2% of tolerance, because a bank is switched in
+       steps and a bank sitting exactly on the load's kvar is measured slightly
+       over in practice. */
+    var over = fitted > qNow * 1.02 && fitted > 1;
+    var achieved = fitted > 0 && qNow > fitted
+      ? (kw / Math.sqrt(kw * kw + Math.pow(qNow - fitted, 2)))
+      : (fitted >= qNow ? 1 : pfNow);
+    return {
+      pfNow: pfNow, target: tgt, kw: kw, kva: kva,
+      kvarNow: qNow, kvarTarget: qTgt, kvarNeeded: needed,
+      kvaAtTarget: Math.sqrt(kw * kw + qTgt * qTgt),
+      kvaSaving: kva - Math.sqrt(kw * kw + qTgt * qTgt),
+      /* what is actually fitted, and where it lands */
+      kvarFitted: fitted, achieved: achieved, overCorrected: over,
+      worthIt: pfNow < num(p.design.pfPenaltyLimit, 0.95),
+      /* the number that decides it: released kVA is transformer capacity */
+      releasedKva: kva - Math.sqrt(kw * kw + Math.pow(qNow - Math.min(fitted, qNow), 2))
+    };
+  }
+
+  /* Where a capacitor bank's resonance lands, and whether that is a problem.
+
+     `faultKA` is the three-phase fault level at the board, from which the
+     short-circuit power and hence the source inductance follow. `kvar` is the
+     bank size. The answer is the resonance as a multiple of the fundamental,
+     and the two harmonics a six-pulse drive produces most of are 5× and 7×. */
+  function capResonance(p, faultKA, kvar, detune) {
+    var volt = num(p.design.busVoltage, 400) || 400;
+    var scVA = num(faultKA, 0) * 1000 * volt * Math.sqrt(3);   // VA
+    var qVA = num(kvar, 0) * 1000;
+    if (!(scVA > 0) || !(qVA > 0)) return null;
+    /* S_sc / Q_c is dimensionless, so this is already in multiples of f0. */
+    var ratio = scVA / qVA;
+    var fUndamped = Math.sqrt(ratio);
+    var k = num(detune, num(p.design.capDetune, 7)) / 100;
+    /* The detuned branch is a series reactor and capacitor. Per unit on the
+       capacitor's reactance at the fundamental, its impedance at harmonic h is
+         Z = j(h·k − 1/h)
+       which is zero when h² = 1/k. So the resonance is at 1/√k regardless of
+       what the system is doing — which is the whole point of a detuning reactor:
+       it sets the frequency itself, rather than hoping the system impedance puts
+       the resonance somewhere harmless. A 7% reactor gives 3.79×, which clears
+       the 7th harmonic of a six-pulse drive. */
+    var fDetuned = k > 0 ? 1 / Math.sqrt(k) : fUndamped;
+    /* Drives: characteristic harmonics of a six-pulse converter, as multiples. */
+    var driveOrders = [5, 7, 11, 13];
+    function nearest(f) {
+      var best = null, bd = 1e9;
+      driveOrders.forEach(function (o) {
+        var d = Math.abs(Math.log(f / o));
+        if (d < bd) { bd = d; best = o; }
+      });
+      return { order: best, distance: bd, ratio: f / best };
+    }
+    /* Voltage magnification at resonance, with the source's own resistance as
+       the only damping. This is the number that decides whether the capacitor
+       sees more than its rating: it is the reactance ratio at the resonant
+       harmonic, and a 3rd harmonic on an undamped bank is many times rated. */
+    function magnification(f) {
+      /* Z_s at harmonic f, in per-unit on the bank. Source reactance scales with
+         harmonic number; capacitor reactance scales inversely. */
+      var xS = f;      // source reactance at f× fundamental, ∝ f
+      var xC = 1 / f;  // capacitor reactance at f× fundamental, ∝ 1/f
+      var rS = 0.05;   // a 5% source resistance, typical of a distribution source
+      /* Parallel combination, magnitude. */
+      var num2 = Math.sqrt(rS * rS + xS * xS) * xC;
+      var den = Math.sqrt(Math.pow(rS, 2) + Math.pow(xS - xC, 2));
+      return den > 0 ? num2 / den : 0;
+    }
+    var nU = nearest(fUndamped);
+    var nD = nearest(fDetuned);
+    /* Harmful means *on* a harmonic, not merely in the same neighbourhood.
+       A wide band flagged 3.78× — which is exactly where a 7% reactor puts it —
+       as harmful, and that is the position a detuned bank is chosen to reach.
+       Below the 5th is the good place for a six-pulse load, because the 5th is
+       the first harmonic it produces at all. */
+    function onHarmonic(f) {
+      return driveOrders.some(function (o) { return Math.abs(f / o - 1) < 0.15; });
+    }
+    function belowFirst(f) { return f < 4.6; }
+    return {
+      f: fUndamped, fDetuned: fDetuned,
+      onHarmonic: onHarmonic(fUndamped),
+      onHarmonicDetuned: onHarmonic(fDetuned),
+      /* below the 5th, which is where a six-pulse load wants the resonance */
+      belowFirst: belowFirst(fDetuned),
+      nearest: nU, nearestDetuned: nD,
+      detune: k * 100,
+      /* kvar actually delivered with a reactor in circuit */
+      delivered: num(kvar, 0) * (k > 0 ? (1 - k) : 1),
+      /* what the source resistance alone can limit the magnification to */
+      magAtFundamentalHarmonic: magnification(5)
+    };
+  }
+
 /* ====================================================== earthing arrangements ==
      The supply system is not a label. It decides three things that change real
      numbers, and getting it wrong produces a design that passes the checks and
@@ -2543,6 +2792,7 @@ function selectivityBand(s) {
     if (key === 'start-unstated') return 'motor with no starting method stated';
     if (key === 'start-inferred') return 'starting method taken from the machine name';
     if (key === 'pe-method') return 'three-phase feeder whose protective conductor method is not stated';
+    if (key === 'pf-available') return 'supply below the power factor penalty limit';
     if (key === 'vector-group') return 'transformer whose vector group is not stated';
     if (key === 'withstand') return 'cable that cannot survive the fault';
   if (key === 'power-factor') return 'board below the power factor limit';
@@ -3277,6 +3527,7 @@ function selectivityBand(s) {
     withstandI2t, clearingTimeS, checkWithstand, msOrS, WITHSTAND_K,
     groupFindings, worstLevel, groupTitle, boardTagOf, MIN_GROUP, MAX_LIST,
     clearingTimeAt, selectivity, selectivityMessage, selectivityBand, selectivityLadder, reactive,
+    pfCorrection, capResonance,
     earthLoop, disconnectionMultipleAt, earthFaultCheck, neutralCurrent, neutralCsaFor,
     hasNeutralConductor, isThreePhaseWithNeutral, supplyArrangement, neutralCheck,
     peNeededCsa,

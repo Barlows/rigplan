@@ -865,6 +865,72 @@
       '<div class="fieldset"><h4>Notes</h4><textarea class="ta" data-bind="item" data-kind="tx" data-id="' + o.id + '" data-f="notes">' + esc(o.notes) + '</textarea></div>';
   }
   /* ---- properties: PDB ---- */
+  /* Power factor correction, on the main board where a bank is connected.
+
+     Sizing is exact arithmetic — the output follows from the power factor and
+     the kW — so the fields are just the two numbers a bank is ordered by. What is
+     worth showing is where the bank's resonance lands, because on a drive-fed
+     supply that is the whole question and it is not obvious from either number. */
+  function pfFields(o) {
+    var banks = o.capacitors || [];
+    var st = LC.boardStats(S, o, 'pdb');
+    var fitted = banks.length ? num(banks[0].kvar, 0) : 0;
+    var fit = LC.pfCorrection(S, st, num(S.design.pfTarget, 0.98), fitted);
+    var res = fitted > 0 ? LC.capResonance(S, st.faultKA, fitted, banks[0].detune) : null;
+    var detune = banks.length ? num(banks[0].detune, num(S.design.capDetune, 7)) : num(S.design.capDetune, 7);
+
+    var rows =
+      fRow('Bank output', '<input class="inp" type="number" data-bind="capnum" data-kind="pdb" data-id="' + o.id +
+        '" data-f="capKvar" data-capkvar="' + (fitted || '') + '" value="' + (fitted || '') + '" placeholder="none"> ' +
+        '<span style="font-size:10px;color:var(--fg-mute)">kvar</span>') +
+      fRow('Detuning', '<input class="inp" type="number" step="1" min="0" max="20" data-bind="capnum" data-kind="pdb" data-id="' +
+        o.id + '" data-f="capDetune" data-capdet="' + (banks.length ? detune : '') + '" value="' + (banks.length ? detune : '') +
+        '" placeholder="' + num(S.design.capDetune, 7) + '"> <span style="font-size:10px;color:var(--fg-mute)">%</span>');
+
+    var out = '<div class="fieldset"><h4>Power factor correction</h4>' + rows;
+    if (fit) {
+      out += '<div style="font-size:11px;color:var(--fg-dim);line-height:1.5;margin-top:2px">';
+      out += 'This supply is at <b style="color:var(--fg)">' + fit.pfNow.toFixed(3) + '</b> — ' +
+        fit.kvarNow.toFixed(0) + ' kvar of reactive power on ' + fit.kw.toFixed(0) + ' kW. ';
+      if (!fitted) {
+        out += 'Correcting to ' + fit.target + ' would take <b style="color:var(--fg)">' +
+          fit.kvarNeeded.toFixed(0) + ' kvar</b> and release <b style="color:var(--fg)">' +
+          fit.kvaSaving.toFixed(0) + ' kVA</b> of capacity' +
+          (fit.worthIt ? ' — it is below the ' + num(S.design.pfPenaltyLimit, 0.95) +
+            ' penalty limit, so the saving is real.' : '.');
+      } else {
+        out += 'A ' + fitted.toFixed(0) + ' kvar bank brings it to <b style="color:var(--fg)">' +
+          fit.achieved.toFixed(3) + '</b>, releasing ' + fit.releasedKva.toFixed(0) + ' kVA.';
+        if (fit.overCorrected) out += ' <b style="color:var(--bad)">That is more than the ' +
+          fit.kvarNow.toFixed(0) + ' kvar on the load, so the surplus goes back up the supply.</b>';
+      }
+      if (res) {
+        var verdict = res.onHarmonicDetuned
+          ? '<b style="color:var(--bad)">on the ' + res.nearestDetuned.order + 'th harmonic — harmful on a drive supply</b>'
+          : (res.belowFirst
+            ? '<b style="color:var(--good)">below the 5th harmonic, which is where a drive-fed supply wants it</b>'
+            : 'between harmonics, above the 5th');
+        out += '<br>Resonance at <b style="color:var(--fg)">' + (res.fDetuned * 50).toFixed(0) +
+          ' Hz</b> (' + res.fDetuned.toFixed(2) + ' × the fundamental) — ' + verdict +
+          (res.detune ? ', with a ' + res.detune.toFixed(0) + '% reactor delivering ' +
+            res.delivered.toFixed(0) + ' kvar of the ' + fitted.toFixed(0) : '') + '.';
+        if (!banks[0].detune && fitted > 0) {
+          out += ' A 7% reactor would move it to ' +
+            LC.capResonance(S, st.faultKA, fitted, 7).fDetuned.toFixed(2) +
+            ' × (189 Hz) — below the 5th, where a six-pulse drive produces nothing.';
+        }
+      }
+      out += '</div>';
+    }
+    out += "<div class='hint'>A capacitor bank resonates against the supply inductance, and every " +
+      'circuit below this board is a drive panel — a six-pulse converter puts most of its harmonics ' +
+      'at the 5th and 7th. A bank that resonates there amplifies them across the capacitor rather than ' +
+      'absorbing them, which is what fails them. A detuning reactor moves the resonance to 1/√p of the ' +
+      "fundamental: 7% gives 3.78 ×, or 189 Hz, below the 5th. It costs about 7% of the bank output " +
+      'and is normally included in the price rather than added.</div></div>';
+    return out;
+  }
+
   function propsPdb(o) {
     var txs = S.txs;
     return '<div class="pbtn-row">' +
@@ -882,6 +948,7 @@
       fRow('Phases', selIn('pdb', o.id, 'phases', o.phases, LS.PHASES, function (v) { return v + ' phase'; })) +
       '<div class="hint" style="margin-bottom:6px">Incomer should be sized with the design margin of ' + S.design.pdbMargin + '× on the running load.</div>' +
       '</div>' +
+      pfFields(o) +
       '<div class="fieldset"><h4>Incoming cable (from TX)</h4>' + cableFields(o, 'pdb') + '</div>' +
       protFields(o, 'pdb') +
       '<div class="fieldset"><h4>Location</h4>' + posFields(o, 'pdb') + '</div>' +
@@ -1863,6 +1930,21 @@
       var o2 = itemById(id); if (!o2) return;
       o2[f] = (v === '' ? null : num(v));
       if (f === 'num') { renumber(); renderProps(); return; }
+    } else if (b === 'capnum') {
+      /* A capacitor bank is one object with two numbers, not two fields, so the
+         binding has to keep them together: clearing the output removes the bank,
+         and changing the detuning must not create one. The two fields read each
+         other's current value out of a data attribute, because re-rendering the
+         properties panel mid-edit would lose focus on the field being typed in. */
+      var o4 = itemById(id); if (!o4) return;
+      var capKvar = f === 'capKvar' ? v : (el.getAttribute('data-capkvar') || '');
+      var capDet = f === 'capDetune' ? v : (el.getAttribute('data-capdet') || '');
+      if (f === 'capKvar') el.setAttribute('data-capkvar', v === '' ? '' : num(v));
+      if (f === 'capDetune') el.setAttribute('data-capdet', v === '' ? '' : num(v));
+      var kv = capKvar === '' ? 0 : num(capKvar);
+      o4.capacitors = kv > 0 ? [{ kvar: kv, detune: capDet === '' ? null : num(capDet) }] : [];
+      renderProps();
+      return;
     } else if (b === 'cabnum') {
       var o3 = itemById(id); if (!o3) return;
       if (f === '_x') o3.pos.x = num(v); if (f === '_y') o3.pos.y = num(v);
