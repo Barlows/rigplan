@@ -220,6 +220,15 @@ var LS = (function () {
     pfLimit        : 0.90,   // aggregate power factor below which a board is flagged
     thdWatch       : 15,     // % harmonic distortion above which a circuit is flagged
 
+    /* ------------------------------------------------- arc flash -----------
+       Deliberately not a working distance and an arcing time as editable
+       numbers. IEEE 1584 needs an electrode configuration, enclosure dimensions
+       and a conductor gap, none of which can be inferred from a cable schedule —
+       and reclassifying VCB to HCB roughly doubled the energy when that standard
+       was revised. What the app holds instead is the fault current and the real
+       trip curve, which fix the ARCING TIME, and that is the dominant term. */
+    arcTimeMax: 0.5,           // s — only ever a stated assumption, never a default
+
     /* ---------------------------------------------------- PF correction -----
        Whether a power factor is worth correcting, and to what. The economics are
        a supplier's tariff rather than physics, so the target is a setting with

@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=235"></script>
-<script src="../js/calc.js?v=235"></script>
+<script src="../js/data.js?v=244"></script>
+<script src="../js/calc.js?v=244"></script>
 <script>
 (function () {
   var results = [];
@@ -1413,6 +1413,73 @@
      the position a detuned bank is chosen to reach. */
   check('3.78 is not flagged merely for being near the 5th',
     resAt(500, 7).onHarmonicDetuned, false);
+
+  /* ------------------------------------------------------------ arc flash ---
+     Deliberately not an incident energy figure. IEEE 1584 needs an electrode
+     configuration, enclosure dimensions and a conductor gap, none inferable from
+     a cable schedule. What is computable from real data is the ARCING TIME, and
+     it dominates linearly. */
+  var az = site({ kva: 2500 });
+  var ap = load(az.p, az.pdp, 100, 0.9, { phases: '3' });
+  ap.cable = { csa: 120, runs: 1, cores: 4, len: 40, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  LC.protAll(az.p, {});
+  var at = LC.arcTimeAt(az.p, ap);
+  check('the arcing time comes from the real trip curve at the real fault current',
+    at !== null && at.seconds > 0, true);
+  check('and it is seconds, not a default', at.seconds < 1, true);
+  check('which means the fault current was found', at.faultKA > 0, true);
+  /* No device means no time, and that is the answer — a default here would put a
+     fabricated arcing time into a safety calculation. */
+  var nodev = load(az.p, az.pdp, 100, 0.9, { phases: '3' });
+  nodev.prot = null;
+  check('no device means no arcing time, rather than an assumed one',
+    LC.arcTimeAt(az.p, nodev), null);
+  check('and the assessment says so rather than guessing',
+    LC.arcAssessment(az.p, nodev).known, false);
+
+  /* The banding, which is the actionable part. */
+  var as1 = LC.arcAssessment(az.p, ap);
+  check('an assessment names a PPE band from the clearing time', typeof as1.band, 'string');
+  check('and explains the dominant lever first', /Arcing time/.test(as1.levers[0]), true);
+  check('and the second', /Working distance/.test(as1.levers[1]), true);
+
+  /* Distance: NFPA fits an exponent near 0.58, not the inverse square of a point
+     source, because the arc is a column of plasma rather than a point. */
+  /* The factor returned is the energy at that distance RELATIVE to the reference,
+     so doubling the distance gives 1.49 — the energy at 1.0 m is 1.49 × the
+     energy at 0.5 m, which is not how anyone reads it. Inverting it is what says
+     "working at 1.0 m rather than 0.5 m costs 67% of the energy". */
+  check('doubling the distance multiplies the energy by the 0.58 exponent',
+    Math.abs(LC.arcDistanceFactor(1.0, 0.5) - Math.pow(2, 0.58)) < 0.01, true);
+  check('which is 1.49, not the 2.0 an inverse square would give',
+    Math.round(LC.arcDistanceFactor(1.0, 0.5) * 100) / 100, 1.49);
+  check('so working at 1.0 m instead of 0.5 m costs about 67% of the energy',
+    Math.round((1 / LC.arcDistanceFactor(1.0, 0.5)) * 100) / 100, 0.67);
+  check('and halving the distance raises it', LC.arcDistanceFactor(0.25, 0.5) < 1, true);
+  check('with the reference itself at unity', LC.arcDistanceFactor(0.5, 0.5), 1);
+
+  /* A faster-clearing device really does give proportionally less exposure. */
+  /* A smaller device at the same fault current clears faster, so it gives less
+     exposure. That is the whole point of coordination: a graded arrangement
+     reduces incident energy as a by-product of being selective. */
+  var small = LS.newPanel({ kw: 100, pf: 0.9, phases: '3', volt: 400, pdpId: az.pdp.id });
+  small.__kind = 'panel';
+  small.cable = { csa: 120, runs: 1, cores: 4, len: 40, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  small.prot = LS.newProt({ kind: 'mcb', ir: 160, frame: 160, icu: 50, trip: 'D', poles: 4 });
+  az.p.panels.push(small);
+  var tSmall = LC.arcTimeAt(az.p, small);
+  check('a smaller device at the same fault current clears faster',
+    tSmall.seconds < at.seconds, true);
+  check('at the same fault current, so it is the device and not the fault',
+    Math.abs(tSmall.faultKA - at.faultKA) < 0.01, true);
+  /* Incident energy is linear in arcing time, so the ratio of the two times IS
+     the ratio of the two energies — and that ratio holds whatever the electrode
+     data would have been, because it cancels. This is why selective
+     coordination and arc flash safety are the same study. */
+  check('and the ratio of times is the ratio of energies, since energy is linear in time',
+    Math.round(at.seconds / tSmall.seconds * 10) / 10, 3.0);
+  check('so a third of the arcing time is a third of the exposure',
+    Math.round((1 / (at.seconds / tSmall.seconds)) * 100) / 100, 0.33);
 
   /* ------------------------------------------------------- everything at once */
   var z = site();

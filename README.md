@@ -1076,7 +1076,7 @@ test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        36 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
-test/protection-test.html 383 checks on fault levels, device proposals, cable
+test/protection-test.html 400 checks on fault levels, device proposals, cable
                           thermal withstand, selectivity from trip curves, earth
                           fault looping, the neutral conductor on 3P+N feeders,
                           the earthing arrangement, reactive power, harmonics,

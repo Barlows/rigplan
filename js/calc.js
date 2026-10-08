@@ -824,7 +824,12 @@ var LC = (function () {
       rating: rating, util: util, dev: dev, spareUsed: spareUsed,
       spare: kind === 'pdp' ? D.num(item.spareWays, 0) : kind === 'db' ? D.num(item.ways, D.num(item.spareWays, 0)) : 0,
       ways: waysKnown ? D.num(kind === 'db' ? item.ways : item.ways, 0) : null,
-      faultKA: faultAt(p, item, kind)
+      /* The fault level from summed impedance where the path has real data, and
+         from the 6%-per-stage assumption where it does not. Both are kept: the
+         stage count is the honest fallback, and the ratio between them is the
+         measure of how much the cable data was worth. */
+      faultKA: faultAt(p, item, kind),
+      fault: faultLevel(p, item, kind)
     };
   }
   /* Assign a panel's kVA to phases, landing single-phase loads on the lightest
@@ -2332,6 +2337,265 @@ function clearingTimeAt(prot, multiple) {
     };
   }
 
+/* ============================================================ arc flash =====
+     Deliberately not an incident energy number.
+
+     IEEE 1584-2018 is the method an arc flash study uses, and it is a
+     multi-step interpolation across three reference voltages requiring inputs
+     this app does not hold and cannot infer:
+
+     - **electrode configuration** (VCB, VCBB, HCB, VOA, HOA). Reclassifying
+       equipment from VCB to HCB roughly doubled the calculated energy when the
+       standard was revised — it is not a detail.
+     - enclosure dimensions, for the containment correction factor
+     - conductor gap between phases
+     - the arcing current, which is *below* the bolted fault current and is
+       itself an interpolation
+
+     All of those come from inspecting the equipment or from a manufacturer's
+     drawings. Guessing them would produce a number that looks authoritative on a
+     label governing whether someone wears an arc flash suit, and NFPA 70E does
+     not permit the table method and the incident energy method to be mixed on the
+     same equipment — so a wrong number here does not merely mislead, it puts two
+     incompatible bases on one piece of gear.
+
+     So this calculates the two things that ARE determined by the data the app
+     actually has, and states the scaling that turns them into energy. Both are
+     exact and neither depends on the missing inputs.
+
+     **Arcing time** is set by the device that clears the fault, at the fault
+     current — which is already computed from real trip curves. It dominates the
+     answer, linearly: a device clearing in 100 ms rather than 500 ms gives a
+     fifth of the incident energy. This is why selective coordination and arc
+     flash safety are the same study, and it is the one finding worth acting on.
+
+     **Working distance** matters through the inverse-square law for a point
+     source, tempered by an arc that is not a point. NFPA's tables fit an exponent
+     near 0.58 rather than 2, which is the difference between "assume the
+     worst" and "what the standard actually says".
+
+     The boundary at 1.2 cal/cm² — the onset of a second-degree burn on bare skin,
+     and the distance an unprotected person must stand — is defined by the same
+     energy, so the ratio of one energy to another gives the distance without ever
+     needing the absolute value. That is a genuinely useful result and it is
+     obtainable. */
+  function arcTimeAt(p, item) {
+    /* How long the arc burns before the device above it clears. Taken from the
+       trip curve at the fault current, which is what a study does — and the
+       honest answer when no device is specified is "not knowable", not a
+       default. */
+    var prot = item.prot;
+    if (!prot || !(num(prot.ir, 0) > 0)) return null;
+    var fl = faultLevel(p, item, kindOf(item));
+    if (!fl || !(fl.kA > 0)) return null;
+    var ia = fl.kA * 1000;
+    var t = clearingTimeAt(prot, ia / num(prot.ir, 1));
+    if (t === null || !isFinite(t)) return null;
+    /* A curve that clears in over a second is not a curve anyone publishes past,
+       and the model is not valid out there. Said rather than extrapolated. */
+    return {
+      seconds: t, ms: t * 1000, faultKA: fl.kA, ir: num(prot.ir, 0),
+      /* the time an unprotected worker is exposed for */
+      atBoundary: t
+    };
+  }
+
+  /* The working-distance scaling NFPA's tables embody: an exponent near 0.58
+     rather than the inverse-square of a point source, because the arc is a column
+     of plasma a metre or so long rather than a point. */
+  function arcDistanceFactor(distance, ref, exponent) {
+    var a = num(exponent, 0.58);
+    var d = num(distance, 0.5);
+    var r = num(ref, 0.5);
+    if (!(d > 0) || !(r > 0)) return null;
+    return Math.pow(d / r, a);
+  }
+
+  /* What can be said honestly about a piece of equipment, given what the app
+     knows: the arcing time, and the ratio between two candidate arrangements. */
+  function arcAssessment(p, item) {
+    var t = arcTimeAt(p, item);
+    if (!t) return { known: false };
+    return {
+      known: true,
+      seconds: t.seconds, ms: t.ms, faultKA: t.faultKA,
+      /* A clearing time under 100 ms puts this in the range where the energy is
+         usually low enough for ordinary arc-rated clothing. Over 500 ms and it is
+         a flash suit question. The bands are NFPA's PPE levels, and saying which
+         band a device falls into is more useful than a fabricated figure. */
+      band: t.seconds <= 0.1 ? 'likely Category 1–2 (≤ 8 cal/cm²)' :
+            t.seconds <= 0.2 ? 'Category 2–3 (8–25 cal/cm²)' :
+            'Category 3–4, possibly above 40 cal/cm²',
+      /* The two changes that dominate, in order. */
+      levers: [
+        'Arcing time — linear. Clearing in ' + (t.ms).toFixed(0) +
+          ' ms rather than ' + (t.ms * 2).toFixed(0) + ' ms halves the energy.',
+        'Working distance — a 0.58 power, so doubling the distance from 0.5 m to ' +
+          '1.0 m gives about 60% of the energy at 0.5 m.'
+      ]
+    };
+  }
+
+/* ================================================ short-circuit impedance =====
+     The fault level was a single assumption: 6% per distribution stage, whatever
+     is actually there. That is defensible as a placeholder and wrong as an
+     answer, because the impedance between the transformer and a board is not a
+     stage count — it is the transformer's impedance, the busbars, and the length
+     and size of every cable above the point in question.
+
+     Doing it properly means summing per-unit impedances down the chain:
+
+         Z_pu(source) = Z_pu(transformer)
+         Z_pu(board)   = Z_pu(source) + Z_pu(busbars above) + Z_pu(cable above)
+
+     where the cable's impedance in per-unit is
+
+         Z_pu = (R + jX)·S_base / V_base²
+
+     and a fault current follows from
+
+         I_f = V / (√3 · Z_base · Z_pu)
+
+     The difference matters because the blanket figure overstates the fault level
+     on a long, thin feeder and understates it on a short, fat one — and fault
+     level decides device breaking capacity and cable thermal withstand, so the
+     error runs straight into two other checks.
+
+     What this is NOT: a protected network. It assumes every source is
+     energised, ignores generator contribution, and does not model an
+     auto-transformer tap or a pre-inserted resistor. It is a strong short-circuit
+     calculation, not a network study, and the findings say so. */
+  function impedanceBase(tx, volt) {
+    var sn = num(tx.kva, 0);
+    if (!(sn > 0)) return null;
+    var v = num(volt, 400) || 400;
+    var ib = (sn * 1000) / (Math.sqrt(3) * v);
+    return {
+      snKva: sn, volt: v,
+      /* base current — the per-unit reference for everything below */
+      ibA: ib,
+      /* Z_base = V²/S for three-phase, which is what a cable's ohms are
+         divided by to become per-unit */
+      zBase: v / (Math.sqrt(3) * ib),
+      /* the transformer, referred to this base rather than to its own */
+      puTransformer: (function () {
+        var zpu = num(tx.impZ, 6);
+        if (!isFinite(zpu) || zpu <= 0) zpu = 6;
+        return zpu / 100;
+      })()
+    };
+  }
+
+  /* One element's impedance in per-unit on the transformer's base. A cable's
+     contribution depends on its length and size; a busbar's on nothing at all,
+     which is why it needs to be counted rather than assumed. */
+  function puImpedance(cable, base) {
+    if (!cable || !base) return 0;
+    var z = cableImpedance(cable);
+    var km = num(cable.len, 0) / 1000;
+    var runs = Math.max(1, num(cable.runs, 1));
+    /* Ohms in series with the load, referred to the source base by the standard
+       Z_base = V²/S three-phase. */
+    var zOhm = Math.sqrt(z.r * z.r + z.x * z.x) * km / runs;
+    var zBaseOhm = base.volt ? (base.volt * base.volt / base.snKva) : 0;
+    if (!(zBaseOhm > 0)) return 0;
+    return zOhm / zBaseOhm;
+  }
+
+  /* Every element between the transformer and a board, as per-unit on the
+     transformer's base. Busbars are counted as a fixed impedance because they
+     have a length and a rating; a board 3 m away and a board 60 m away are
+     genuinely different. */
+  function pathImpedance(p, item, kind, base) {
+    var total = 0, parts = [];
+    /* chain() returns the ANCESTORS of an item, so for a main board it comes
+       back empty and the transformer has to be found from the item itself. */
+    var ch = chain(p, item);
+    if (kind === 'tx') ch = { tx: item };
+    else if (kind === 'pdb' && !ch.tx && item.txId) ch = { tx: get(p, 'tx', item.txId) };
+    function add(label, ohms) {
+      if (!(ohms > 0)) return;
+      total += ohms;
+      parts.push({ label: label, ohm: ohms });
+    }
+    /* The transformer itself, which is the only impedance that is certain. */
+    var tx = kind === 'tx' ? item : ch.tx;
+    if (tx && base.puTransformer > 0) {
+      add(tx.tag + ' at ' + (base.puTransformer * 100).toFixed(1) + '%', base.puTransformer);
+    }
+    var zBaseOhm = base && base.volt ? (base.volt * base.volt / base.snKva) : 0;
+    if (zBaseOhm > 0) {
+      /* The busbar run at each board between it and its parent, and the cable. */
+      /* A board's own incoming feeder. The parent lookup that used to guard this
+         was doing nothing useful and silently dropping the cable: a main board
+         fed from a transformer has no pdbId, so the lookup failed and the feeder
+         was never added — which is why the impedance and the stage count came out
+         identical at every board. */
+      function via(o, what) {
+        if (!o || !o.cable) return;
+        var csa = num(o.cable.csa, 0);
+        var len = num(o.cable.len, 0);
+        if (!(csa > 0) || !(len > 0)) return;
+        var pu = puImpedance(o.cable, base);
+        if (pu > 0) add((o.tag || what) + ' ' + csa + ' mm² × ' + len + ' m', pu);
+      }
+      if (kind === 'pdb') via(item, 'pdb');
+      else if (kind === 'pdp') via(item, 'pdp');
+      else if (kind === 'db') via(item, 'db');
+      else {
+        /* A circuit: every board above it, then the circuit's own feeder. */
+        if (ch.pdp) via(ch.pdp, 'pdp');
+        if (ch.db) via(ch.db, 'db');
+        if (ch.pdb) via(ch.pdb, 'pdb');
+        var cp = puImpedance(item.cable, base);
+        if (cp > 0) add(item.tag + ' feeder ' + num(item.cable && item.cable.csa, 0) + ' mm² × ' + num(item.cable && item.cable.len, 0) + ' m', cp);
+      }
+    }
+    return { pu: total, parts: parts, ohm: total * zBaseOhm };
+  }
+
+  /* The fault level at a point, from the summed impedance rather than a stage
+     count. Falls back to the stage-count figure where there is no cable data to
+     sum, and says which was used — the two can differ by a factor of two, and a
+     reader must not be left assuming the better one. */
+  function faultLevel(p, item, kind) {
+    /* Same trap as in pathImpedance: chain() gives an item's ancestors, and for a
+       main board that is nothing at all — the transformer comes off the item. */
+    var ch = chain(p, item);
+    if (kind === 'tx') ch = { tx: item };
+    else if (kind === 'pdb') ch = { tx: get(p, 'tx', item.txId) };
+    var tx = ch.tx;
+    if (!tx) return null;
+    var volt = num(item.volt, 400) || 400;
+    var base = impedanceBase(tx, volt);
+    if (!base) return null;
+    base.volt = volt;
+    var path = pathImpedance(p, item, kind, base);
+    var zpu = path.pu;
+    if (!(zpu > 0)) return null;
+    /* I_f = I_base / Z_pu */
+    var amps = base.ibA / zpu;
+    var kA = amps / 1000;
+    /* The old stage-count figure, for comparison. */
+    var zpuStage = num(p.design.zpuPerStage, 0.06);
+    var stages = 1;
+    if (kind === 'pdp') stages = 2;
+    else if (kind === 'db') stages = 3;
+    else if (kind !== 'tx') stages = 4;
+    var legacy = txFaultKA(p, tx);
+    for (var i = 0; i < stages; i++) legacy /= (1 + zpuStage);
+    return {
+      kA: kA, pu: zpu, parts: path.parts, ohm: path.ohm,
+      base: base, tx: tx, volt: volt,
+      legacyKA: legacy,
+      /* how far apart the two methods are, which is the honest measure of whether
+         the impedance data was worth having */
+      ratio: legacy > 0 ? kA / legacy : null,
+      /* true only when every element above had real data, not a default */
+      fromImpedance: path.parts.length > (kind === 'tx' ? 1 : 2)
+    };
+  }
+
 /* ========================================================= PF correction =====
      Correcting a power factor is arithmetic; knowing whether it is safe to do is
      not, and the safety is where the engineering actually is.
@@ -3527,7 +3791,8 @@ function selectivityBand(s) {
     withstandI2t, clearingTimeS, checkWithstand, msOrS, WITHSTAND_K,
     groupFindings, worstLevel, groupTitle, boardTagOf, MIN_GROUP, MAX_LIST,
     clearingTimeAt, selectivity, selectivityMessage, selectivityBand, selectivityLadder, reactive,
-    pfCorrection, capResonance,
+    arcTimeAt, arcDistanceFactor, arcAssessment,
+    pfCorrection, capResonance, impedanceBase, puImpedance, pathImpedance, faultLevel,
     earthLoop, disconnectionMultipleAt, earthFaultCheck, neutralCurrent, neutralCsaFor,
     hasNeutralConductor, isThreePhaseWithNeutral, supplyArrangement, neutralCheck,
     peNeededCsa,
