@@ -652,6 +652,24 @@
      only the list of sensible answers changes. `kind` is the item kind, which
      is also the binding kind, so the fieldset drops into each properties
      panel unchanged. */
+  /* Let-through, on a device. It is the part of the fault the conductor has to
+     survive before the device opens, and it comes from the manufacturer's test
+     data rather than from anything derivable — so the fields are blank until
+     somebody looks them up, and the note says what they are for. */
+  function letThroughFields(o, kind) {
+    var prot = o.prot;
+    if (!prot) return '';
+    return fRow('Let-through I²t', '<span class="unit">' +
+      '<input class="inp" type="number" step="1" min="0" data-bind="cabnum" data-kind="' + kind +
+      '" data-id="' + o.id + '" data-f="_letIt" value="' + (prot.letIt === undefined || prot.letIt === null ? '' : prot.letIt) +
+      '" placeholder="not stated"> <span style="font-size:10px;color:var(--fg-mute)">kA²s ×10³</span></span>') +
+      '<div class="hint" style="margin-bottom:6px">The energy the device permits past before it ' +
+      'interrupts, from the manufacturer\'s published data. The cable thermal withstand check assumes ' +
+      'zero let-through, which is the best case; where this is filled in, the real answer is checked ' +
+      'against the conductor\'s own I²t. Leave it blank and the check stays optimistic, which is the ' +
+      'right way round.</div>';
+  }
+
   function protFields(o, kind) {
     if (!o.prot) o.prot = LS.newProt({});
     var d = o.prot;
@@ -1058,6 +1076,15 @@
          accelerate the machine at all, and it is a question for the vendor, not
          something the app can infer. Left blank it asserts nothing; filled in it
          turns the voltage-dip check into a verdict. */
+      /* IEC 60947-4-1 overload relay class. A commercial judgement about how long
+         the machine can be down rather than a calculation, so it is declared and
+         never inferred from the machine name. */
+      (LC.isMotorLoad(o) ? fRow('Relay class', selIn('panel', o.id, 'motorClass',
+        o.motorClass === null || o.motorClass === undefined ? '' : String(o.motorClass),
+        ['', '10', '20', '30'], function (v) {
+          if (v === '') return 'not stated — class ' + num(S.design.motorClassDefault, 10) + ' assumed';
+          return 'Class ' + v + ' — trips within ' + v + ' s at 6 × rated current';
+        })) : '') +
       fRow('Load torque', selIn('panel', o.id, 'loadTorque', o.loadTorque || '',
         ['', 'constant', 'variable', 'constantpower', 'inertia'],
         function (v) { return v ? (LS.LOAD_TORQUES[v] || {}).name || v : 'not stated'; })) +
@@ -1955,6 +1982,8 @@
          of the same name; every one has to be translated explicitly, because the
          fall-through would write a key called "_peCsa" that nothing reads. */
       else if (f === '_peCsa') o3.cable.peCsa = (v === '' ? null : num(v));
+      /* Let-through belongs to the device, not the cable it protects. */
+      else if (f === '_letIt') { if (!o3.prot) o3.prot = {}; o3.prot.letIt = (v === '' ? null : num(v)); }
       else if (f === '_csa') o3.cable.csa = (v === '' ? null : num(v));
       else o3.cable[f] = (v === '' ? null : num(v));
       if (f === '_x' || f === '_y') onMoved(o3, true);

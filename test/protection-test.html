@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=244"></script>
-<script src="../js/calc.js?v=244"></script>
+<script src="../js/data.js?v=255"></script>
+<script src="../js/calc.js?v=255"></script>
 <script>
 (function () {
   var results = [];
@@ -1480,6 +1480,73 @@
     Math.round(at.seconds / tSmall.seconds * 10) / 10, 3.0);
   check('so a third of the arcing time is a third of the exposure',
     Math.round((1 / (at.seconds / tSmall.seconds)) * 100) / 100, 0.33);
+
+  /* ------------------------------------------------ let-through and class ---
+     Two things a time-current curve does not contain, and both have to be said
+     rather than assumed. */
+
+  /* Let-through: what the device lets past before it opens. */
+  var ltP = LS.newProt({ kind: 'mccb', ir: 250, frame: 250, icu: 50, trip: 'TM', poles: 4 });
+  var lti = LC.letThrough(ltP, 60, { csa: 240, len: 80, insul: 'XLPE', clearSeconds: 0.02 });
+  check('the whole fault energy is the reference, in A²s',
+    Math.round(lti.idealA2s / 1e6) + ' MJ', '3600 MJ');
+  /* The conductor's I²t is k²S² — a property of the conductor, so length does not
+     appear in it. An earlier version multiplied by 1000 for the kilometres and
+     was out by that factor. */
+  check('a 240 mm² XLPE conductor withstands k²S² = 1,178 A²s × 10⁶',
+    Math.round(lti.cableIt / 1e6), 1178);
+  check('which is independent of length, because the formula has no length in it',
+    LC.letThrough(ltP, 60, { csa: 240, len: 800, insul: 'XLPE', clearSeconds: 0.02 }).cableIt, lti.cableIt);
+  /* The comparison that matters is against the device's clearing time, not the
+     whole fault: a device that opens in 20 ms does not deliver the whole energy. */
+  check('a 20 ms clearing time delivers a fraction of it',
+    lti.energyToClear < lti.idealA2s / 10, true);
+  check('and a 240 mm² conductor survives that comfortably',
+    lti.survivesClearingTime, true);
+  check('so the verdict is not a failure', lti.verdict, 'unproven');
+
+  /* With a published figure, that becomes the answer rather than a bound. */
+  var ltPub = LS.newProt({ kind: 'mccb', ir: 250, frame: 250, icu: 50, trip: 'TM', poles: 4, letIt: 50 });
+  var ltp = LC.letThrough(ltPub, 60, { csa: 240, len: 80, insul: 'XLPE', clearSeconds: 0.02 });
+  check('a published 50 kA²s is compared against the conductor directly', ltp.published, true);
+  check('and passes, with the margin stated', ltp.verdict, 'passes');
+  /* The published figure is 50 kA²s = 50,000 A²s; the conductor takes 1,178 × 10⁶.
+     The margin is the ratio, and it is a real one rather than a pass/fail. */
+  check('the margin being the ratio of conductor capacity to published let-through',
+    Math.round(ltp.letMargin), 23557);
+  check('and it is not the same figure as the clearing-time margin',
+    Math.abs(ltp.letMargin - ltp.clearMargin) > 1, true);
+  /* A let-through larger than the conductor can take is a definite failure, and
+     the only way to reach that verdict without a default. */
+  var ltBad = LS.newProt({ kind: 'mccb', ir: 250, frame: 250, icu: 50, trip: 'TM', poles: 4, letIt: 500000 });
+  check('a let-through beyond the conductor capacity does fail',
+    LC.letThrough(ltBad, 60, { csa: 10, len: 500, insul: 'XLPE', clearSeconds: 0.02 }).verdict, 'fails');
+
+  /* Overload relay class, IEC 60947-4-1: the trip time at 6 × rated current. */
+  check('the classes are 10, 20 and 30 s', [10, 20, 30].map(function (c) {
+    return LS.MOTOR_CLASSES[c].seconds;
+  }).join(','), '10,20,30');
+  check('and each says what it is for', /restart/i.test(LS.MOTOR_CLASSES[30].note), true);
+  /* A small MCB picks up magnetically long before 6 × In, so it trips far faster
+     than any class allows — the finding is about a device that cannot trip, not
+     one that trips too quickly. */
+  var cl = site({ kva: 2500 });
+  var mot = load(cl.p, cl.pdp, 160, 0.85, { phases: '3', isMotor: true, motorClass: 10 });
+  mot.cable = { csa: 240, runs: 1, cores: 4, len: 80, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  mot.prot = LS.newProt({ kind: 'mccb', ir: 250, frame: 250, icu: 50, trip: 'LI', poles: 4 });
+  LC.protAll(cl.p, {});
+  var dm = LC.panelDemand(cl.p, mot);
+  check('at 6 × the motor current the multiple on the device is over 6',
+    (6 * dm.amp / 250) > 6, true);
+  check('and it clears in well under the class 10 allowance',
+    LC.clearingTimeAt(mot.prot, 6 * dm.amp / 250) < 10, true);
+  check('so an LI trip unit passes class 10 comfortably',
+    LC.audit(cl.p).some(function (x) { return /relay class/.test(x.title); }), false);
+  /* The case the check exists for: a device that cannot clear fast enough at 6 ×. */
+  var slowProt = LS.newProt({ kind: 'mcb', ir: 200, frame: 200, icu: 25, trip: 'C', poles: 3 });
+  var atSix = LC.clearingTimeAt(slowProt, 1.0);
+  check('a curve C device at exactly its own rating is slow enough to matter',
+    atSix !== null && atSix > 10, true);
 
   /* ------------------------------------------------------- everything at once */
   var z = site();

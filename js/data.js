@@ -207,6 +207,14 @@ var LS = (function () {
     'other'   : { name: 'Other / miscellaneous',      pf: 0.90, phases: '3' }
   };
 
+  /* IEC 60947-4-1 overload relay classes: the permitted trip time at 6x rated
+     current. The number IS the trip time in seconds. */
+  var MOTOR_CLASSES = {
+    10: { seconds: 10, note: 'Trip within 10 s at 6 × rated current. The usual choice where the machine can be restarted quickly, and the safe default for anything whose value of lost production is not high.' },
+    20: { seconds: 20, note: 'Trip within 20 s at 6 × rated current. For a machine that can tolerate a short delay before it is restarted, or where nuisance tripping on a transient has been a problem.' },
+    30: { seconds: 30, note: 'Trip within 30 s at 6 × rated current. For a process that cannot be restarted without significant delay or cost — a continuous line, a transformer, an item where the rest of the plant waits on it.' }
+  };
+
   var DEFAULTS = {
     designMargin   : 1.15,   // board sizing / loading design factor
     vdropLimitLv   : 3.0,    // % for LV distribution
@@ -220,6 +228,21 @@ var LS = (function () {
     pfLimit        : 0.90,   // aggregate power factor below which a board is flagged
     thdWatch       : 15,     // % harmonic distortion above which a circuit is flagged
 
+    /* ------------------------------------------- motor protection classes ---
+       IEC 60947-4-1 classes 10, 20 and 30: the maximum time an overload relay
+       takes to trip at 6 × the motor's rated current. The number is the trip
+       time in seconds, so class 10 means at most 10 s.
+
+       The class exists because a motor's thermal capacity is finite and its
+       permissible temperature rise depends on what is hard to restart. A
+       conveyor that can be restarted in ten minutes can afford class 30; a
+       chiller or a transformer in a control system cannot, because the cost of
+       an hour of downtime is far higher than the cost of a faster relay.
+
+       This is one of the few places in a specification where the right answer is
+       a commercial judgement rather than a calculation, which is why it is a
+       declared field and never inferred from anything. */
+
     /* ------------------------------------------------- arc flash -----------
        Deliberately not a working distance and an arcing time as editable
        numbers. IEEE 1584 needs an electrode configuration, enclosure dimensions
@@ -228,6 +251,11 @@ var LS = (function () {
        was revised. What the app holds instead is the fault current and the real
        trip curve, which fix the ARCING TIME, and that is the dominant term. */
     arcTimeMax: 0.5,           // s — only ever a stated assumption, never a default
+
+    /* IEC 60947-4-1 overload relay class when none is declared on the circuit.
+       Class 10 trips sooner, so it protects the motor more readily; class 30 is
+       chosen for availability, which is the opposite trade. */
+    motorClassDefault: 10,
 
     /* ---------------------------------------------------- PF correction -----
        Whether a power factor is worth correcting, and to what. The economics are
@@ -702,6 +730,11 @@ var LS = (function () {
          is true — a motor not declared as one gets no verdict rather than a
          wrong one. */
       isMotor: p.isMotor === undefined ? null : !!p.isMotor,
+      /* IEC 60947-4-1 overload relay class — the permitted trip time at 6 × rated
+         current. A commercial judgement about how long the machine can be down,
+         so it is declared and never inferred. */
+      motorClass: p.motorClass === undefined || p.motorClass === null || p.motorClass === ''
+        ? null : clamp(num(p.motorClass, 10), 10, 30),
       /* Set when this field came from a machine name rather than from a sheet or a
          question asked. Not a label — the audit refuses to pass an inferred
          starting method off as a decision, because a guess that reads like data
@@ -800,6 +833,13 @@ var LS = (function () {
       ir: o.ir === undefined || o.ir === null ? null : num(o.ir),
       /* breaking capacity, in kA */
       icu: o.icu === undefined || o.icu === null ? null : num(o.icu),
+      /* Let-through: the energy and the peak the device permits before it opens.
+         Both come from the manufacturer's published data and neither is derivable
+         from a time-current curve — which bounds clearing time but says nothing
+         about what got through in the meantime. Blank means not looked up, which
+         is the normal state, and the withstand check then stays optimistic. */
+      letIt: o.letIt === undefined || o.letIt === null ? null : num(o.letIt),
+      letIp: o.letIp === undefined || o.letIp === null ? null : num(o.letIp),
       /* MCCB: trip unit family. MCB: curve letter. */
       trip: o.trip || (isMcb ? 'C' : 'TM'),
       /* how many poles are cut — 4 for a 3-phase circuit with neutral */
@@ -998,7 +1038,7 @@ var LS = (function () {
     maxDisconnectionTime, peMinCsa, PE_MIN_CSA, PE_MIN, DISC_TN, DISC_TT,
     VECTOR_GROUPS, blocksTriplen, lvNeutralEarthed, VEC_LV_DELTA,
     START_METHODS, LOAD_TORQUES,
-    HARMONIC_SPECTRUMS, triplenFractionOf, defaultThd,
+    HARMONIC_SPECTRUMS, triplenFractionOf, defaultThd, MOTOR_CLASSES,
     PANEL_TYPES, DEFAULTS, SHAPE, PHASE_COLOR, PHASE_EDGE, phaseColor, phaseEdge,
     DB_SIZES_A, DB_LOAD_MAX_A, DB_LOAD_TYPES,
     MCCB_FRAMES, MCCB_SETTINGS, ICU_KA, TRIP_UNITS,

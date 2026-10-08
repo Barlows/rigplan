@@ -303,7 +303,7 @@ def run(chrome, port, names):
         checked.append(name)
         m = re.search(r"(\d+)\s*/\s*(\d+)\s*checks passed", body)
         if not m:
-            print("  %-12s UNREADABLE — no tally found in the page" % ())
+            print("  %-12s UNREADABLE — no tally found in the page" % name)
             failed_suites.append(name)
             continue
 

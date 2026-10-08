@@ -1702,6 +1702,66 @@ var LC = (function () {
         'is where a drive-fed supply wants it' + (res.detune ? ', with a ' + res.detune.toFixed(0) +
         '% detuning reactor delivering ' + res.delivered.toFixed(0) + ' kvar of the ' + fitted.toFixed(0) : '') + '.');
     });
+    /* Motor overload relay class, and the let-through a device permits.
+
+       Both are the same shape of problem: a cable is asked whether it survives
+       a fault, and the honest answer needs data a time-current curve does not
+       contain. */
+    p.panels.forEach(function (pn) {
+      if (!pn.pdpId && !pn.pdbId) return;
+      var prot = pn.prot;
+      if (!prot) return;
+      var fl = faultLevel(p, pn, 'panel');
+      if (!fl || !(fl.kA > 0) || !pn.cable || !num(pn.cable.csa, 0)) return;
+
+      /* --- overload relay class, on a machine that has one --- */
+      if (isMotorLoad(pn) && pn.kw > 0) {
+        var cls = pn.motorClass === null || pn.motorClass === undefined
+          ? num(p.design.motorClassDefault, 10) : num(pn.motorClass, 10);
+        var spec = D.MOTOR_CLASSES[cls] || D.MOTOR_CLASSES[10];
+        var st = panelDemand(p, pn);
+        /* The relay is set to the motor's rated current, so the multiple at which
+           the class is quoted is 6 x that — by definition. */
+        var atSix = 6 * st.amp;
+        var tAtSix = clearingTimeAt(prot, atSix / Math.max(1, num(prot.ir, 1)));
+        if (tAtSix !== null && tAtSix > spec.seconds * 1.02) {
+          add('warn', 'panel', pn.id, pn.tag + ' overload relay class ' + cls + ' cannot be met by its device',
+            'At 6 × the motor current — the point the class is quoted at — ' +
+            (prot.trip === 'mcb' ? 'this device' : 'the thermal characteristic') +
+            ' takes ' + (tAtSix * 1000).toFixed(0) + ' ms, against the ' +
+            (spec.seconds * 1000).toFixed(0) + ' ms a class ' + cls + ' relay permits. ' +
+            (prot.trip === 'mcb' ? 'An MCB is not a motor protective device: its thermal element is sized ' +
+              'for a cable, not for a machine, and it has no adjustable trip class. A motor overload relay ' +
+              'with the right class, or a motor-rated MCCB, is what this circuit needs.'
+              : 'An electronic trip unit can usually be set to a shorter class; a thermal-magnetic one cannot.') +
+            ' The class is a commercial choice about how long the machine can be down — ' + spec.note,
+            'motor-class', num(pn.kw, 0));
+        }
+      }
+
+      /* --- let-through, where the cable is close enough for it to matter --- */
+      var lt = letThrough(prot, fl.kA, {
+        csa: num(pn.cable.csa, 0), len: num(pn.cable.len, 0),
+        insul: (D.METHODS[pn.cable.method] || D.METHODS['A1']).insul,
+        /* The device's real clearing time at this fault current, from its curve. */
+        clearSeconds: clearingTimeAt(prot, fl.kA * 1000 / Math.max(1, num(prot.ir, 1)))
+      });
+      if (lt && lt.verdict === 'fails') {
+        add('bad', 'panel', pn.id, pn.tag + ' feeder conductor cannot survive the fault',
+          'At ' + fl.kA.toFixed(1) + ' kA the conductor can withstand ' +
+          (lt.cableIt / 1e3).toFixed(0) + ' kA²s, which is ' +
+          (lt.cableSeconds * 1000).toFixed(0) + ' ms at that current — and the device does not ' +
+          (lt.published ? 'stop below that (published let-through ' + lt.letIt.toFixed(0) +
+            ' kA²s, giving a margin of ' + (lt.margin || 0).toFixed(2) + '×).'
+            : 'clear fast enough. This is the ideal case with zero let-through, so the real answer is ' +
+              'worse still.') +
+          ' A smaller conductor does not help at this length — the withstand goes as S² while the ' +
+          'fault current barely moves — so this needs a faster device, a shorter run, or a different ' +
+          'route.',
+          'let-through', num(pn.kw, 0));
+      }
+    });
+
     p.pdps.forEach(function (b) { if (!b.pdbId) add('bad', 'pdp', b.id, b.tag + ' orphaned', 'No parent main board selected.'); });
     p.dbs.forEach(function (b) { if (!b.pdpId) add('bad', 'db', b.id, b.tag + ' orphaned', 'No parent distribution board selected.'); });
     /* a panel on a sub-board must also sit on that board's PDP, otherwise the
@@ -3057,6 +3117,10 @@ function selectivityBand(s) {
     if (key === 'start-inferred') return 'starting method taken from the machine name';
     if (key === 'pe-method') return 'three-phase feeder whose protective conductor method is not stated';
     if (key === 'pf-available') return 'supply below the power factor penalty limit';
+    if (key === 'motor-class') return 'machine whose overload relay class its device cannot meet';
+    if (key === 'let-through') return 'feeder conductor that cannot survive the fault';
+    if (key === 'motor-class') return 'machine whose overload relay class its device cannot meet';
+    if (key === 'let-through') return 'feeder conductor that cannot survive the fault';
     if (key === 'vector-group') return 'transformer whose vector group is not stated';
     if (key === 'withstand') return 'cable that cannot survive the fault';
   if (key === 'power-factor') return 'board below the power factor limit';
@@ -3121,6 +3185,130 @@ function selectivityBand(s) {
     return (k * k * csa * csa) / seconds;
   }
   
+
+  /* Let-through: what the device lets past before it opens.
+
+     Cable thermal withstand is asked "can this conductor survive the fault, given
+     the device clears in t?" — which assumes the fault current flows until the
+     device operates and then stops dead. It does not: a breaker interrupts at a
+     finite current, and the part of the arc before that is what the conductor
+     actually has to survive.
+
+     Two numbers decide it, and neither can be read off a time-current curve:
+
+     - **I²t let-through**, the energy the device passes. Modern devices publish
+       it and it is small enough to be the dominant term on a high-resistance
+       cable.
+     - **Ip let-through**, the peak the device permits. It governs the mechanical
+       force on the conductor and the magnetic force in the arc chute, and it is
+       not an energy at all.
+
+     A published device figure is taken as given, because it comes from the
+     manufacturer's own test data and there is nothing to derive. Where none is
+     published the check says so: the time-current curve bounds the clearing
+     TIME but says nothing about the let-through, so quoting it as though it did
+     would be a made-up number in a calculation about whether a cable survives.
+
+     What can be bounded without a datasheet is the ideal case — zero let-through,
+     i.e. an instantaneous ideal switch — which gives the best case the cable can
+     hope for. A cable that fails even that is a definite failure; a cable that
+     passes may or may not, and the difference is the device's published data. */
+  function letThrough(prot, faultKA, opts) {
+    var iKA = num(faultKA, 0);
+    if (!(iKA > 0) || !prot) return null;
+    opts = opts || {};
+    /* Published figures, when the project carries them. */
+    var itL = num(prot.letIt, 0);          // A²s
+    var ipL = num(prot.letIp, 0);          // kA peak
+    /* The ideal: the device opens with no delay and no arc energy. Everything
+       here is in A²s, so the fault current must be in amps — faultKA is in kA and
+       squaring it made every figure wrong by a factor of a million. */
+    var iA = iKA * 1000;
+    var ideal = iA * iA;
+    /* The published figure is quoted in kA²s — thousands of A²s — which is how
+       manufacturers print it, so it is converted once here rather than at every
+       comparison. */
+    var itA2s = itL * 1000;
+    var out = {
+      faultKA: iKA,
+      /* The whole fault energy, for reference. Comparing a conductor against this
+         is comparing it against a fault that never runs to completion — the
+         device opens, and the question is what it let past before it did. */
+      idealA2s: ideal,
+      published: itL > 0,
+      letIt: itL || null,
+      letItA2s: itL > 0 ? itA2s : null,
+      letIp: ipL || null
+    };
+    /* The energy the conductor sees, and what it can stand. */
+    var csa = num(opts.csa, 0);
+    var km = num(opts.len, 0) / 1000;
+    var insul = opts.insul || 'XLPE';
+    var conductor = opts.conductor || 'Cu';
+    if (csa > 0 && km > 0) {
+      /* I²t of the cable is k²S²·1000 for km, in the same A²s units. */
+      var k = WITHSTAND_K[insul];
+      if (k && (conductor === 'Cu' || conductor === 'copper')) {
+        /* The conductor's I²t capacity, from k²S². That is a property of the
+           conductor alone and does not vary with length — a 10 m run and an
+           800 m run of the same cable withstand the same energy, and what differs
+           is how long they take to reach it. `km` is not in this expression
+           because it is not in the formula. */
+        out.cableIt = k * k * csa * csa;
+        /* Seconds the cable would survive at this fault current. */
+        out.cableSeconds = out.cableIt / ideal;
+        /* Where the length does enter: the time to reach the temperature limit
+           under a sustained fault, which is the adiabatic time and is a different
+           question from the I²t one. */
+        out.adiabaticSeconds = out.cableIt / ideal;
+      }
+      /* With published let-through, the conductor sees the lesser of the two. */
+      /* The decisive comparison is against the device's actual clearing time, not
+         against the whole fault. A 250 A MCCB clears 60 kA in about 20 ms, and a
+         240 mm² conductor survives that comfortably — comparing against the full
+         energy as though the fault persisted reported almost every feeder as a
+         failure, which is what a first pass did here.
+
+         With a published I²t let-through, that figure already accounts for both
+         the time and the arc energy, and it is the right thing to compare.
+         Without one, the clearing time from the curve is the best available
+         bound — and it is a bound, not a measurement, so the verdict says so. */
+      if (opts.clearSeconds !== undefined && opts.clearSeconds !== null) {
+        var t = num(opts.clearSeconds, 0);
+        if (t > 0) {
+          out.clearSeconds = t;
+          out.energyToClear = ideal * t;      // triangular: half the product
+          out.survivesClearingTime = out.cableIt > out.energyToClear;
+          out.clearMargin = out.cableIt / out.energyToClear;
+        }
+      }
+      if (itA2s > 0) {
+        out.survivesLetThrough = out.cableIt > itA2s;
+        /* The margin against the published let-through, kept separate from the
+           clearing-time one. They answer different questions — one is what the
+           manufacturer published, the other is what the curve implies — and
+           overwriting one with the other reported a margin sixteen times better
+           than the figure it was computed from. */
+        out.letMargin = out.cableIt / itA2s;
+        out.margin = out.letMargin;
+      }
+    }
+    /* What the check should conclude. */
+    /* The verdict is only ever 'fails' on evidence. Without a published let-through
+       the worst case is assumed, and a conductor that survives that has simply
+       not been shown to fail — which is a different statement and is what the
+       findings have to say. */
+    if (out.published && out.survivesLetThrough === false) {
+      out.verdict = 'fails';
+    } else if (out.survivesClearingTime === false) {
+      out.verdict = 'fails';
+    } else if (out.published) {
+      out.verdict = 'passes';
+    } else {
+      out.verdict = 'unproven';
+    }
+    return out;
+  }
 
   /* How long the device takes to clear, in seconds.
 
@@ -3788,7 +3976,7 @@ function selectivityBand(s) {
     panelDemand, currentFor, voltFor, cableRating, cableImpedance, voltDrop, suggestCable, suggestIncomer, maxCableA,
     txFaultKA, faultAt, boardStats, phaseSplit, audit, cableCheck,
     mccbFrameFor, icuFor, mcbRatingFor, tripFor, deviceRatingFor, proposeProt, applyProt, protAll, hasDownstream,
-    withstandI2t, clearingTimeS, checkWithstand, msOrS, WITHSTAND_K,
+    withstandI2t, letThrough, clearingTimeS, checkWithstand, msOrS, WITHSTAND_K,
     groupFindings, worstLevel, groupTitle, boardTagOf, MIN_GROUP, MAX_LIST,
     clearingTimeAt, selectivity, selectivityMessage, selectivityBand, selectivityLadder, reactive,
     arcTimeAt, arcDistanceFactor, arcAssessment,
