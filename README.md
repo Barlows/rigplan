@@ -361,6 +361,9 @@ And the motor checks, each a different fix so they are reported separately:
   depend on whether the LV winding has a delta. Names the circuits affected.
 - **Protective conductor method not stated**, on a three-phase feeder — 4 cores
   is three phases and a neutral *or* a PEN, and only the installation says which.
+  Declared once in Settings → Earthing, after which the audit stops asking and
+  flags the feeders that contradict it. See [earthing
+  arrangement](#earthing-arrangement--tn-s).
 - **Neutral bar overloaded**, where single-phase switch-mode load on a board puts
   more into the board's own neutral than its conductors carry. Distinct from the
   incoming neutral, which the vector group settles, and the delta cannot help.
@@ -449,6 +452,15 @@ what is on screen.
 Two of a kind is left unfolded — two findings are usually two separate problems,
 and folding them hides that. Severities are never merged either: a warning and
 an error that happen to share a key are two different problems.
+
+A finding also has to *earn* a group key. "Not selectively graded against the
+board above" was 34 rows on this project because each one named a different
+circuit; it is now two rows — one for boards and one for circuits, because a
+board that is not selective with the board feeding it is a coordination setting
+while a final circuit that is not selective with its board is usually a
+deliberate compromise. Likewise "is spare" and "has no outgoing circuits" were
+the same condition reached twice, and one row now carries the half that mattered:
+whether the board has spare ways left on it.
 
 ### Cable thermal withstand
 
@@ -721,8 +733,75 @@ return current, losing it removes the earth reference from every board beyond it
 fault: it is three phases and a neutral, with the PE formed separately. The core
 count cannot tell that from a four-core feeder whose fourth conductor *is* the
 earth conductor — which is TN-C-S from that board down whatever it is called
-upstream. So the app asks which it is (`PE in this cable`) rather than asserting,
-and raises it at info, grouped.
+upstream.
+
+That question used to be asked of every four-core feeder, and on a 97-circuit
+project that was 79 identical rows. It is a property of the installation, not of
+the circuits, so it is now declared once — **Settings → Earthing → Protective
+conductor**:
+
+| | what the audit does |
+|---|---|
+| *not stated* | asks about each four-core three-phase feeder, at info, grouped |
+| *formed separately* | stops asking; flags any feeder that says it carries its own PE |
+| *combined as a PEN* | flags any four-core feeder that does not account for it, as a **fault** — the neutral is earthed and must not be interrupted |
+
+Per circuit, `PE in this cable` still overrides the site declaration. The two
+answers can disagree, and that is worth asking about rather than resolving
+silently.
+
+### Sizing a conductor properly — ampacity and short circuit
+
+A feeder satisfies two constraints, and on a schedule that records load current
+only the first is visible.
+
+| | |
+|---|---|
+| **ampacity** | what the conductor carries all day |
+| **short circuit** | what it survives when the supply lets through 76 kA and the device takes 40 ms to open |
+
+The second is the adiabatic equation rearranged:
+
+    S = I·√t / k          k = 143 XLPE copper, 115 PVC
+
+At 76 kA cleared in 40 ms that is **106 mm²** — while 95 mm² carries 240 A
+comfortably. `csaForFault()` returns an orderable size rather than 106, because
+nobody specifies 106 mm². `minimumCsa()` judges both and reports which one is
+governing, since "load" and "fault" are different conversations and a single
+number for both hides which is actually binding.
+
+**Size for fault** applies it, and it is deliberately a separate action from the
+ordinary sizing pass. Ampacity sizing is a property of the load and can be done
+unattended. The short-circuit case is a property of the supply — and the supply's
+number is usually an assumption. The confirmation leads with it:
+
+> **These sizes rest on an assumption.** TX7 at 6.0% and TX8 at 6.0% percent
+> impedance has not been confirmed from a nameplate or test certificate, so the
+> fault level of 71 kA is calculated from it. A different impedance gives
+> different sizes — this is the one number to check first.
+
+Turning an assumed 6% silently into 120 mm² of copper in a bill of materials
+would be worse than the finding it came from.
+
+### Fitted spare ways
+
+A spare breaker is installed, rated and tested. What it has not got is a cable to
+anything — so it is not a circuit, and none of the checks that assume one
+terminates somewhere apply: thermal withstand, earth fault loop, protective
+conductor, harmonics, starting, earthing.
+
+This is not a detail. An unterminated spare way has been in the audit before and
+produced 96 findings across 18 breakers, every one of them meaningless: 1.5 mm² of
+cable "failing" a thermal withstand check for a breaker that terminates nothing.
+
+`isSpare` is set from the vendor sheet's own load-type column at import, and is a
+checkbox on the panel. **Blank means not stated**, and a circuit with no load
+could be a spare or a machine nobody has sized yet — only the engineer knows
+which, so the app does not guess.
+
+The one check that still applies is the breaking capacity: the device is fitted,
+and the day anything is connected to that way, "can it interrupt the fault" is a
+live question.
 
 ### Power factor correction
 
@@ -921,6 +1000,10 @@ So the method is a declared setting, not a default in the arithmetic, and the ap
 reports both figures with the comparison between them. Five coincidence bands
 from 0.60 (repetitive plant) to 1.00 (continuous, no diversity), each stating
 when it applies.
+
+All three of these — method, band, and whether to stack — are in **Settings →
+Demand**. They used to be readable only by editing the project file, while the
+headline kVA on the schedule depends on which one is in force.
 
 **The finding this produced:** PDB8's per-circuit factors sum to **0.30** of its
 connected load — 1,932 kVA against 6,497 kVA connected, with 32 of 63 circuits
