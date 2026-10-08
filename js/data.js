@@ -223,6 +223,12 @@ var LS = (function () {
   };
 
   var DEFAULTS = {
+    /* The largest incomer a distribution board may have. See pdpMaxA() in
+       calc.js for why 1,600 A is the point at which a board stops being a
+       board. Declared here because it is a project specification and not a
+       constant — some contracts set it lower, and a small transformer makes a
+       1,600 A board pointless whatever the rule says. */
+    pdpMaxIncomer  : 1600,
     designMargin   : 1.15,   // board sizing / loading design factor
     vdropLimitLv   : 3.0,    // % for LV distribution
     vdropLimitFinal: 5.0,    // % lighting final circuit

@@ -120,6 +120,52 @@ and the schedules show both.
 existed is renumbered on load, and the references its boards carried are moved into
 the Equipment ref field rather than being overwritten, so nothing is lost.
 
+### How big a distribution board may be
+
+**1,600 A of incomer.** Above that the switchgear is a switchboard, not a board:
+no moulded panel, no ways to add a circuit on site, an incomer that is not set
+with a screwdriver. It has to be specified and priced as a different product, and
+a project that specifies one as the other has a cost nobody priced.
+
+The limit is enforced in three places, because each one fails differently:
+
+| | |
+|---|---|
+| **the audit** | a board above the limit is an **error** — it is the wrong product, not an aggressive design |
+| **placement** | circuits are placed against the capacity a board may actually *use*, so a board rated higher than the limit is relieved into a new board off the same main board rather than filled |
+| **new boards** | one the app creates is never born above the limit |
+
+**Usable capacity is reported separately from the rating**, deliberately. A board
+rated 4,000 A with 683 A on it is 17% loaded, and restating that as "43% of the
+1,600 A you may use" would be a different and worse lie.
+
+**Two different problems hide behind one number**, so the message distinguishes
+them:
+
+- **the load is under the limit** — the board was bought too big. The rating
+  comes down and, if it was carrying the old one, the feeder with it. Splitting it
+  would be the wrong answer.
+- **the load is over the limit** — no rating will hold it. Another distribution
+  board off the same main board, with circuits moved across.
+
+**Balance** does the second one. It measures every board against the capacity it
+may use and keeps going until none is over — one press leaves the boards legal,
+and pressing it again when they are does nothing. It also creates boards at or
+below the limit, never above.
+
+**Fit boards** does the first one, and reports the second rather than doing it,
+because moving real circuits to real boards is Balance's job and has its own
+confirmation and undo entry.
+
+The figure is a project setting (**Settings → PDP max incomer**), because it is a
+specification and not a constant: some contracts set it lower, and a small
+transformer makes a 1,600 A board pointless whatever the rule says.
+
+On the real project **five of six distribution boards were above it** — 4,000 A
+carrying 683 A, 2,500 A carrying 481 A. All five could simply be reduced, which is
+what the app says, because boards bought big on day one and never filled are the
+common case and adding a board would be the expensive answer to the wrong problem.
+
 ### The supply hierarchy folds
 
 The tree on the left opens a level at a time: fold it to see only the

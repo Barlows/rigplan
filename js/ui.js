@@ -1124,7 +1124,23 @@
         opts(pdbs.map(function (t) { return t.id; }), o.pdbId, function (v) { var t = LC.get(S, 'pdb', v); return t ? t.tag : v; }) + '</select>') +
       '</div>' +
       '<div class="fieldset"><h4>Board rating</h4>' +
-      fRow('Incomer', '<input class="inp" type="number" list="dlIncomer" data-bind="num" data-kind="pdp" data-id="' + o.id + '" data-f="incomerA" value="' + o.incomerA + '"> <span style="font-size:10px;color:var(--fg-mute)">A</span>') +
+      fRow('Incomer', '<input class="inp" type="number" list="dlIncomer" data-bind="num" data-kind="pdp" data-id="' + o.id +
+        '" data-f="incomerA" max="' + LC.pdpMaxA(S) + '" value="' + o.incomerA + '"' +
+        (num(o.incomerA, 0) > LC.pdpMaxA(S) ? ' style="border-color:var(--bad)"' : '') +
+        '> <span style="font-size:10px;color:var(--fg-mute)">A</span>') +
+      /* The limit stated where it is broken, not only in the audit. A board
+         above it is the wrong product rather than an aggressive design, so the
+         field says so at the moment somebody is typing it — and says which of
+         the two remedies applies here, because on a board carrying less than the
+         limit the answer is to lower the number, not to add a board. */
+      (num(o.incomerA, 0) > LC.pdpMaxA(S) ? '<div class="hint" style="color:var(--bad);margin:-6px 0 8px">' +
+        'Above the ' + LC.pdpMaxA(S) + ' A limit — this is a switchboard, not a board. ' +
+        (LC.boardStats(S, o, 'pdp').amp <= LC.pdpMaxA(S)
+          ? 'This one only carries ' + LC.boardStats(S, o, 'pdp').amp.toFixed(0) +
+            ' A, so setting it to ' + LC.suggestIncomer(LC.boardStats(S, o, 'pdp').amp, num(S.design.spreadMargin, 1.25)) + ' A is the honest fix.'
+          : 'Add another distribution board off ' + ((LC.get(S, 'pdb', o.pdbId) || {}).tag || 'the same main board') +
+            ' and move circuits across, or press <b>Balance</b> to do it.') +
+        '</div>' : '') +
       fRow('Busbar', '<input class="inp" type="number" list="dlIncomer" data-bind="num" data-kind="pdp" data-id="' + o.id + '" data-f="busbarA" value="' + (o.busbarA || '') + '" placeholder="= incomer">') +
       fRow('Phases', selIn('pdp', o.id, 'phases', o.phases, LS.PHASES, function (v) { return v + ' phase'; })) +
       fRow('Ways', nIn('pdp', o.id, 'ways', o.ways, { step: 1, min: 0 }) +
@@ -2209,6 +2225,12 @@
       fRow('Imbalance limit', '<span class="unit">' + dnum('imbalanceBad', S.design.imbalanceBad, 1) + '<span class="u">%</span></span>') +
       fRow('Fault MVA factor', '<span class="unit">' + dnum('faultMVAFactor', S.design.faultMVAFactor, 0.1) + '<span class="u">×kVA</span></span>') +
       fRow('Impedance / stage', '<span class="unit">' + dnum('zpuPerStage', S.design.zpuPerStage, 0.01) + '<span class="u">pu</span></span>') +
+      fRow('PDP max incomer', '<span class="unit">' + dnum('pdpMaxIncomer', S.design.pdpMaxIncomer, 50) +
+        '<span class="u">A</span></span>') +
+      '<div class="hint" style="max-width:640px">The largest incomer a distribution board may have — ' +
+      'everything above it is a switchboard, not a board. New circuits are placed against this figure ' +
+      'rather than the board\'s label, so a board rated higher than the limit is relieved into another ' +
+      'board off the same main board instead of being filled. Raise it only if the specification does.</div>' +
       fRow('Power factor limit', '<span class="unit">' + dnum('pfLimit', S.design.pfLimit, 0.05) + '<span class="u">pf</span></span>') +
       fRow('Harmonic watch', '<span class="unit">' + dnum('thdWatch', S.design.thdWatch, 1) + '<span class="u">% THD</span></span>') +
       '</div>' +
@@ -2901,6 +2923,75 @@
      project imported from a vendor's schedule arrives with every circuit's real
      device already on it, and quietly replacing those would throw away the only
      part of the data that came from the switchgear schedule. */
+  /* Bring the distribution boards inside the incomer limit, by whichever of the
+     two remedies actually applies to each one.
+
+     A board over the limit has two quite different problems and one button that
+     could easily treat them the same. If the load on it is already under the
+     limit then the board was bought too big and nothing needs splitting — the
+     rating comes down and the feeder with it. If the load is over the limit then
+     no rating will hold it and the answer is another board off the same main
+     board, which is what Balance does.
+
+     Both are engineering decisions, so both are listed and neither is applied
+     without the confirmation naming them. The split case is not applied at all
+     here: it moves real circuits to real boards, and Balance already does that
+     with its own confirmation and its own undo entry. */
+  function fitBoardsToLimit() {
+    var cap = LC.pdpMaxA(S);
+    var rows = S.pdps.filter(function (b) { return num(b.incomerA, 0) > cap; })
+      .map(function (b) {
+        var st = LC.boardStats(S, b, 'pdp');
+        /* The project's own sizing margin, so the correction does not itself
+           create a "heavily loaded" warning on the board it is fixing. */
+        var suggest = LC.suggestIncomer(st.amp || 160, num(S.design.spreadMargin, 1.25));
+        return { board: b, amp: st.amp, suggest: Math.min(suggest, cap),
+                 split: st.amp > cap };
+      });
+    if (!rows.length) { toast('Every distribution board is already at or below ' + cap + ' A', 'good'); return; }
+    var lower = rows.filter(function (r) { return !r.split; });
+    var split = rows.filter(function (r) { return r.split; });
+
+    var body = rows.length + ' distribution board(s) above the ' + cap + ' A limit.';
+    if (lower.length) {
+      body += '<div style="margin-top:10px"><b>' + lower.length + ' can simply be reduced</b> — the load is already ' +
+        'inside the limit, so the board was bought too big and the rating can come down:</div>' +
+        '<table class="tbl" style="margin-top:4px"><tr><th>Board</th><th>Now</th><th>→</th><th>Carrying</th></tr>' +
+        lower.map(function (r) {
+          return '<tr><td>' + esc(r.board.tag) + '</td><td>' + r.board.incomerA.toLocaleString() +
+            ' A</td><td>' + r.suggest.toLocaleString() + ' A</td><td>' + r.amp.toFixed(0) + ' A</td></tr>';
+        }).join('') + '</table><div class="hint">Each feeder is re-checked against the new rating and resized if it ' +
+        'was carrying the old one. A cable already large enough is left as it is — too much copper is a commercial ' +
+        'point, not a fault — so if it was specified for the rating being reduced, take it off the cable schedule ' +
+        'yourself.</div>';
+    }
+    if (split.length) {
+      body += '<div style="margin-top:12px"><b>' + split.length + ' genuinely need another board</b> — the load exceeds ' +
+        'the limit, so no rating will hold them:</div>' +
+        '<table class="tbl" style="margin-top:4px"><tr><th>Board</th><th>Rated</th><th>Carrying</th><th>Boards needed</th></tr>' +
+        split.map(function (r) {
+          return '<tr><td>' + esc(r.board.tag) + '</td><td>' + r.board.incomerA.toLocaleString() + ' A</td><td>' +
+            r.amp.toFixed(0) + ' A</td><td>' + Math.ceil(r.amp / cap) + '</td></tr>';
+        }).join('') + '</table><div class="hint">These are left alone. Press <b>Balance</b> to create the extra boards off ' +
+        'the same main board and move circuits across.</div>';
+    }
+    var actions = [{ label: 'Cancel', fn: closeModal }];
+    if (lower.length) actions.unshift({ label: 'Reduce ' + lower.length + ' board(s)', cls: 'primary', fn: function () {
+      closeModal();
+      pushUndo('reduce distribution board ratings to the limit');
+      lower.forEach(function (r) { r.board.incomerA = r.suggest; });
+      LC.sizeAll(S);
+      renumber();
+      commit(true);
+      toast(lower.length + ' board(s) set to within the ' + cap + ' A limit · press <b>Audit</b> to re-check', 'good');
+    } });
+    if (!lower.length && split.length) actions.unshift({ label: 'Open Balance', cls: 'primary', fn: function () {
+      closeModal();
+      globalAction('balance');
+    } });
+    modal('Bring ' + rows.length + ' board(s) within the limit?', body, actions, true);
+  }
+
   /* Size the undersized feeders, and say what the sizes rest on before doing it.
 
      Not part of the ordinary sizing pass, and deliberately a separate action.
@@ -4374,6 +4465,8 @@
     el('btnProtect').onclick = function () { globalAction('protect'); };
     var bf = el('btnSizeFault');
     if (bf) bf.onclick = function () { sizeFeedersForFault(); };
+    var bl = el('btnFitBoards');
+    if (bl) bl.onclick = function () { fitBoardsToLimit(); };
     el('btnCsv').onclick = exportCsv;
     el('btnJson').onclick = exportJson;
     el('btnPrint').onclick = printReport;
@@ -4480,6 +4573,7 @@
     if (a === 'auditgroup') { auditGrouped = !auditGrouped; renderTab(); return; }
     if (a === 'protect') return proposeAllProt();
     if (a === 'size-fault') return sizeFeedersForFault();
+    if (a === 'fit-boards') return fitBoardsToLimit();
     if (a === 'protect-keep') return proposeAllProt(true);
     if (a === 'balance' || a === 'balance-tx') {
       var cross = a === 'balance-tx';

@@ -345,9 +345,24 @@ def run(chrome, port, names):
             failed_suites.append(name)
             continue
         elif "running…" in body:
-            print("  %-12s DID NOT FINISH — the page threw before writing its results" % name)
-            failed_suites.append(name)
-            continue
+            # Unfinished, and on a page with no #state marker to tell a hang from
+            # a throw. The retry is not leniency: a page that threw will throw
+            # again with three times the budget, and this branch is only reached
+            # because the first attempt left a placeholder rather than a tally.
+            # It matters because without it a suite that is merely slow fails the
+            # whole run at random — which trains the reader to ignore a red
+            # build, which is the one thing a test gate must not do.
+            #
+            # The retry used to cover only pages carrying #state, so every suite
+            # written in the other style failed outright whenever Chrome's virtual
+            # clock ran out. That was intermittent by construction.
+            dom = dump_dom(chrome, url, budget * 3)
+            body = strip_tags(dom)
+            if "running…" in body:
+                print("  %-12s DID NOT FINISH — still a placeholder with 3x the budget, so the page threw" % name)
+                failed_suites.append(name)
+                continue
+            print("  %-12s retried — the first attempt ran out of budget, not patience" % name)
 
         fails = failures_of(dom)
 

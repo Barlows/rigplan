@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Load Schedule &amp; LV Distribution Plan — Electrical</title>
-<link rel="stylesheet" href="css/styles.css?v=350">
+<link rel="stylesheet" href="css/styles.css?v=367">
 </head>
 <body>
 
@@ -109,6 +109,7 @@
         <button class="btn warn" id="btnRebalance" title="Level the loading of the distribution boards feeding from each main board">Balance</button>
         <button class="btn" id="btnRebalanceTx" title="Also move circuits between main boards / transformers — this changes the supply topology">Balance ↔ TX</button>
         <button class="btn" id="btnProtect" title="Propose a protective device for every supply: MCCB on the main and distribution boards, MCB on the sub-boards, MCB on the final circuits">Propose protection</button>
+        <button class="btn" id="btnFitBoards" title="Bring distribution boards inside the maximum incomer, either by reducing a rating that is larger than the load or by splitting a board that is too heavily loaded">Fit boards</button>
         <button class="btn" id="btnSizeFault" title="Size the undersized feeders for the short-circuit current the supply actually produces, as well as for their load">Size for fault</button>
         <button class="btn" id="btnAudit" title="Run the design checks and list anything that needs attention">Audit</button>
       </div>
@@ -158,14 +159,14 @@
   </div>
 </div>
 
-<script src="js/data.js?v=350"></script>
-<script src="js/csv.js?v=350"></script>
-    <script src="js/xlsx.js?v=350"></script>
-<script src="js/calc.js?v=350"></script>
-<script src="js/dxf.js?v=350"></script>
-<script src="js/underlay.js?v=350"></script>
-<script src="js/plan.js?v=350"></script>
-<script src="js/sld.js?v=350"></script>
-<script src="js/ui.js?v=350"></script>
+<script src="js/data.js?v=367"></script>
+<script src="js/csv.js?v=367"></script>
+    <script src="js/xlsx.js?v=367"></script>
+<script src="js/calc.js?v=367"></script>
+<script src="js/dxf.js?v=367"></script>
+<script src="js/underlay.js?v=367"></script>
+<script src="js/plan.js?v=367"></script>
+<script src="js/sld.js?v=367"></script>
+<script src="js/ui.js?v=367"></script>
 </body>
 </html>

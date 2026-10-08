@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=350"></script>
-<script src="../js/calc.js?v=350"></script>
+<script src="../js/data.js?v=367"></script>
+<script src="../js/calc.js?v=367"></script>
 <script>
 (function () {
   var results = [];
@@ -2295,6 +2295,133 @@
   peC.isSpare = false;
   check('clearing the declaration puts the question back',
     LC.audit(pe.p).filter(function (f) { return /protective conductor is provided/.test(f.title); }).length, 1);
+
+  /* ------------------------------------------- the distribution board limit --
+     1,600 A of incomer is the ceiling for a distribution board. Above it the
+     switchgear is a switchboard: no moulded panel, no ways to add a circuit on
+     site, an incomer that is not set with a screwdriver. It has to be specified
+     and priced as a different product.
+
+     The rule has to hold in three places, because each one fails differently:
+     what the audit reports, where circuits get placed, and what a new board is
+     allowed to be born as. A limit enforced in only one of them is a limit that
+     gets worked around. */
+  check('the limit is 1,600 A unless the project says otherwise',
+    LC.pdpMaxA(site().p), 1600);
+  var capSite = site();
+  capSite.p.design.pdpMaxIncomer = 1250;
+  check('and a declared limit replaces it', LC.pdpMaxA(capSite.p), 1250);
+
+  /* Usable capacity is the declared rating except where the cap binds — and it
+     is reported separately rather than folded into the rating, so that "17% of a
+     4,000 A board" stays true and is not restated as "43% of a 1,600 A board". */
+  var capBoard = LS.newPdp({ pdbId: capSite.pdb.id, incomerA: 4000 });
+  capBoard.__kind = 'pdp';
+  var smallBoard = LS.newPdp({ pdbId: capSite.pdb.id, incomerA: 800 });
+  check('a board over the limit may only be used up to the limit — the declared one',
+    LC.usableA(capSite.p, capBoard, 'pdp'), LC.pdpMaxA(capSite.p));
+  check('and with the default limit that is 1,600 A',
+    LC.usableA(site().p, LS.newPdp({ pdbId: capSite.pdb.id, incomerA: 4000 }), 'pdp'), 1600);
+  check('a board under it is used to its own rating',
+    LC.usableA(capSite.p, smallBoard, 'pdp'), 800);
+  check('the declared rating is untouched', capBoard.incomerA, 4000);
+  check('and its reported loading is its real loading, not the capped one',
+    LC.boardStats(capSite.p, capBoard, 'pdp').util, 0);
+  /* The cap is a distribution-board rule. A main board or a sub-board above
+     1,600 A is ordinary and must not be reported as one. */
+  var bigPdb = LS.newPdb({ txId: capSite.tx.id, incomerA: 4000 });
+  check('a main board above the limit is not clamped',
+    LC.usableA(capSite.p, bigPdb, 'pdb'), 4000);
+  check('an unstated rating is still "cannot say", not a capacity',
+    LC.usableA(capSite.p, LS.newPdp({ pdbId: capSite.pdb.id, incomerA: 0 }), 'pdp'), 0);
+
+  /* The audit. Two different problems behind one number, so two different
+     messages: a board too big for its load can simply be reduced, and only a
+     board that is too small for its load has to be split. */
+  var big1 = site();
+  var overPdp = LS.newPdp({ pdbId: big1.pdb.id, incomerA: 4000 });
+  overPdp.__kind = 'pdp'; big1.p.pdps.push(overPdp);
+  LC.applyNumbering(big1.p);
+  load(big1.p, overPdp, 600, 0.95);
+  LC.applyNumbering(big1.p);
+  var capFind = LC.audit(big1.p).filter(function (f) { return /above the 1,600 A limit/.test(f.title); });
+  check('a board over the limit is reported', capFind.length >= 1, true);
+  check('and it is an error, not a note — it is the wrong product', capFind[0].level, 'bad');
+  check('the finding names the rating and the limit',
+    /4,000 A/.test(capFind[0].title) && /1,600 A/.test(capFind[0].title), true);
+  check('and explains what changes above the limit',
+    /switchboard, not a board/.test(capFind[0].detail), true);
+  /* 600 kW is 728 A — well inside the limit, so splitting it would be wrong. */
+  check('a board carrying less than the limit is told to be reduced, not split',
+    /not to split it/.test(capFind[0].detail), true);
+  /* The suggested rating must carry the project's margin, not be sized on the
+     exact present load — otherwise the correction creates a "heavily loaded"
+     warning on the board it was fixing. */
+  var suggested = Number((capFind[0].detail.match(/incomer to ([\d,]+) A/) || [])[1].replace(/,/g, ''));
+  check('and the rating it suggests is inside the limit', suggested <= 1600, true);
+  check('and carries headroom rather than sitting on the load',
+    suggested >= Math.ceil(LC.boardStats(big1.p, overPdp, 'pdp').amp * 1.2), true);
+
+  /* Now the case where splitting is the only answer. */
+  var big2 = site();
+  var splitPdp = LS.newPdp({ pdbId: big2.pdb.id, incomerA: 1600 });
+  splitPdp.__kind = 'pdp'; big2.p.pdps.push(splitPdp);
+  for (var ci = 0; ci < 3; ci++) load(big2.p, splitPdp, 400, 0.95);
+  LC.applyNumbering(big2.p);
+  /* The rating is at the limit, so no cap finding — the overload is the finding.
+     Raise the rating so the cap is what is reported, which is the case the
+     message has to get right. */
+  splitPdp.incomerA = 2500;
+  LC.applyNumbering(big2.p);
+  var splitFind = LC.audit(big2.p).filter(function (f) { return /above the 1,600 A limit/.test(f.title); });
+  check('a board loaded past the limit is told it needs more boards',
+    splitFind.length >= 1 && /needs 2 boards/.test(splitFind[0].detail), true);
+  check('and that the extra board comes off the same main board',
+    /another distribution board off PDB/.test(splitFind[0].detail), true);
+  check('and points at Balance, which is what does it',
+    /Balance/.test(splitFind[0].detail), true);
+
+  /* Balance. One press has to leave the boards legal, or the button looks
+     broken — and it must not create a board over the limit on the way. */
+  function multiBoard(n, kw) {
+    var g = site();
+    var P = g.p;
+    for (var i = 0; i < n; i++) load(P, g.pdp, kw || 400, 0.95);
+    LC.applyNumbering(P);
+    return g;
+  }
+  var bal = multiBoard(8);
+  var loadedBefore = LC.boardStats(bal.p, bal.pdp, 'pdp').amp;
+  check('the test board starts over its usable capacity',
+    loadedBefore > LC.usableA(bal.p, bal.pdp, 'pdp'), true);
+  var balMoves = LC.autoBalance(bal.p, {});
+  LC.applyNumbering(bal.p);
+  check('Balance splits it into more than one board',
+    bal.p.pdps.length > 1, true);
+  check('every board ends inside the capacity it may actually use',
+    bal.p.pdps.every(function (b) {
+      return LC.boardStats(bal.p, b, 'pdp').amp <= LC.usableA(bal.p, b, 'pdp');
+    }), true);
+  check('and every new board hangs off the same main board',
+    bal.p.pdps.every(function (b) { return b.pdbId === bal.pdb.id; }), true);
+  check('no board is created above the limit',
+    bal.p.pdps.every(function (b) { return b.incomerA <= LC.pdpMaxA(bal.p); }), true);
+  check('it reports the moves it made', balMoves.length > 1, true);
+  /* Idempotent: pressing it again when nothing is over capacity must do nothing,
+     because a tool that keeps moving circuits on every press cannot be trusted. */
+  check('and pressing it again moves nothing',
+    LC.autoBalance(bal.p, {}).length, 0);
+  /* At least the number of boards the limit implies. Exactly that number is not
+     the claim: how many circuits pack onto a board depends on their sizes, so a
+     load needing four can come out on five with every board inside its limit and
+     none of them empty. Asserting an exact count here would pin the packing
+     rather than the rule. */
+  check('it creates at least the number of boards the limit implies',
+    bal.p.pdps.length >= Math.ceil(loadedBefore / LC.pdpMaxA(bal.p)), true);
+  /* ...and no board is left standing empty, which is the failure mode an exact
+     count would have hidden. */
+  check('and it leaves no board with nothing on it',
+    bal.p.pdps.every(function (b) { return LC.boardStats(bal.p, b, 'pdp').amp > 0; }), true);
 
   /* ------------------------------------------------------- everything at once */
   var z = site();

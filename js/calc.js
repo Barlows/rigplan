@@ -475,6 +475,39 @@ var LC = (function () {
     var r = cableRating(c);
     return r.derated;
   }
+  /* The maximum incomer a distribution board may have.
+
+     1,600 A is the practical ceiling for a distribution board: above it the
+     switchgear is a switchboard, and the things that make a board a board — a
+     moulded orWithdrawable panel, ways you can add a circuit to on site, an
+     incomer you set with a screwdriver — stop being true. 2,000 A is not a
+     bigger board, it is a different product, and specifying it as one is how a
+     project ends up with a switchboard nobody priced.
+
+     It is a declared project setting rather than a constant, because it is a
+     commercial and standards decision — some specifications set a lower figure,
+     and a site with a 630 A transformer has no business with a 1,600 A board
+     whatever the rule says. */
+  function pdpMaxA(p) {
+    return num(p && p.design && p.design.pdpMaxIncomer, 1600);
+  }
+
+  /* How many amps a board may actually take.
+
+     The declared incomer, except on a distribution board where the cap binds.
+     Stated as a separate figure rather than folded into boardStats().rating so
+     that every number the app prints about a board stays true: a board rated
+     4,000 A with 683 A on it is 17% loaded, and saying 43% because only
+     1,600 A of the board may be used would be a different and worse lie.
+
+     Zero when the rating is not stated, which keeps the existing behaviour of
+     "cannot say" rather than inventing a capacity. */
+  function usableA(p, board, kind) {
+    var r = num(board && board.incomerA, 0);
+    if (!(r > 0)) return 0;
+    return kind === 'pdp' ? Math.min(r, pdpMaxA(p)) : r;
+  }
+
   function suggestIncomer(amp, margin) {
     margin = margin || 1.25;
     var need = amp * margin;
@@ -964,6 +997,53 @@ var LC = (function () {
       if (!dbOfPdp(p, d.id).length) add('info', 'pdp', d.id, d.tag + ' has no sub-board',
         'A distribution board usually carries one for lighting and small power, and you would have use for it later.');
     });
+
+    /* ---------------------------------------------------- the board size limit --
+       A distribution board is capped at 1,600 A of incomer. Above that the
+       switchgear is a switchboard: the things that make a board a board — a
+       moulded or withdrawable panel, ways a circuit can be added to on site, an
+       incomer set with a screwdriver — stop being true, and it has to be
+       specified, priced and built as a different product.
+
+       This is raised as an error rather than a warning because a board over the
+       limit is the wrong object, not a design that happens to be aggressive.
+       Nothing downstream can rescue it: the feeder to it has to be sized for
+       4,000 A whether the board is justified or not, and that cable is on the
+       bill.
+
+       The remedy is a second board off the same main board, not a bigger one,
+       and the message says how much is actually on it — because a 4,000 A board
+       carrying 683 A is usually a board that was bought big on day one and never
+       filled, and the honest answer there is to reduce it rather than split it. */
+    (function () {
+      var cap = pdpMaxA(p);
+      var over = p.pdps.filter(function (d) { return num(d.incomerA, 0) > cap; });
+      if (!over.length) return;
+      over.forEach(function (d) {
+        var st = boardStats(p, d, 'pdb' === d.__kind ? 'pdb' : 'pdp');
+        var need = Math.ceil(st.amp / cap) || 1;
+        var used = num(d.incomerA, 0);
+        add('bad', 'pdp', d.id,
+          d.tag + ' is ' + used.toLocaleString() + ' A, above the ' + cap.toLocaleString() + ' A limit for a distribution board',
+          'A distribution board above ' + cap.toLocaleString() + ' A of incomer is a switchboard, not a board, and has ' +
+          'to be specified as one. Its feeder is sized for ' + used.toLocaleString() +
+          ' A whether that is justified or not, so the cable is on the bill either way.' +
+          ' This board actually carries ' + st.amp.toFixed(0) + ' A' +
+          (st.amp <= cap
+            ? ', which is inside the limit — so the honest fix is to set the incomer to ' +
+              /* The project's own sizing margin, not 1.0. Sizing a board to its
+                 exact present load is how "heavily loaded" warnings get created
+                 by the very correction meant to remove them, and a board with no
+                 headroom has to be replaced the first time a circuit is added. */
+              suggestIncomer(st.amp, D.num(p.design.spreadMargin, 1.25)) + ' A, not to split it.'
+            : ', which needs ' + need + ' board' + (need > 1 ? 's' : '') + ' at ' + cap.toLocaleString() +
+              ' A each. Add another distribution board off ' + ((get(p, 'pdb', d.pdbId) || {}).tag || 'the same main board') +
+              ' and move circuits until both are under the limit. Press <b>Balance</b> to do that move: it measures a ' +
+              'board against the capacity it may actually use, so a board this size is relieved into a new board off ' +
+              'the same main board rather than filled.'),
+          'pdp-cap', st.amp, 'A');
+      });
+    })();
 
     /* ---------------------------------------------------- protection devices */
     /* Each supply is checked three ways, which are three different failures:
@@ -4359,6 +4439,7 @@ function selectivityBand(s) {
     if (key === 'selectivity-board') return 'board not selectively graded against the board above it';
     if (key === 'board-empty') return 'board on the schedule with nothing fed from it';
     if (key === 'just-matched') return 'device matched to its cable with under 5% headroom';
+    if (key === 'pdp-cap') return 'distribution board above the incomer limit';
     if (key === 'vdrop-path') return 'circuit whose total volt drop from the transformer exceeds the limit';
     if (key === 'vdrop-incomplete') return 'circuits whose voltage drop profile cannot be completed';
     if (key === 'impz-assumed') return 'transformers whose impedance is assumed rather than stated';
@@ -4699,7 +4780,13 @@ function selectivityBand(s) {
     var distW = 1.6 * clamp(30 / Math.max(add, 5), 1, 4);
     var candidates = p.pdps.map(function (d) {
       var st = boardStats(p, d, 'pdp');
-      var utilAfter = st.rating ? ((st.amp + add) / st.rating) * 100 : 0;
+      /* Measured against the capacity the board may actually use, not its label.
+         A 4,000 A board is 1,600 A of board as far as adding circuits to it is
+         concerned, so a circuit that would take the useful load past 1,600 A has
+         to go somewhere else — which is how an extra board gets created off the
+         same main board instead of the existing one being quietly overloaded. */
+      var usable = usableA(p, d, 'pdp');
+      var utilAfter = usable ? ((st.amp + add) / usable) * 100 : 0;
       var d2 = d.pos && panel.pos ? Math.hypot(d.pos.x - panel.pos.x, d.pos.y - panel.pos.y) : 0;
       var pdb = get(p, 'pdb', d.pdbId);
       var crosses = !!(pdb && myTx && pdb.txId && pdb.txId !== myTx);
@@ -4796,7 +4883,12 @@ function selectivityBand(s) {
     var st = boardStats(p, parent, 'pdp');
     var panelAmp = panelDemand(p, panel).amp;
     var carry = st.amp + panelAmp;
-    var need = Math.max(160, suggestIncomer(carry, D.num(p.design.spreadMargin, 1.25)));
+    /* Clamped to the cap, and then to a real size again — a board created by the
+       app must not come out above the limit the app enforces, and a clamped
+       figure is not a catalogue rating either. */
+    var want = Math.max(160, suggestIncomer(carry, D.num(p.design.spreadMargin, 1.25)));
+    var cap = pdpMaxA(p);
+    var need = want > cap ? Math.min(cap, suggestIncomer(carry, 1)) : want;
     var siblings = pdpOfPdb(p, pdb.id);
     var pos = nextPracticalPos(p, { anchor: parent.pos, offset: num((opts && opts.offset) || 2, 2), w: D.SHAPE.pdp.w, h: D.SHAPE.pdp.h, clear: num((opts && opts.clear) || 1.5, 1.5) });
     var pdp = D.newPdp({
@@ -5108,24 +5200,57 @@ function selectivityBand(s) {
     Object.keys(groups).forEach(function (k) {
       levelGroup(p, groups[k].map(function (d) { return d.id; }), opts, moves);
     });
-    /* Split anything still over capacity. A sub-board and the circuits on it
-       move as one unit, so the heaviest single circuit is only a candidate
-       when it sits directly on the board being relieved. */
-    p.pdps.forEach(function (d) {
-      var st = boardStats(p, d, 'pdp');
-      if (st.util <= 100) return;
-      var loose = st.panels.filter(function (pn) { return !pn.dbId; });
-      var worst = loose.slice().sort(function (a, b) { return panelDemand(p, b).amp - panelDemand(p, a).amp; })[0];
-      if (worst) {
-        var log = assignPanel(p, worst, opts);
-        if (log.created) moves.push({ panel: worst.tag, from: d.tag, to: log.created.tag, kva: panelDemand(p, worst).kva });
-        return;
-      }
-      /* everything here hangs off a sub-board: move the heaviest sub-board */
-      var subs = dbOfPdp(p, d.id).filter(function (b) { return boardStats(p, b, 'db').amp > 0; });
-      subs.sort(function (x, y) { return boardStats(p, y, 'db').amp - boardStats(p, x, 'db').amp; });
-      if (subs.length) moves.push(subBoardMove(p, subs[0], opts));
-    });
+    /* Split anything still over capacity, and keep going until nothing is.
+
+       A sub-board and the circuits on it move as one unit, so the heaviest
+       single circuit is only a candidate when it sits directly on the board
+       being relieved.
+
+       One move per board was enough when "over capacity" meant the board was
+       over its own rating, because a single circuit was usually most of the
+       overload. It is not enough against the incomer limit: a board rated
+       4,000 A and loaded to 4,862 A needs three circuits moved before it is
+       legal, and one press of Balance leaving the board over capacity looks
+       like the button does not work. So the split runs until every board is
+       inside what it may take, with a guard against a pair of circuits that
+       cannot help each other. */
+    var guardSplit = 0;
+    var relieved;
+    do {
+      relieved = false;
+      guardSplit++;
+      p.pdps.slice().forEach(function (d) {
+        var st = boardStats(p, d, 'pdp');
+        if (st.amp <= usableA(p, d, 'pdp')) return;
+        var was = st.amp;
+        var loose = st.panels.filter(function (pn) { return !pn.dbId; });
+        var worst = loose.slice().sort(function (a, b) { return panelDemand(p, b).amp - panelDemand(p, a).amp; })[0];
+        if (worst) {
+          var log = assignPanel(p, worst, opts);
+          /* Relief, not board creation, is what the loop is waiting for.
+             Counting only a new board meant that once there were two boards the
+             second circuit moved onto the existing one, nothing was recorded, and
+             the loop decided it was finished with the board still overloaded —
+             one press of Balance left it 3,646 A on a 1,600 A board. */
+          var now = boardStats(p, d, 'pdp').amp;
+          if (now < was - 0.5) {
+            moves.push({ panel: worst.tag, from: d.tag,
+                         to: (log.to ? (get(p, 'pdp', log.to) || {}).tag : ''),
+                         created: log.created ? log.created.tag : null,
+                         kva: panelDemand(p, worst).kva });
+            relieved = true;
+          }
+          return;
+        }
+        /* everything here hangs off a sub-board: move the heaviest sub-board */
+        var subs = dbOfPdp(p, d.id).filter(function (b) { return boardStats(p, b, 'db').amp > 0; });
+        subs.sort(function (x, y) { return boardStats(p, y, 'db').amp - boardStats(p, x, 'db').amp; });
+        if (subs.length) {
+          var mv = subBoardMove(p, subs[0], opts);
+          if (mv && boardStats(p, d, 'pdp').amp < was - 0.5) { moves.push(mv); relieved = true; }
+        }
+      });
+    } while (relieved && guardSplit < 40 && p.pdps.length < 200);
     sizeAll(p);
     return moves;
   }
@@ -5144,7 +5269,11 @@ function selectivityBand(s) {
     var util = {}, i;
     function refresh() {
       util = {};
-      ids.forEach(function (id) { var st = boardStats(p, get(p, 'pdp', id), 'pdp'); util[id] = st.util; });
+      ids.forEach(function (id) {
+        var b = get(p, 'pdp', id), st = boardStats(p, b, 'pdp');
+        var u = usableA(p, b, 'pdp');
+        util[id] = u ? (st.amp / u) * 100 : 0;
+      });
     }
     function spread() {
       var v = ids.map(function (id) { return util[id]; });
@@ -5171,8 +5300,12 @@ function selectivityBand(s) {
             if (a === b) continue;
             var dst = get(p, 'pdp', ids[b]);
             if (!dst || !dst.pos || !pn.pos) continue;
-            var uA = util[src.id] - (da.amp / stSrc.rating) * 100;
-            var uB = util[dst.id] + (da.amp / boardStats(p, dst, 'pdp').rating) * 100;
+            /* Both sides measured on usable capacity, so a move cannot push the
+               destination past the cap while its own label says there is room. */
+            var uSrc = usableA(p, src, 'pdp') || stSrc.rating;
+            var uDst = usableA(p, dst, 'pdp') || boardStats(p, dst, 'pdp').rating;
+            var uA = util[src.id] - (da.amp / uSrc) * 100;
+            var uB = util[dst.id] + (da.amp / uDst) * 100;
             if (uB > 100) continue;
             /* do not stretch a feeder across the site to save a few amps */
             var newLen = dist(dst.pos, pn.pos);
@@ -5442,7 +5575,7 @@ function selectivityBand(s) {
     hasNeutralConductor, isThreePhaseWithNeutral, supplyArrangement, neutralCheck,
     peNeededCsa,
     startMethod, startingCurrentA, startingCheck, sourceImpedanceAt, curveInstantaneousMultiple, torqueNeeded,
-    isMotorLoad, isSpare, minimumCsa, cableShortfalls, csaForFault,
+    isMotorLoad, isSpare, minimumCsa, cableShortfalls, csaForFault, pdpMaxA, usableA,
     SELECTIVITY_STEPS,
     choosePdp, assignPanel, createPdpFor, feederLen, syncLen,
     sizeCablesFor, sizeCablesForPdb, sizeCablesForDb, suggestDbFeeder, sizeCableForPanel, sizeAll, feederAmp, needsSizing,
