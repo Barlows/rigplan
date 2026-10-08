@@ -2219,6 +2219,65 @@
           return '<option value="' + v + '"' + (S.design.supplySystem === v ? ' selected' : '') + '>' + v + '</option>';
         }).join('') + '</select>') +
       fRow('Earth electrode R', '<span class="unit">' + dnum('earthElectrodeR', S.design.earthElectrodeR, 0.5) + '<span class="u">Ω</span></span>') +
+      fRow('Protective conductor', '<select class="sel" data-bind="design" data-f="peArrangement">' +
+        [['', 'not stated — asked of every four-core feeder'],
+         ['separate', 'formed separately — the fourth core is a neutral'],
+         ['pen', 'combined as a PEN — the fourth core is the earth reference']].map(function (v) {
+          return '<option value="' + v[0] + '"' +
+            ((S.design.peArrangement || '') === v[0] ? ' selected' : '') + '>' + v[1] + '</option>';
+        }).join('') + '</select>') +
+      '</div>' +
+      /* Why this is one setting and not one box per circuit: a four-core
+         three-phase feeder carries three phases and a neutral on TN-S, and the
+         question is whether the fourth core is also the protective conductor.
+         That is a property of the installation, and asking it seventy-nine
+         times produced seventy-nine identical rows. Answered here, the audit
+         stops asking and starts checking the answer. */
+      /* Demand: two methods, and they are alternatives rather than layers.
+
+         This was modelled and read by the engine with nothing on the page able to
+         set it, so the method was whatever the JSON happened to say — and the
+         headline kVA the engineer quotes changed with it. Stacking both double
+         counts the diversity, which is why it is a stated choice rather than a
+         default. */
+      '<h5>Demand</h5>' +
+      '<div class="two" style="max-width:640px">' +
+      fRow('Method', '<select class="sel" data-bind="design" data-f="demandMethod">' +
+        [['', 'not declared'], ['per-circuit', 'per-circuit demand factors'],
+         ['coincidence', 'connected total × coincidence factor']].map(function (v) {
+          return '<option value="' + v[0] + '"' +
+            ((S.design.demandMethod || '') === v[0] ? ' selected' : '') + '>' + v[1] + '</option>';
+        }).join('') + '</select>') +
+      fRow('Coincidence band', '<select class="sel" data-bind="design" data-f="demandMethodBand">' +
+        [['', 'not declared']].concat(LC.COINCIDENCE_BANDS.map(function (b) {
+          return [b.name, b.name + ' — ' + b.factor.toFixed(2)];
+        })).map(function (v) {
+          return '<option value="' + v[0] + '"' +
+            ((S.design.demandMethodBand || '') === v[0] ? ' selected' : '') + '>' + v[1] + '</option>';
+        }).join('') + '</select>') +
+      fRow('Stacking both', '<label style="font-size:11.5px;display:flex;gap:6px;align-items:center;cursor:pointer">' +
+        '<input type="checkbox" data-bind="design-coinc" ' +
+        (S.design.applyCoincidence === true ? 'checked' : '') + '>apply the coincidence factor on top</label>') +
+      '</div>' +
+      '<div class="hint">The two are alternatives, not layers. Summing per-circuit diversified loads and then ' +
+      'multiplying the result by a coincidence factor applies the diversity twice: on this project it gives ' +
+      '1,545 kVA where the honest per-circuit figure is 1,932 kVA. Leaving stacking off and declaring which ' +
+      'method is being used is what makes the number on the schedule mean one thing.</div>' +
+      '<div class="hint">' + (function () {
+        var band = LC.COINCIDENCE_BANDS.filter(function (b) { return b.name === S.design.demandMethodBand; })[0];
+        if (!band) return 'No coincidence band declared, so a board assessed by that method will say so rather than ' +
+          'be given a factor nobody chose.';
+        return 'Band: ' + esc(band.name) + ' at ' + band.factor.toFixed(2) + '. ' + esc(band.note);
+      })() + '</div>' +
+      '<div class="hint">' + (S.design.peArrangement === 'separate'
+        ? 'Declared: the protective conductor is formed separately, so a four-core feeder is three phases and a neutral. ' +
+          'The audit will no longer ask, and will flag any feeder that says otherwise.'
+        : S.design.peArrangement === 'pen'
+          ? 'Declared: the protective conductor is combined with the neutral. Every PEN downstream is also a neutral, ' +
+            'so it must not be interrupted by a single-pole switch, and the fourth core is the earth reference for ' +
+            'everything below it. The audit will flag any feeder that does not account for that.'
+          : 'Not stated. Until it is, the audit asks about the protective conductor on every four-core three-phase ' +
+            'feeder, because a four-core cable with a separate PE and a four-core PEN look identical on a schedule.') +
       '</div>' +
       /* What the chosen arrangement actually means for this installation. The
          arrangements are not three names for one thing and the differences are
@@ -2492,7 +2551,27 @@
     /* a checkbox or a select fires on change; a text input on every keystroke */
     var discrete = t.type === 'checkbox' || t.tagName === 'SELECT';
     pushUndo(undoLabel(kind, id, f), discrete ? null : kind + ':' + id + ':' + f);
-    if (b === 'design') { S.design[f] = num(v); }
+    /* A boolean, stored as one. It went through the numeric coercion below along
+       with everything else in the design block, where num(false) is 0 and
+       num('true') is NaN — so the checkbox read itself unchecked whatever was
+       done to it, and coincidence stacking was silently impossible to enable. */
+    if (b === 'design-coinc') {
+      S.design.applyCoincidence = !!t.checked;
+      renderTab(); renderProps();
+      return;
+    }
+    /* The design block is not all numbers. Coercing every field through num()
+       meant parseFloat('TN-S') → NaN → 0, so choosing TT or TN-C-S in the
+       supply-system menu stored a 0 and the earthing arrangement, the
+       disconnection-time table, the neutral model and the core count all went on
+       reading TN-S. The menu appeared to work and changed nothing, which is the
+       worst way a setting can fail. Type decides the coercion, the same way the
+       item binding already does it. */
+    if (b === 'design') {
+      S.design[f] = t.type === 'number'
+        ? num(v)
+        : (v === '' ? null : v);
+    }
     else if (b === 'meta') { S[f] = v; }
     else if (b === 'site') { S.site[f] = num(v); }
     else if (b === 'item') {
@@ -2822,6 +2901,69 @@
      project imported from a vendor's schedule arrives with every circuit's real
      device already on it, and quietly replacing those would throw away the only
      part of the data that came from the switchgear schedule. */
+  /* Size the undersized feeders, and say what the sizes rest on before doing it.
+
+     Not part of the ordinary sizing pass, and deliberately a separate action.
+     Ampacity sizing is a property of the load and can be done unattended. The
+     short-circuit case is not: it is a property of the supply, and the supply's
+     number is usually an assumption nobody has checked. On this project 48
+     feeders fail thermal withstand at 76 kA and would pass at 44 kA, and the
+     difference between those two is one transformer nameplate figure.
+
+     So the confirmation leads with that figure, names how many feeders rest on
+     it, and lists the sizes it would change. An action that silently turns an
+     assumption into 120 mm² of copper in a bill of materials is worse than the
+     finding it came from. */
+  function sizeFeedersForFault() {
+    var rows = LC.cableShortfalls(S);
+    if (!rows.length) { toast('Every feeder already meets both constraints', 'good'); return; }
+    var assumed = (S.txs || []).filter(function (t) { return num(t.kva, 0) > 0 && t.impZStated !== true; });
+    var fault = rows[0].faultKA;
+    var byFault = rows.filter(function (r) { return r.governed === 'fault'; }).length;
+
+    var body = '<div>' + rows.length + ' feeder(s) are below the size they need: ' +
+      byFault + ' because of the fault current and ' + (rows.length - byFault) + ' because of the load.</div>';
+    if (assumed.length) {
+      /* Joins read as English rather than as a list, because this sentence sits
+         in a warning and "TX8 at 6.0%, TX7 at 6.0% percent impedance has not
+         been confirmed" is not one. */
+      var names = assumed.map(function (t) { return t.tag + ' at ' + num(t.impZ, 6).toFixed(1) + '%'; });
+      var joined = names.length === 1 ? names[0] : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+      body += '<div class="warnbox" style="margin-top:10px"><b>These sizes rest on an assumption.</b> ' +
+        joined + (names.length === 1 ? ' has' : ' have') +
+        ' not been confirmed from a nameplate or test certificate, so the fault level of ' +
+        fault.toFixed(0) + ' kA is calculated from it. A different impedance gives different sizes — this is the ' +
+        'one number to check first.</div>';
+    } else {
+      body += '<div class="hint" style="margin-top:10px">Transformer impedance is stated on every transformer, ' +
+        'so the fault level of ' + fault.toFixed(0) + ' kA is calculated rather than assumed.</div>';
+    }
+    var show = rows.slice(0, 8);
+    body += '<div style="margin-top:10px;max-height:190px;overflow:auto"><table class="tbl">' +
+      '<tr><th>Feeder</th><th>Now</th><th>→</th><th>Because</th></tr>' +
+      show.map(function (r) {
+        return '<tr><td>' + esc(r.pn.tag) + '</td><td>' + r.now + ' mm²</td><td>' + r.min + ' mm²</td><td>' +
+          (r.governed === 'fault'
+            ? esc(fault.toFixed(0) + ' kA, cleared in ' + ((r.pn.prot && LC.clearingTimeAt(r.pn.prot,
+                fault * 1000 / Math.max(1, r.ir)) || 0) * 1000).toFixed(0) + ' ms')
+            : esc(r.ir + ' A device')) + '</td></tr>';
+      }).join('') + '</table></div>';
+    if (rows.length > show.length) body += '<div class="hint">…and ' + (rows.length - show.length) + ' more.</div>';
+    body += '<div class="hint" style="margin-top:10px">Each feeder is set to the larger of the two sizes. Parallel ' +
+      'runs are judged on one run alone, because they share a fault rather than standing apart from it.</div>';
+
+    modal('Size ' + rows.length + ' feeder(s) for the fault level?', body,
+      [{ label: 'Size them', cls: 'primary', fn: function () {
+          closeModal();
+          pushUndo('size feeders for the fault level');
+          rows.forEach(function (r) { r.pn.cable.csa = r.min; });
+          renumber();
+          commit(true);
+          toast(rows.length + ' feeder(s) sized for the fault level · press <b>Audit</b> to re-check', 'good');
+        } },
+       { label: 'Cancel', fn: closeModal }], true);
+  }
+
   function proposeAllProt(keepExisting) {
     var counts = { pdb: 0, pdp: 0, db: 0, panel: 0 };
     var existing = 0;
@@ -4230,6 +4372,8 @@
     el('btnRedo').onclick = function () { doRedo(); };
     el('btnAudit').onclick = function () { tab = 'audit'; syncTabs(); renderTab(); toast(LC.audit(S).length + ' design checks evaluated', ''); };
     el('btnProtect').onclick = function () { globalAction('protect'); };
+    var bf = el('btnSizeFault');
+    if (bf) bf.onclick = function () { sizeFeedersForFault(); };
     el('btnCsv').onclick = exportCsv;
     el('btnJson').onclick = exportJson;
     el('btnPrint').onclick = printReport;
@@ -4335,6 +4479,7 @@
     if (a === 'mapcal') return mapCalibrate();
     if (a === 'auditgroup') { auditGrouped = !auditGrouped; renderTab(); return; }
     if (a === 'protect') return proposeAllProt();
+    if (a === 'size-fault') return sizeFeedersForFault();
     if (a === 'protect-keep') return proposeAllProt(true);
     if (a === 'balance' || a === 'balance-tx') {
       var cross = a === 'balance-tx';

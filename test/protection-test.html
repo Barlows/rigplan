@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=342"></script>
-<script src="../js/calc.js?v=342"></script>
+<script src="../js/data.js?v=350"></script>
+<script src="../js/calc.js?v=350"></script>
 <script>
 (function () {
   var results = [];
@@ -2244,6 +2244,57 @@
   check('a stated impedance is not reported as an assumption', said.length, 0);
   check('but the fault level it gives is still recorded',
     LC.audit(imp.p).some(function (f) { return /gives a fault level/.test(f.title); }), true);
+
+  /* ------------------------------------------------- the protective conductor --
+     A four-core three-phase feeder is ordinary on TN-S: three phases, a neutral,
+     and a protective conductor formed separately or alongside. What a schedule
+     cannot show is whether the fourth core is a neutral doing its own job or a
+     combined protective and neutral conductor, because a four-core cable with a
+     separate PE looks identical on a schedule.
+
+     So the app asked. On a real project that produced 79 identical rows — one
+     question about the installation, asked once per circuit. Declared at site
+     level it stops being asked and starts being checked, which is the only
+     version of it an engineer can act on. */
+  var pe = site();
+  var peC = load(pe.p, pe.pdp, 60, 0.9);
+  LC.protAll(pe.p, {});
+  peC.cable = { csa: 95, runs: 1, cores: 4, len: 25, method: 'XL-A1', group: 1, ambient: 40,
+                sheathed: true, needsNeutral: true };
+  var asked = LC.audit(pe.p).filter(function (f) { return /protective conductor is provided/.test(f.title); });
+  check('undeclared, a four-core three-phase feeder is asked about', asked.length, 1);
+  check('and it is asked at info, because nothing is established', asked[0].level, 'info');
+
+  pe.p.design.peArrangement = 'separate';
+  check('declared as separate, the question stops',
+    LC.audit(pe.p).filter(function (f) { return /protective conductor is provided/.test(f.title); }).length, 0);
+  /* ...and a feeder that disagrees with the declaration is now the finding.
+     The flag lives on the panel, not the cable — it is the decision about this
+     circuit, and that is where the properties panel edits it. */
+  peC.peInCable = true;
+  var contra = LC.audit(pe.p).filter(function (f) { return /protective conductor in the cable/.test(f.title); });
+  check('a feeder carrying its own PE against a separate declaration is reported', contra.length, 1);
+  check('and it is asked which of the two is true, not asserted', /worth saying which/.test(contra[0].detail), true);
+
+  /* The other direction, and the one that matters: a PEN arrangement with a
+     four-core feeder that does not account for it. */
+  pe.p.design.peArrangement = 'pen';
+  peC.peInCable = false;
+  var pen = LC.audit(pe.p).filter(function (f) { return /fourth core not accounted for/.test(f.title); });
+  check('a PEN arrangement with a four-core feeder is a fault, not a question', pen.length, 1);
+  check('and it is raised as one', pen[0].level, 'bad');
+  check('because the neutral is earthed and must not be interrupted',
+    /must not be interrupted/.test(pen[0].detail), true);
+  /* A spare way terminates nothing, so it cannot be carrying a PEN. */
+  peC.isSpare = true;
+  check('but a spare way is not asked to account for a PEN',
+    LC.audit(pe.p).filter(function (f) { return /fourth core not accounted for/.test(f.title); }).length, 0);
+
+  /* Blank and "not stated" must behave as unstated, not as declared. */
+  pe.p.design.peArrangement = '';
+  peC.isSpare = false;
+  check('clearing the declaration puts the question back',
+    LC.audit(pe.p).filter(function (f) { return /protective conductor is provided/.test(f.title); }).length, 1);
 
   /* ------------------------------------------------------- everything at once */
   var z = site();

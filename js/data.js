@@ -347,7 +347,19 @@ var LS = (function () {
        the source and the first RCD; TT and IT still need a neutral and a PE but
        the neutral is not earthed downstream. This is what decides the core
        count, and it is a property of the arrangement rather than of the load. */
-    neutralEarthedDownstream: false
+    neutralEarthedDownstream: false,
+    /* How the protective conductor reaches each feeder, declared once for the
+       site rather than asked of every circuit.
+
+       A four-core three-phase feeder is ordinary on TN-S — three phases, a
+       neutral, and a protective conductor formed separately or alongside. What
+       the core count cannot tell you is whether that fourth core is a neutral
+       doing its own job or a combined protective and neutral conductor, because
+       a four-core cable with a separate PE looks identical on a schedule. The
+       question is real and it is one question about the installation, not
+       seventy-nine about circuits: answered here, it stops being repeated and
+       the audit can flag the circuits that contradict the answer instead. */
+    peArrangement: null
   };
 
   /* Maximum disconnection time in seconds, IEC 60364-41 Table 41.4.

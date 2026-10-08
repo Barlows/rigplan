@@ -1271,7 +1271,37 @@ var LC = (function () {
          is the same cable as 4 cores that are a PEN. So this asks the question
          rather than reporting a fault it cannot establish, and it stays at info
          for the same reason. */
-      if (!isSpare(pn) && c.needsNeutral && arr.system === 'TN-S' && c.cores === 4 && !c.peInCable) {
+      var declared = p.design && p.design.peArrangement;
+      if (!isSpare(pn) && declared === 'pen' && c.needsNeutral && c.cores === 4 && !c.peInCable) {
+        /* The arrangement is declared to be a PEN, and this feeder is carrying a
+           neutral in a four-core cable without saying the fourth core is it.
+           That is the one combination that is actually broken: the neutral is
+           earthed and not switched, and the cable's protective conductor has not
+           been counted anywhere in this schedule. */
+        add('bad', 'panel', pn.id, pn.tag + ' — fourth core not accounted for on a PEN arrangement',
+          'The earthing arrangement is declared as a combined protective and neutral conductor, and this ' +
+          'feeder has ' + c.cores + ' cores carrying ' + c.needsNeutral + ' phase and a neutral with no ' +
+          'separate protective conductor. On a PEN the neutral is earthed and must not be interrupted, so the ' +
+          'neutral needs its own device, and the cable\'s fourth core is the earth reference for everything ' +
+          'downstream of it. Either declare the arrangement as separate — which is the normal case on TN-S — or ' +
+          'state the protective conductor on this feeder.',
+          'pe-method', num(pn.kw, 0));
+        return;
+      }
+      if (!isSpare(pn) && declared && c.needsNeutral && c.cores === 4 && c.peInCable) {
+        /* The other contradiction, and the harmless-looking one: the feeder says
+           its protective conductor is in the cable while the arrangement says
+           the cable carries a neutral. Both can be true — a five-core cable, or a
+           neutral that is not the PEN — so this asks which rather than assuming. */
+        add('info', 'panel', pn.id, pn.tag + ' — protective conductor in the cable, arrangement declared separate',
+          'The earthing arrangement is declared as a separate protective conductor, and this feeder carries its ' +
+          'own. That is consistent — a five-core cable, or a neutral that is not a PEN — but the arrangement ' +
+          'setting is what the rest of the project is calculated against, so it is worth saying which of the two ' +
+          'this is.',
+          'pe-method', num(pn.kw, 0));
+        return;
+      }
+      if (!isSpare(pn) && !declared && c.needsNeutral && arr.system === 'TN-S' && c.cores === 4 && !c.peInCable) {
         add('info', 'panel', pn.id, pn.tag + ' — confirm how the protective conductor is provided',
           'Four cores to a three-phase circuit carries three phases and a neutral, which is correct for TN-S ' +
           'provided the protective conductor is formed separately. If this cable\'s fourth core is in fact the ' +
@@ -1512,8 +1542,13 @@ var LC = (function () {
             ' A. The cable will overheat before the device trips. The device must not exceed the cable rating.');
         }
       } else if (cableA && ir > cableA * 0.95) {
+        /* Keyed, because on a real project this fired on ten boards and ten
+           circuits and the ten rows said the same thing in ten places: the
+           cable is right, and the headroom on it is under 5%. Worth knowing,
+           not worth ten lines. */
         add('info', kind, item.id, item.tag + ' device only just matched to its cable',
-          ir + ' A device on a ' + cableA.toFixed(0) + ' A cable.');
+          ir + ' A device on a ' + cableA.toFixed(0) + ' A cable — ' +
+          ((1 - ir / cableA) * 100).toFixed(0) + '% headroom.', 'just-matched');
       }
     }
 
@@ -4323,6 +4358,7 @@ function selectivityBand(s) {
     if (key === 'selectivity-circuit') return 'circuit not selectively graded against the board it sits on';
     if (key === 'selectivity-board') return 'board not selectively graded against the board above it';
     if (key === 'board-empty') return 'board on the schedule with nothing fed from it';
+    if (key === 'just-matched') return 'device matched to its cable with under 5% headroom';
     if (key === 'vdrop-path') return 'circuit whose total volt drop from the transformer exceeds the limit';
     if (key === 'vdrop-incomplete') return 'circuits whose voltage drop profile cannot be completed';
     if (key === 'impz-assumed') return 'transformers whose impedance is assumed rather than stated';
