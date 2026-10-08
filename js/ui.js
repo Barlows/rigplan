@@ -1289,7 +1289,7 @@
       '<label style="font-size:11px;color:var(--fg-dim);display:flex;gap:4px;align-items:center"><input type="checkbox" id="fltUn"' + (filter.unassigned ? ' checked' : '') + '> unassigned only</label>' +
       '<label style="font-size:11px;color:var(--fg-dim);display:flex;gap:4px;align-items:center"><input type="checkbox" id="fltC"' + (filter.noCable ? ' checked' : '') + '> no cable only</label>' +
       '<span style="margin-left:auto;font-size:11px;color:var(--fg-dim)">' + all.length + ' of ' + S.panels.length + ' circuits · ' + t.kw.toFixed(0) + ' kW / ' + t.kva.toFixed(0) + ' kVA</span>' +
-      btn2('csv', 'Export CSV') + btn2('print', 'Print') + '</div>';
+      btn2('csv', 'Export CSV') + btn2('xlsx', 'Export Excel') + btn2('print', 'Print') + '</div>';
 
     h += '<table class="grid"><thead><tr>' +
       th('tag', 'Ref', 'l') + th('', 'Board', 'l') + th('', 'Description', 'l') + th('', 'kW') + th('kva', 'kVA') +
@@ -2545,10 +2545,16 @@
   /* ------------------------------------------------------------- exporting */
   function csvCell(v) {
     if (v === null || v === undefined) return '';
+    /* A cell holding an array is a bug, but it is a bug that should cost one
+       cell rather than the whole export — and String() renders it readably
+       enough to spot, which "cannot read property map of undefined" is not. */
     var s = String(v);
     return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }
-  function csvRow(a) { return a.map(csvCell).join(','); }
+  function csvRow(a) {
+    if (!a || !a.map) return csvCell(a);
+    return a.map(csvCell).join(',');
+  }
   /* ==================================================== CSV import ========
      Reading someone else's load schedule.
 
@@ -3031,12 +3037,24 @@
     ];
   }
 
-  function exportCsv() {
+  /* One collector, two formats.
+
+     The load schedule is fifty columns wide and every column is a calculated
+     figure, so it is written once and read out twice. Building the CSV and the
+     workbook from two separate passes would mean the two could disagree, and the
+     disagreement would be silent and would show up as a schedule that changed
+     depending on which button was pressed.
+
+     So `scheduleRows()` returns an array of arrays, and each exporter formats it
+     its own way. CSV needs escaping; a spreadsheet wants numbers as numbers so
+     they can be summed in the sheet. Same data, no second opinion. */
+  function scheduleRows() {
     var L = [];
-    L.push(csvRow([S.name])); L.push(csvRow(['Client', S.client, 'Project', S.ref, 'Designer', S.designer, 'Date', S.date]));
-    L.push('');
-    L.push(csvRow(['LOAD SCHEDULE']));
-    L.push(csvRow(['Reference', 'Board', 'Board description', 'Description', 'Type', 'Connected kW', 'Design kVA', 'kvar', 'pf', 'Demand', 'Phases', 'Voltage V', 'Current A', 'Non-linear load', 'THD %', '3rd harmonic %', 'Neutral carried', 'Imbalance %', 'PE in cable', 'Protective device', 'Device frame A', 'Breaking capacity kA', 'Trip unit', 'Feeder runs', 'Feeder mm2', 'Cores', 'Length m', 'Installation', 'Rated A', 'Utilisation %', 'Volt drop %', 'PE mm2', 'R1+R2 ohm', 'Loop A', 'Max t s', 'Actual t s', 'Motor', 'Starting method', 'Starting source', 'Load torque', 'Starting together', 'Full load A', 'Starting A', 'All together A', 'Board at start V', 'Dip %', 'Torque at start', 'Grid ref E', 'Grid ref N', 'Status']));
+    function put(a) { L.push(a); }
+    put([S.name]); put(['Client', S.client, 'Project', S.ref, 'Designer', S.designer, 'Date', S.date]);
+    put('');
+    put(['LOAD SCHEDULE']);
+    put(['Reference', 'Board', 'Board description', 'Description', 'Type', 'Connected kW', 'Design kVA', 'kvar', 'pf', 'Demand', 'Phases', 'Voltage V', 'Current A', 'Non-linear load', 'THD %', '3rd harmonic %', 'Neutral carried', 'Imbalance %', 'PE in cable', 'Protective device', 'Device frame A', 'Breaking capacity kA', 'Trip unit', 'Feeder runs', 'Feeder mm2', 'Cores', 'Length m', 'Installation', 'Rated A', 'Utilisation %', 'Volt drop %', 'PE mm2', 'R1+R2 ohm', 'Loop A', 'Max t s', 'Actual t s', 'Motor', 'Starting method', 'Starting source', 'Load torque', 'Starting together', 'Full load A', 'Starting A', 'All together A', 'Board at start V', 'Dip %', 'Torque at start', 'Grid ref E', 'Grid ref N', 'Status']);
     var un = [];
     /* One row per circuit, wherever it is fed from. Declared up here because
        the main-board circuits are written before the distribution boards. */
@@ -3056,7 +3074,7 @@
           sr.sc.group > 1 ? sr.sc.combined.toFixed(0) : '',
           sr.dip.motorV.toFixed(0), sr.dip.pct.toFixed(1), sr.dip.torqueAvail.toFixed(2)];
       }
-      L.push(csvRow([pn.tag, board.tag, board.name, pn.name, LS.PANEL_TYPES[pn.type] ? LS.PANEL_TYPES[pn.type].name : pn.type,
+      put([pn.tag, board.tag, board.name, pn.name, LS.PANEL_TYPES[pn.type] ? LS.PANEL_TYPES[pn.type].name : pn.type,
         dm.kw.toFixed(1), dm.kva.toFixed(1), dm.kvar.toFixed(1), dm.pf, pn.demand, pn.phases, pn.volt, dm.ampHarm.toFixed(1),
         LC.isThreePhaseWithNeutral(pn) || pn.harmonicType ? (LS.HARMONIC_SPECTRUMS[pn.harmonicType] || {}).name || '' : '',
         pn.thd === null || pn.thd === undefined || pn.thd === '' ? '' : pn.thd,
@@ -3081,55 +3099,55 @@
         pn.loadTorque || '',
         pn.simultaneousStart || '',
         st6[0], st6[1], st6[2], st6[3], st6[4], st6[5],
-        pn.pos.x, pn.pos.y, stt]));
+        pn.pos.x, pn.pos.y, stt]);
     }
     /* Circuits fed straight off a main board come first — they are one way on
        the MSB, above the distribution boards in the chain. */
     S.pdbs.forEach(function (b) {
       var here = LC.panelsOnPdb(S, b.id);
       if (!here.length) return;
-      L.push(csvRow([b.tag + ' — circuits fed directly from this main board', b.tag, b.name]));
+      put([b.tag + ' — circuits fed directly from this main board', b.tag, b.name]);
       here.forEach(function (pn) { row(pn, b); });
       var sb = LC.boardStats(S, b, 'pdb');
-      L.push(csvRow([b.tag + ' DIRECT SUBTOTAL', b.tag, b.name, '', '', '', sb.kw.toFixed(1), sb.kva.toFixed(1), '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''] + blank(9)));
+      put([b.tag + ' DIRECT SUBTOTAL', b.tag, b.name, '', '', '', sb.kw.toFixed(1), sb.kva.toFixed(1), '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', ''] + blank(9));
     });
     S.pdps.forEach(function (d) {
       var list = LC.panelsOf(S, d.id);
       /* sub-boards first, then the circuits fed straight off the PDP */
       LC.dbOfPdp(S, d.id).forEach(function (b) {
-        L.push(csvRow([b.tag + ' — sub-distribution board', b.tag, b.name, (b.enclosure || '') + ' ' + b.incomerA + ' A'] + blank(40)));
+        put([b.tag + ' — sub-distribution board', b.tag, b.name, (b.enclosure || '') + ' ' + b.incomerA + ' A'] + blank(40));
         LC.panelsOnDb(S, b.id).forEach(function (pn) { row(pn, b); });
         var sb = LC.boardStats(S, b, 'db');
-        L.push(csvRow([b.tag + ' SUBTOTAL', b.tag, b.name, '', '', '', '', sb.kw.toFixed(1), sb.kva.toFixed(1), '', '', '', '', sb.amp.toFixed(1), '', '', '', '', '', b.incomerA + ' A incomer', '', '', '', '', sb.util.toFixed(0) + '%'] + blank(14)));
+        put([b.tag + ' SUBTOTAL', b.tag, b.name, '', '', '', '', sb.kw.toFixed(1), sb.kva.toFixed(1), '', '', '', '', sb.amp.toFixed(1), '', '', '', '', '', b.incomerA + ' A incomer', '', '', '', '', sb.util.toFixed(0) + '%'] + blank(14));
       });
       list.filter(function (pn) { return !pn.dbId || !LC.get(S, 'db', pn.dbId); }).forEach(function (pn) { row(pn, d); });
       var sd = LC.boardStats(S, d, 'pdp');
-      L.push(csvRow([d.tag + ' SUBTOTAL', d.tag, d.name, '', '', '', '', sd.kw.toFixed(1), sd.kva.toFixed(1), '', '', '', '', sd.amp.toFixed(1), '', '', '', '', '', d.incomerA + ' A incomer', '', '', '', '', sd.util.toFixed(0) + '%'] + blank(14)));
+      put([d.tag + ' SUBTOTAL', d.tag, d.name, '', '', '', '', sd.kw.toFixed(1), sd.kva.toFixed(1), '', '', '', '', sd.amp.toFixed(1), '', '', '', '', '', d.incomerA + ' A incomer', '', '', '', '', sd.util.toFixed(0) + '%'] + blank(14));
     });
     S.panels.forEach(function (pn) { if (!pn.pdpId && !pn.pdbId) un.push(pn); });
     if (un.length) {
-      L.push(''); L.push(csvRow(['UNASSIGNED CONTROL PANELS']));
-      un.forEach(function (pn) { L.push(csvRow([pn.tag, '', '', pn.name, '', pn.kw, LC.panelDemand(S, pn).kva.toFixed(1), '', '', pn.phases, pn.volt, '', '', '', '', '', '', '', '', '', '', pn.pos.x, pn.pos.y, 'NO BOARD'])); });
+      put(''); put(['UNASSIGNED CONTROL PANELS']);
+      un.forEach(function (pn) { put([pn.tag, '', '', pn.name, '', pn.kw, LC.panelDemand(S, pn).kva.toFixed(1), '', '', pn.phases, pn.volt, '', '', '', '', '', '', '', '', '', '', pn.pos.x, pn.pos.y, 'NO BOARD']); });
     }
-    L.push('');
-    L.push(csvRow(['BOARD SCHEDULE']));
-    L.push(csvRow(['Board', 'Equipment ref', 'Description', 'Fed from', 'Rating', 'Incomer A', 'Protective device', 'Breaking capacity kA', 'Busbar A', 'Load A', 'Utilisation %', 'Circuits', 'Ways', 'Spare ways', 'Imbalance %', 'kVA', 'Fault kA', 'Grid ref']));
+    put('');
+    put(['BOARD SCHEDULE']);
+    put(['Board', 'Equipment ref', 'Description', 'Fed from', 'Rating', 'Incomer A', 'Protective device', 'Breaking capacity kA', 'Busbar A', 'Load A', 'Utilisation %', 'Circuits', 'Ways', 'Spare ways', 'Imbalance %', 'kVA', 'Fault kA', 'Grid ref']);
     LC.boardList(S).forEach(function (r) {
       var o = r.o;
       var u = r.kind === 'tx' ? (r.st.kva / Math.max(1, num(o.kva, 1)) * 100) : r.st.util;
       var parent = r.kind === 'pdb' ? ((LC.get(S, 'tx', o.txId) || {}).tag || '')
         : r.kind === 'pdp' ? ((LC.get(S, 'pdb', o.pdbId) || {}).tag || '')
         : r.kind === 'db' ? ((LC.get(S, 'pdp', o.pdpId) || {}).tag || '') : '';
-      L.push(csvRow([o.tag, o.ref || '', o.name || '', parent, r.kind === 'tx' ? o.kva + ' kVA' : (o.incomerA + ' A'), r.kind === 'tx' ? '' : o.incomerA,
+      put([o.tag, o.ref || '', o.name || '', parent, r.kind === 'tx' ? o.kva + ' kVA' : (o.incomerA + ' A'), r.kind === 'tx' ? '' : o.incomerA,
         protCell(o), o.prot && num(o.prot.icu, 0) ? num(o.prot.icu) : '', o.busbarA || '',
         r.st.amp.toFixed(1), u.toFixed(1), r.st.panels.length,
         r.kind === 'pdp' || r.kind === 'db' ? (r.st.ways === null ? '' : r.st.ways) : '',
         r.kind === 'pdp' ? o.spareWays : '', r.st.dev.toFixed(1), r.st.kva.toFixed(1),
-        r.st.faultKA ? r.st.faultKA.toFixed(2) : '', 'E' + o.pos.x + ' N' + o.pos.y]));
+        r.st.faultKA ? r.st.faultKA.toFixed(2) : '', 'E' + o.pos.x + ' N' + o.pos.y]);
     });
-    L.push('');
-    L.push(csvRow(['CABLE / VOLT DROP SCHEDULE']));
-    L.push(csvRow(['From', 'To', 'Circuit', 'Runs', 'mm2', 'Cores', 'Length m', 'Installation', 'Grouped', 'Ambient C', 'Base A', 'Derated A', 'Load A', 'Utilisation %', 'Drop V', 'Drop %', 'PE mm2', 'R1+R2 ohm', 'Loop A', 'Max t ms', 'Actual t ms', 'Verdict']));
+    put('');
+    put(['CABLE / VOLT DROP SCHEDULE']);
+    put(['From', 'To', 'Circuit', 'Runs', 'mm2', 'Cores', 'Length m', 'Installation', 'Grouped', 'Ambient C', 'Base A', 'Derated A', 'Load A', 'Utilisation %', 'Drop V', 'Drop %', 'PE mm2', 'R1+R2 ohm', 'Loop A', 'Max t ms', 'Actual t ms', 'Verdict']);
     var feeds = [];
     S.dbs.forEach(function (b) { var pdp2 = LC.get(S, 'pdp', b.pdpId); feeds.push([pdp2 ? pdp2.tag : '', b.tag, 'PDP to sub-board', b, LC.boardStats(S, b, 'db').amp, 0.9, b.phases, 400]); });
     S.pdps.forEach(function (d) { var pdb = LC.get(S, 'pdb', d.pdbId); feeds.push([pdb ? pdb.tag : '', d.tag, 'PDB to PDP', d, LC.boardStats(S, d, 'pdp').amp, 0.9, d.phases, 400]); });
@@ -3143,7 +3161,7 @@
       var cab = f[3].cable && f[3].cable.csa ? LC.cableRating(f[3].cable) : null;
       var vd = cab ? LC.voltDrop(f[3].cable, f[4], f[5], f[6], f[7]) : null;
       var efc = LC.earthFaultCheck(S, f[3], f[6] === 400 && f[2].indexOf('to panel') >= 0 ? 'panel' : 'pdp');
-      L.push(csvRow([f[0], f[1], f[2], cab ? cab.runs : '', cab ? cab.csa : '', f[3].cable.cores, f[3].cable.len, cab ? cab.method.name : f[3].cable.method, f[3].cable.group, f[3].cable.ambient,
+      put([f[0], f[1], f[2], cab ? cab.runs : '', cab ? cab.csa : '', f[3].cable.cores, f[3].cable.len, cab ? cab.method.name : f[3].cable.method, f[3].cable.group, f[3].cable.ambient,
         cab ? cab.base : '', cab ? cab.derated.toFixed(1) : '', f[4].toFixed(1), cab ? ((f[4] / cab.derated) * 100).toFixed(0) : '',
         vd ? vd.volts.toFixed(2) : '', vd ? vd.pct.toFixed(2) : '',
         efc && !efc.needs ? (efc.loop.peCsa || '') : '',
@@ -3156,15 +3174,104 @@
           : efc && !efc.pass ? 'LOOP TOO HIGH'
           : f[4] > cab.derated ? 'UNDERSIZED'
           : vd.pct > num(S.design.vdropLimitLv, 3) ? 'VOLT DROP'
-          : 'OK']));
+          : 'OK']);
     });
-    L.push('');
-    L.push(csvRow(['DESIGN WARNINGS']));
-    LC.audit(S).forEach(function (i) { L.push(csvRow([i.level.toUpperCase(), i.scope, i.title, i.detail])); });
+    put('');
+    put(['DESIGN WARNINGS']);
+    LC.audit(S).forEach(function (i) { put([i.level.toUpperCase(), i.scope, i.title, i.detail]); });
+    return L;
+  }
+  function exportCsv() {
+    var L = scheduleRows().map(csvRow);
     download('load-schedule.csv', L.join('\n'), 'text/csv');
+    toast('Schedule exported as CSV', 'good');
+  }
+
+  /* ---- the workbook -------------------------------------------------------
+
+     The layout is the schedule transposed into one sheet per board plus a few
+     summaries, because a fifty-column row is unreadable in a spreadsheet and the
+     thing a recipient actually does with it is sort, filter and sum.
+
+     Column widths are set from the header text rather than guessed, which is
+     enough for a table that is read rather than printed. The header row is
+     frozen so the column names stay on screen when there are ninety-seven rows
+     and fifty columns, which is this project's actual shape. */
+  function exportXlsx() {
+    var all = scheduleRows();
+    /* Find the header row and the first data row, so the table can be sliced
+       per board. The layout is fixed by scheduleRows(); these are located rather
+       than assumed so a change to the header does not silently corrupt the
+       split. */
+    var hdr = -1, end = -1;
+    for (var i = 0; i < all.length; i++) {
+      if (all[i][0] === 'Reference') { hdr = i; continue; }
+      if (hdr >= 0 && all[i].length > 1 && all[i][0] !== 'Reference') { end = i; break; }
+    }
+    var title = all.slice(0, hdr);
+    var header = all[hdr];
+    var body = hdr >= 0 ? all.slice(hdr + 1, end >= 0 ? end : all.length) : [];
+    var tail = end >= 0 ? all.slice(end) : [];
+
+    /* Group the body by board, in the order the rows appear, which is the order
+       they were walked and therefore the order of the design. */
+    var byBoard = {}, order = [];
+    body.forEach(function (r) {
+      var b = r[1] || 'unassigned';
+      if (!byBoard[b]) { byBoard[b] = []; order.push(b); }
+      byBoard[b].push(r);
+    });
+
+    var sheets = [];
+    /* Every column is sized to its header, with a floor so a short name like
+       "kW" does not get a two-character column. */
+    var widths = header.map(function (h) { return Math.max(9, Math.min(38, String(h).length + 3)); });
+
+    sheets.push({
+      name: 'Cover',
+      /* Flat, one array per row. `rows` is a list of rows, not a tree, and a
+         nested row — a list of rows used as one row — reaches the writer as a
+         cell whose value is an array, which every downstream format then has to
+         special-case. Building it flat keeps one shape all the way to the file. */
+      rows: [[S.name || 'Project'], [], ['Client', S.client || ''], ['Project', S.ref || ''],
+        ['Designer', S.designer || ''], ['Date', S.date || ''], []]
+        .concat(title.slice(1).filter(function (r) { return r.length && r[0]; }))
+        .concat([[], ['Boards in this workbook']])
+        .concat(order.map(function (b) { return [b]; })),
+      cols: [34, 18], headerRows: 0
+    });
+
+    order.forEach(function (b) {
+      sheets.push({
+        name: b,
+        rows: [header].concat(byBoard[b]),
+        cols: widths, freezeRow: 1, headerRows: 1
+      });
+    });
+
+    if (tail.length) {
+      sheets.push({
+        name: 'Warnings',
+        rows: [['Level', 'Scope', 'Finding', 'Detail']].concat(
+          tail.filter(function (r) { return r.length > 2 && String(r[0]).length <= 4; })
+        ),
+        cols: [10, 12, 60, 90], freezeRow: 1, headerRows: 1
+      });
+    }
+
+    var blob = XLSXW.build(sheets);
+    download((S.name || 'project').replace(/[^\w\-]+/g, '_') + '-load-schedule.xlsx', blob,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    toast('Workbook exported — ' + sheets.length + ' sheets', 'good');
   }
   function download(name, content, mime) {
-    var b = new Blob([content], { type: mime + ';charset=utf-8' });
+    /* A Blob is passed straight through rather than wrapped. Wrapping one is
+       legal and produces a valid file, but appending ";charset=utf-8" to a
+       spreadsheet's content type is nonsense, and the nested Blob is the sort of
+       thing that works until it does not. */
+    var b = content instanceof Blob
+      ? content
+      : new Blob([content], { type: mime + ';charset=utf-8' });
     var a = document.createElement('a');
     a.href = URL.createObjectURL(b); a.download = name;
     document.body.appendChild(a); a.click();
@@ -3485,6 +3592,7 @@
   }
   function globalAction(a) {
     if (a === 'csv') return exportCsv();
+    if (a === 'xlsx') return exportXlsx();
     if (a === 'print') return printReport();
     if (a === 'sldfit') { sldFit = true; fitSld(); return; }
     if (a === 'sldin') return sldZoomBy(1.25);

@@ -48,6 +48,7 @@ SUITES = [
     ("csvrt", "csv-roundtrip-test.html"),
     ("sld", "sld-test.html"),
     ("underlay", "underlay-test.html"),
+    ("xlsx", "xlsx-test.html"),
 ]
 
 # Suites that read a file and print what they saw as text rather than as

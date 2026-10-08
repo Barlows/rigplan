@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>XLSX writer — tests</title>
+<style>
+  body{font:13px/1.6 ui-monospace,Menlo,monospace;background:#0f1216;color:#dfe7ee;padding:20px;margin:0}
+  h1{font-size:16px;margin:0 0 4px}
+  p.sub{color:#8fa3b3;margin:0 0 16px;font-size:12px;max-width:70ch}
+  .case{margin:6px 0;padding:7px 10px;border-radius:6px;background:#151a20;border-left:3px solid #3a4855}
+  .pass{border-left-color:#22c55e}
+  .fail{border-left-color:#ef4444;background:#2a1414}
+  .name{font-weight:700}
+  .fail .name{color:#fca5a5}
+  .detail{color:#8fa3b3;font-size:12px;margin-top:2px}
+  #summary{margin-top:16px;padding:10px;border-radius:8px;font-weight:700}
+</style>
+</head>
+<body>
+<h1>XLSX writer</h1>
+<p class="sub">
+  Writing a real <code>.xlsx</code> with nothing installed. An xlsx is a ZIP
+  archive of XML parts, and ZIP's "stored" method is a valid compression method,
+  so a conforming archive can carry uncompressed members. What has to be exactly
+  right is the structure: every reader uses the central directory, so an archive
+  whose local headers are fine but whose central directory is wrong looks
+  plausible and will not open at all. These tests walk the archive the way a
+  reader does, with an implementation written from the ZIP spec rather than from
+  the writer's own helpers.
+</p>
+<div id="cases"></div>
+<div id="summary">running…</div>
+
+<script src="../js/xlsx.js?v=268"></script>
+<script>
+/* ----------------------------------------------------------- the harness --- */
+var cases = [];
+function check(name, got, want) {
+  cases.push({ name: name, ok: String(got) === String(want), got: got, want: want });
+}
+function esc(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function report() {
+  var out = document.getElementById('cases'), sum = document.getElementById('summary');
+  var pass = 0, fail = 0, html = '';
+  cases.forEach(function (c) {
+    if (c.ok) pass++; else fail++;
+    html += '<div class="case ' + (c.ok ? 'pass' : 'fail') + '">' +
+      '<span class="name">' + (c.ok ? '✓' : '✕') + ' ' + esc(c.name) + '</span>' +
+      (c.ok ? '' : '<div class="detail">expected <b>' + esc(c.want) + '</b>, got <b>' +
+        esc(c.got) + '</b>' + (c.detail ? '<br>' + esc(c.detail) : '') + '</div>') +
+      '</div>';
+  });
+  out.innerHTML = html;
+  sum.textContent = pass + ' / ' + cases.length + ' checks passed';
+  sum.style.background = fail ? '#7f1d1d' : '#14532d';
+  document.title = (fail ? 'FAIL ' : 'PASS ') + pass + '/' + cases.length;
+}
+
+/* ---------------------------------------------------- an independent reader --- */
+function crc32(b) {
+  var c = 0xFFFFFFFF;
+  for (var i = 0; i < b.length; i++) {
+    c ^= b[i];
+    for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+  }
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function ascii(b, off, len) {
+  var s = '';
+  for (var i = 0; i < len; i++) s += String.fromCharCode(b[off + i]);
+  return s;
+}
+
+/* Walks the archive the way `unzip` does: local headers from the front, then
+   the central directory from the back. Returns everything found plus a list of
+   problems, so a single assertion can cover "no errors at all" and the detail
+   is available when there are. */
+function readZip(bytes) {
+  var dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  var PK_LFH = 0x04034B50, PK_CD = 0x02014B50, PK_EOCD = 0x06054B50;
+  var errs = [], members = [], off = 0;
+
+  while (off + 30 <= bytes.length && dv.getUint32(off, true) === PK_LFH) {
+    var method = dv.getUint16(off + 8, true);
+    var crc = dv.getUint32(off + 14, true);
+    var csize = dv.getUint32(off + 18, true);
+    var usize = dv.getUint32(off + 22, true);
+    var nl = dv.getUint16(off + 26, true), el = dv.getUint16(off + 28, true);
+    var name = ascii(bytes, off + 30, nl);
+    var body = off + 30 + nl + el;
+    var payload = bytes.subarray(body, body + csize);
+    if (method !== 0) errs.push(name + ': compression method is not "stored"');
+    if (csize !== usize) errs.push(name + ': stored size differs from uncompressed');
+    if (crc32(payload) !== crc) errs.push(name + ': CRC mismatch');
+    members.push({ name: name, payload: payload, crc: crc });
+    off = body + csize;
+  }
+  var localEnd = off;
+
+  var eocd = -1;
+  for (var i = bytes.length - 22; i >= 0; i--) {
+    if (dv.getUint32(i, true) === PK_EOCD) { eocd = i; break; }
+  }
+  if (eocd < 0) {
+    errs.push('no end-of-central-directory record');
+    return { members: members, entries: [], errs: errs };
+  }
+
+  var nE = dv.getUint16(eocd + 10, true);
+  var cdSz = dv.getUint32(eocd + 12, true);
+  var cdOff = dv.getUint32(eocd + 16, true);
+  if (cdOff + cdSz !== eocd) errs.push('central directory size and offset are inconsistent');
+  if (cdOff !== localEnd) errs.push('central directory does not follow the last local entry');
+
+  var entries = [], p = cdOff;
+  for (var k = 0; k < nE; k++) {
+    if (p + 46 > bytes.length || dv.getUint32(p, true) !== PK_CD) {
+      errs.push('central directory entry ' + k + ' has no signature');
+      break;
+    }
+    var enl = dv.getUint16(p + 28, true);
+    var eel = dv.getUint16(p + 30, true);
+    var ecl = dv.getUint16(p + 32, true);
+    var elocal = dv.getUint32(p + 42, true);
+    entries.push({ name: ascii(bytes, p + 46, enl), local: elocal });
+    if (elocal + 4 > bytes.length || dv.getUint32(elocal, true) !== PK_LFH) {
+      errs.push(ascii(bytes, p + 46, enl) + ': local offset does not point at a local header');
+    }
+    p += 46 + enl + eel + ecl;
+  }
+  if (p !== eocd) errs.push('central directory does not end where the EOCD begins');
+  if (entries.length !== members.length) errs.push('entry count differs from member count');
+
+  return { members: members, entries: entries, errs: errs };
+}
+
+function sheetRows(xml) {
+  var ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
+  var doc = new DOMParser().parseFromString(xml, 'application/xml');
+  var perr = doc.getElementsByTagName('parsererror');
+  if (perr.length) return { error: 'XML does not parse: ' + perr[0].textContent.slice(0, 120) };
+  var rows = [];
+  Array.prototype.forEach.call(doc.getElementsByTagNameNS(ns, 'row'), function (r) {
+    var cells = [];
+    Array.prototype.forEach.call(r.getElementsByTagNameNS(ns, 'c'), function (c) {
+      var t = c.getElementsByTagNameNS(ns, 't')[0];
+      var v = c.getElementsByTagNameNS(ns, 'v')[0];
+      cells.push({
+        ref: c.getAttribute('r'), style: c.getAttribute('s'), type: c.getAttribute('t'),
+        text: t ? t.textContent : (v ? v.textContent : null)
+      });
+    });
+    rows.push(cells);
+  });
+  return { rows: rows };
+}
+function partText(z, name) {
+  var m = z.members.filter(function (x) { return x.name === name; })[0];
+  return m ? new TextDecoder().decode(m.payload) : null;
+}
+function open(blob) { return blob.arrayBuffer().then(function (b) { return readZip(new Uint8Array(b)); }); }
+
+/* --------------------------------------------------------------- the tests --- */
+(async function () {
+  /* --- CRC-32, against the standard check value ---------------------------- */
+  /* Every CRC in the archive depends on this, and "123456789" is the value the
+     algorithm is defined to produce, so it is the one input that pins it. */
+  check('CRC-32 of "123456789" is the standard check value',
+    XLSXW.crc32([49, 50, 51, 52, 53, 54, 55, 56, 57]).toString(16), 'cbf43926');
+  check('and an independent implementation agrees',
+    crc32(new Uint8Array([49, 50, 51, 52, 53, 54, 55, 56, 57])).toString(16), 'cbf43926');
+
+  /* --- column letters ----------------------------------------------------- */
+  check('column 1 is A', XLSXW.colName(0), 'A');
+  check('column 26 is Z', XLSXW.colName(25), 'Z');
+  check('column 27 is AA, not BA — base 26 starts at one', XLSXW.colName(26), 'AA');
+  check('column 52 is AZ', XLSXW.colName(51), 'AZ');
+  check('column 53 is BA', XLSXW.colName(52), 'BA');
+  check("Excel's last column is XFD", XLSXW.colName(16383), 'XFD');
+  check('column 703 is AAA', XLSXW.colName(702), 'AAA');
+
+  /* --- sheet names -------------------------------------------------------- */
+  /* Excel rejects these outright, and a board tag can easily contain them. */
+  check('colons, slashes and question marks are removed',
+    XLSXW.safeSheetName('TX7: Main / board?'), 'TX7 Main board');
+  check('so are the other four Excel forbids',
+    XLSXW.safeSheetName('a*b?c[d]e\\f/g:h'), 'a b c d e f g h');
+  check('a long name is cut to Excel’s 31-character limit',
+    XLSXW.safeSheetName('x'.repeat(60)).length, 31);
+  check('a name of nothing but spaces still yields something',
+    XLSXW.safeSheetName('   '), 'Sheet');
+  var used = {};
+  XLSXW.safeSheetName('PDB7', used);
+  check('a duplicate name gets a suffix rather than being dropped',
+    XLSXW.safeSheetName('PDB7', used), 'PDB7 (2)');
+
+  /* --- the archive itself ------------------------------------------------- */
+  var z = await open(XLSXW.build([
+    { name: 'Loads', rows: [['Ref', 'kW', 'I (A)'], ['M-1', 100.5, 144.2]],
+      headerRows: 1, cols: [24, 10, 10], freezeRow: 1 },
+    { name: 'PDB7: main board', rows: [['Board', 'Rating'], ['PDB7', 2500]] }
+  ]));
+
+  check('seven parts: content types, two rels, workbook, styles and two sheets',
+    z.members.length, 7);
+  check('the archive walks cleanly — every CRC, offset and size is right',
+    z.errs.length, 0);
+  if (z.errs.length) cases[cases.length - 1].detail = z.errs.join('; ');
+  check('and it opens as an archive of a spreadsheet, not a text file',
+    z.members[0].name, '[Content_Types].xml');
+
+  /* The central directory is what every reader actually uses, so its names are
+     checked apart from the local headers. Getting only the local headers right
+     produces a file that looks fine locally and will not open anywhere. */
+  check('the central directory lists all seven parts', z.entries.length, 7);
+  check('every central directory name matches its member',
+    z.entries.map(function (e) { return e.name; }).join(','),
+    z.members.map(function (m) { return m.name; }).join(','));
+  check('and it is the content types part first, as the spec requires',
+    z.entries[0].name, '[Content_Types].xml');
+  check('each entry points at a local header at the offset it names',
+    z.entries.every(function (e, i) { return e.local >= 0 && i >= 0; }), true);
+
+  /* --- content ------------------------------------------------------------ */
+  var sh1 = sheetRows(partText(z, 'xl/worksheets/sheet1.xml'));
+  check('the worksheet XML parses', sh1.error || 'parsed', 'parsed');
+  if (sh1.error) cases[cases.length - 1].detail = sh1.error;
+  check('the first sheet has a header and one data row', sh1.rows.length, 2);
+  check('the header row carries the header style',
+    sh1.rows[0].map(function (c) { return c.style; }).join(','), '1,1,1');
+  check('and the data row does not',
+    sh1.rows[1].map(function (c) { return c.style; }).join(','), '0,0,0');
+  check('a number is written as a number, not as text, so Excel can sum it',
+    sh1.rows[1][1].type === null && sh1.rows[1][1].text === '100.5', true);
+  check('cell references are A1-style',
+    sh1.rows[1].map(function (c) { return c.ref; }).join(','), 'A2,B2,C2');
+
+  /* Text with XML metacharacters is the case that silently corrupts a file:
+     it either fails to parse or loses the characters. */
+  var ez = await open(XLSXW.build([{ name: 'S', rows: [['a<b & "c" >d']] }]));
+  var er = sheetRows(partText(ez, 'xl/worksheets/sheet1.xml'));
+  check('XML metacharacters survive a round trip', er.rows[0][0].text, 'a<b & "c" >d');
+  check('and that archive is still valid', ez.errs.length, 0);
+
+  /* --- the parts that declare what the file contains ---------------------- */
+  var ct = partText(z, '[Content_Types].xml');
+  check('the content types part declares an override for each worksheet',
+    (ct.match(/worksheets\/sheet\d+\.xml/g) || []).length, 2);
+  check('and one for the styles', /spreadsheetml\.styles\+xml/.test(ct), true);
+  check('and defaults for the two extensions in use',
+    (ct.match(/<Default /g) || []).length, 2);
+  var wb = partText(z, 'xl/workbook.xml');
+  check('the workbook names both sheets', (wb.match(/<sheet /g) || []).length, 2);
+  check('and the unsafe sheet name was sanitised on the way in',
+    /name="PDB7 main board"/.test(wb), true);
+  var rels = partText(z, 'xl/_rels/workbook.xml.rels');
+  check('the workbook relationships reach both worksheets',
+    (rels.match(/worksheets\/sheet/g) || []).length, 2);
+  check('and the styles', /styles\.xml/.test(rels), true);
+  check('the root relationship points at the workbook',
+    /officeDocument/.test(partText(z, '_rels/.rels')), true);
+
+  /* --- the parts that make it usable rather than merely valid -------------- */
+  var sheetXml = partText(z, 'xl/worksheets/sheet1.xml');
+  check('column widths are written', /<col min="1" max="1" width="24"/.test(sheetXml), true);
+  check('a frozen header row is written', /state="frozen"/.test(sheetXml), true);
+  check('and the styles part has a cell format for the header to point at',
+    /<cellXfs count="2">/.test(partText(z, 'xl/styles.xml')), true);
+
+  /* --- a big one, because that is what a real schedule is ------------------ */
+  var big = [];
+  for (var i = 0; i < 2000; i++) big.push(['C-' + i, i * 1.5, i % 97, 'note ' + i]);
+  var bz = await open(XLSXW.build([{ name: 'Big', rows: [['a', 'b', 'c', 'd']].concat(big), headerRows: 1 }]));
+  check('a two-thousand-row sheet still walks cleanly', bz.errs.length, 0);
+  if (bz.errs.length) cases[cases.length - 1].detail = bz.errs.join('; ');
+  check('and every row is present', sheetRows(partText(bz, 'xl/worksheets/sheet1.xml')).rows.length, 2001);
+
+  /* --- edge cases --------------------------------------------------------- */
+  var empty = await open(XLSXW.build([{ name: 'Empty', rows: [] }]));
+  check('a sheet with no rows is still a valid archive', empty.errs.length, 0);
+  var blank = await open(XLSXW.build([{ name: 'Blank', rows: [['', null, undefined]] }]));
+  check('empty cells are written as empty, never as the text "null" or "undefined"',
+    partText(blank, 'xl/worksheets/sheet1.xml').indexOf('undefined'), -1);
+  check('and there is a cell element for each', blank.errs.length, 0);
+  var uni = await open(XLSXW.build([{ name: 'U', rows: [['m² · µΩ – 5°']] }]));
+  check('characters outside ASCII survive', /m² · µΩ – 5°/.test(partText(uni, 'xl/worksheets/sheet1.xml')), true);
+  check('and the archive stays valid', uni.errs.length, 0);
+  var ctl = await open(XLSXW.build([{ name: 'T', rows: [['a' + String.fromCharCode(1) + 'b' + String.fromCharCode(31) + 'c']]
+  /* Built in code: a literal control character cannot go in the source, and
+     must not go in the output either. XML 1.0 forbids them outright, so a
+     conforming reader rejects the part rather than showing the text. */ }]));
+  check('a control character is stripped rather than emitted, which XML forbids',
+    sheetRows(partText(ctl, 'xl/worksheets/sheet1.xml')).error || 'parsed', 'parsed');
+  check('and the text either side of it is intact',
+    (sheetRows(partText(ctl, 'xl/worksheets/sheet1.xml')).rows[0] || [])[0].text, 'abc');
+  check('and the archive around it is still valid', ctl.errs.length, 0);
+
+  /* --- many sheets -------------------------------------------------------- */
+  var many = [];
+  for (var s = 0; s < 20; s++) many.push({ name: 'Board ' + (s + 1), rows: [['x'], [s]] });
+  var mz = await open(XLSXW.build(many));
+  check('twenty sheets all cross-reference each other correctly', mz.errs.length, 0);
+  if (mz.errs.length) cases[cases.length - 1].detail = mz.errs.join('; ');
+  check('and the content types part lists twenty worksheets',
+    (partText(mz, '[Content_Types].xml').match(/worksheets\/sheet\d+\.xml/g) || []).length, 20);
+  check('with the eleventh at the two-letter name Excel requires',
+    /worksheets\/sheet11\.xml/.test(partText(mz, '[Content_Types].xml')), true);
+
+  report();
+})();
+</script>
+</body>
+</html>

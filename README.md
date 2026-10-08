@@ -758,6 +758,44 @@ that is what fails capacitors.
 The 7% reactor costs about 7% of output and is normally in the bank price rather
 than an accessory.
 
+### Excel export
+
+**Export Excel** on the load schedule writes a real `.xlsx`.
+
+An `.xlsx` is a ZIP archive of XML parts, and ZIP's *stored* method — no
+compression — is a valid compression method, so a conforming archive can carry
+uncompressed members. That is the whole trick: no dependency, no shelling out to
+a converter, and it still opens everywhere. The files are larger than Excel's own
+output; for this project, 315 KB against 95 KB of CSV.
+
+Both exports read from one `scheduleRows()` array, so they cannot disagree. A
+schedule where the numbers changed depending on which button was pressed would
+be worse than useless.
+
+The workbook is laid out as a cover sheet and one sheet per board rather than
+one fifty-column table, because a recipient sorts, filters and sums it. The
+header row is frozen, columns are sized from their headings, and numbers are
+written as numbers so they can be summed.
+
+**What is deliberately absent:** styling beyond a bold header, formulas,
+conditional formatting, charts. A schedule is a grid of numbers, and an import
+that opens without a repair prompt is worth more than colour-coding.
+
+Two bugs are worth recording, because both produce a file that looks almost
+right and then will not open at all:
+
+- **`concat.apply` takes exactly two arguments.** Written as
+  `concat.apply([], fields, name)` the third is silently discarded, so every
+  central directory entry was 46 bytes — exactly the fixed-field size, with no
+  name. The local file headers still read back with matching CRCs, which is why
+  it seemed plausible.
+- **The central directory is what every reader uses.** An archive whose local
+  headers are perfect and whose directory is wrong is unopenable, and the
+  symptom points nowhere near the cause.
+
+Verified with an independent reader written from the ZIP spec rather than from
+the writer's own helpers, and with `unzip -t` itself.
+
 ### Motor starting
 
 Three things go wrong when a motor starts, and only one of them is the peak.
@@ -1060,6 +1098,7 @@ js/underlay.js      file loading (image / DXF), DWG detection, placement
 js/plan.js          canvas plan: underlay, rendering, hit-testing, drag, zoom
 js/sld.js           single line diagram: tree layout and IEC 60617 symbols
 js/ui.js            shell: properties, schedules, site map, export, import, print
+js/xlsx.js          XLSX writer: CRC-32, a ZIP writer and SpreadsheetML, no deps
 tools/xlsx_read.py        minimal spreadsheet reader, standard library only
 tools/roeslein_import.py  vendor load schedule → project file
 tools/add_protection.py   vendor switchgear schedule → circuit devices
@@ -1076,13 +1115,16 @@ test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        36 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
-test/protection-test.html 400 checks on fault levels, device proposals, cable
+test/protection-test.html 417 checks on fault levels, device proposals, cable
                           thermal withstand, selectivity from trip curves, earth
                           fault looping, the neutral conductor on 3P+N feeders,
                           the earthing arrangement, reactive power, harmonics,
                           motor starting, current from apparent power and the
                           protection audit
 test/underlay-test.html   image/DXF/DWG loading and scale handling
+test/xlsx-test.html       53 checks on the workbook writer, with an independent
+                          reader written from the ZIP spec that walks the
+                          archive the way `unzip` does
 ```
 
 ### Running the tests
