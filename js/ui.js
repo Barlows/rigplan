@@ -1367,6 +1367,7 @@
     else if (tab === 'map') { host.innerHTML = viewMap(); wireMapPanel(); }
     else if (tab === 'revisions') { host.innerHTML = viewRevisions(); wireRevisions(); }
     else if (tab === 'bom') { host.innerHTML = viewBom(); wireBom(); }
+    else if (tab === 'merge') { host.innerHTML = viewMerge(); wireMerge(); }
     else host.innerHTML = viewNotes();
     if (tab === 'loads') wireLoadsTable();
   }
@@ -1715,6 +1716,146 @@
   }
   function btn2(a, label) { return '<button class="btn sm" data-global="' + a + '">' + label + '</button>'; }
 
+  /* =========================================================== merge tab ------
+     Not multi-user — see the note in calc.js for why that is not available here
+     without giving up the property the whole app is built on. This is the
+     problem multi-user actually creates in practice: two engineers, two
+     exported files, and no way to tell which is which.
+
+     Three files are needed, not two. Without the common ancestor there is no way
+     to know whether a difference is one engineer's change or a genuine
+     disagreement, and a two-way merge either loses work or invents it. So the
+     base is asked for explicitly, and the reason is on the page. */
+  var mergeState = null;
+  function viewMerge() {
+    var h = '<div class="btn-row">' +
+      '<button class="btn" data-global="merge-pick">Choose the two files</button>' +
+      '<button class="btn" id="mergeRun" data-global="merge-run">Compare</button>' +
+      '<span style="margin-left:auto;font-size:10px;color:var(--fg-mute)">' +
+      'nothing compared</span></div>';
+
+    h += '<div class="fieldset"><h4>Three files, not two</h4>' +
+      '<div class="hint">A merge needs the version you both started from. Without it there is no way ' +
+      'to tell whether a difference is one engineer\u2019s change or a disagreement between them, and ' +
+      'a two-way merge either loses work or invents it. The common ancestor is the file as it stood ' +
+      'when the two of you branched.</div>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">' +
+      '<span><label class="lbl">Common ancestor (base)</label><input type="file" id="mrgBase" accept=".json" class="inp"></span>' +
+      '<span><label class="lbl">Your file</label><input type="file" id="mrgMine" accept=".json" class="inp"></span>' +
+      '<span><label class="lbl">Their file</label><input type="file" id="mrgTheirs" accept=".json" class="inp"></span>' +
+      '</div></div>';
+
+    if (!mergeState) return h;
+    var m = mergeState;
+
+    if (m.error) {
+      return h + '<div class="fieldset"><h4>Cannot merge</h4><div class="hint">' +
+        esc(m.error) + '</div></div>';
+    }
+
+    h += '<div class="fieldset"><h4>Result</h4>' +
+      '<div style="font-size:12px;line-height:1.7;margin-bottom:6px">' +
+      (m.conflicts.length
+        ? '<b style="color:var(--bad)">' + m.conflicts.length + ' conflict' +
+          (m.conflicts.length === 1 ? '' : 's') + '</b> — the same thing was changed in both files, differently.'
+        : '<b style="color:var(--good)">No conflicts.</b> The two files can be merged without a decision.') +
+      '<br>' + m.taken.length + ' change' + (m.taken.length === 1 ? '' : 's') +
+      ' taken automatically, ' + m.unchanged + ' item' + (m.unchanged === 1 ? '' : 's') +
+      ' identical in both.</div>';
+
+    /* A circuit with no reference cannot be matched between two files, so it is
+       never merged silently. */
+    var orphans = (m.orphansMine || []).concat(m.orphansTheirs || []);
+    if (orphans.length) {
+      h += '<div class="hint" style="margin-bottom:8px">' + orphans.length +
+        ' item(s) have no reference and cannot be matched between two files: <b>' +
+        esc(orphans.slice(0, 10).join(', ')) + '</b>' +
+        (orphans.length > 10 ? ' and ' + (orphans.length - 10) + ' more' : '') +
+        '. They are not merged. Give them a reference first — without one they have no identity across files.</div>';
+    }
+
+    if (m.conflicts.length) {
+      h += '<table class="tbl"><thead><tr><th>Item</th><th>Field</th><th>Base</th>' +
+        '<th>Yours</th><th>Theirs</th></tr></thead><tbody>' +
+        m.conflicts.map(function (c) {
+          return '<tr><td>' + esc(c.key) + '</td><td><code>' + esc(c.field) + '</code></td>' +
+            '<td style="color:var(--fg-mute)">' + fmtRev(c.base) + '</td>' +
+            '<td>' + fmtRev(c.mine) + '</td><td>' + fmtRev(c.theirs) + '</td></tr>';
+        }).join('') + '</tbody></table>' +
+        '<div style="margin-top:10px;display:flex;gap:8px;align-items:flex-end">' +
+        '<span><label class="lbl">On a conflict, keep</label><select class="sel" id="mrgPrefer">' +
+        '<option value="theirs">Their file</option><option value="mine">Your file</option></select></span>' +
+        '<button class="btn primary" id="mrgApply">Merge into this project</button></div>' +
+        '<div class="hint" style="margin-top:6px">Neither is right. Someone has to look at what the ' +
+        'two of you were each trying to do — the merge takes the choice, it does not make it.</div>';
+    } else {
+      h += '<div style="margin-top:8px"><button class="btn primary" id="mrgApply">Merge into this project</button></div>';
+    }
+    return h;
+  }
+  function readJsonFile(input, cb) {
+    var f = input.files && input.files[0];
+    if (!f) return cb(null, 'no file chosen');
+    var r = new FileReader();
+    r.onload = function () {
+      try {
+        var d = JSON.parse(r.result);
+        if (!d || !d.txs) return cb(null, f.name + ' is not a project file');
+        cb(d, null);
+      } catch (e) { cb(null, f.name + ' could not be read: ' + e.message); }
+    };
+    r.readAsText(f);
+  }
+  function runMerge() {
+    var errs = [];
+    var got = 0, base = null, mine = null, theirs = null;
+    function one(input, set, name) {
+      return new Promise(function (res) {
+        readJsonFile(input, function (d, err) {
+          if (err) errs.push(name + ': ' + err); else { set(d); got++; }
+          res();
+        });
+      });
+    }
+    Promise.all([
+      one(el('mrgBase'), function (d) { base = d; }, 'base'),
+      one(el('mrgMine'), function (d) { mine = d; }, 'yours'),
+      one(el('mrgTheirs'), function (d) { theirs = d; }, 'theirs')
+    ]).then(function () {
+      if (errs.length) { mergeState = { error: errs.join('. ') }; renderTab(); return; }
+      if (got < 3) { mergeState = { error: 'All three files are needed. A merge without the common ancestor cannot tell a change from a disagreement.' }; renderTab(); return; }
+      mergeState = LC.mergeProjects(base, mine, theirs, {
+        prefer: (el('mrgPrefer') || {}).value || 'theirs'
+      });
+      /* The three inputs are held on the state, because the panel re-renders and
+         a <input type="file"> cannot be repopulated — a security restriction, not
+         one to work around. Without this, choosing a file and clicking Compare
+         twice would find the inputs empty. */
+      mergeState.base = base; mergeState.mine = mine; mergeState.theirs = theirs;
+      renderTab();
+      if (!mergeState.conflicts.length) toast('No conflicts — the files merge cleanly', 'good');
+    });
+  }
+  function applyMergeToProject() {
+    if (!mergeState || mergeState.error) return;
+    var prefer = (el('mrgPrefer') || {}).value || 'theirs';
+    /* Re-run with the chosen preference, because the first pass was only a
+       preview and the choice may have changed since. */
+    var m = LC.mergeProjects(mergeState.base, mergeState.mine, mergeState.theirs, { prefer: prefer });
+    /* Undoable, because this replaces the whole design and the person doing it
+       is not necessarily the person who will regret it. */
+    pushUndo('merge two project files');
+    var res = LC.applyMerge(S, m);
+    LC.applyNumbering(S);
+    mergeState = null;
+    tab = 'loads';
+    save();
+    renderAll();
+    toast('Merged: ' + S.panels.length + ' circuits, ' + S.pdps.length + ' boards' +
+      (res.missing.length ? ' — ' + res.missing.length + ' could not be attached, see the audit' : ''),
+      res.missing.length ? '' : 'good');
+  }
+
   /* ============================================================== BOM tab ----
      Counts are derived from the design, so they cannot go stale. What is not
      derivable is added by hand, and the two are counted separately — a bill
@@ -1791,6 +1932,12 @@
   function wireBom() {
     var x = el('bomExtra');
     if (x) x.onclick = bomAddModal;
+  }
+  function wireMerge() {
+    var b = el('mergeRun');
+    if (b) b.onclick = runMerge;
+    var a = el('mrgApply');
+    if (a) a.onclick = applyMergeToProject;
   }
   /* Manual lines: the things a design cannot know — a gland plate, a label
      printer, an enclosure the standard range does not cover. */
@@ -4038,6 +4185,8 @@
     if (changed) saveTree();
   }
   function globalAction(a) {
+    if (a === 'merge-run') return runMerge();
+    if (a === 'merge-pick') return mergeState = null, renderTab();
     if (a === 'bom-csv') return exportBom();
     if (a === 'bom-add') return bomAddModal();
     if (a === 'rev-take') { return revNoteModal(); }

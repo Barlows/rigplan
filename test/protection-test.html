@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=296"></script>
-<script src="../js/calc.js?v=296"></script>
+<script src="../js/data.js?v=300"></script>
+<script src="../js/calc.js?v=300"></script>
 <script>
 (function () {
   var results = [];
@@ -1645,6 +1645,115 @@
     bom4.items.every(function (i) { return i.source === 'design' || i.source === 'manual'; }), true);
   check('and the total is exactly the entered costs times their quantities',
     bom4.total, bom4.items.reduce(function (a, i) { return a + (i.unitCost || 0) * i.qty; }, 0));
+
+  /* ---------------------------------------------------------------- merging ---
+     Not multi-user — a server would break the file:// property the whole app is
+     built on. But the problem multi-user creates in practice is two engineers
+     and two files, and that is a merge, done in the browser. */
+  function trio() {
+    function build() {
+      var p = P();
+      var tx = LS.newTx({ tag: 'TX1', kva: 2500, impZ: 6, pos: { x: 5, y: 30 } }); p.txs.push(tx);
+      var pdb = LS.newPdb({ tag: 'PDB1', txId: tx.id, incomerA: 2500, pos: { x: 10, y: 30 } }); p.pdbs.push(pdb);
+      var pdp = LS.newPdp({ tag: 'PDP1', pdbId: pdb.id, incomerA: 1000, ways: 36, pos: { x: 20, y: 30 } }); p.pdps.push(pdp);
+      [0, 1, 2].forEach(function (i) {
+        var pn = LS.newPanel({ tag: 'DB1-1-' + (i + 1), name: 'Pump ' + (i + 1), kw: 100, pf: 0.85,
+          phases: '3', volt: 400, pdpId: pdp.id, autoAssign: false });
+        pn.__kind = 'panel';
+        pn.cable = { csa: 95, runs: 1, cores: 4, len: 40, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+        pn.prot = LS.newProt({ kind: 'mcb', ir: 250, frame: 250, icu: 36, trip: 'C', poles: 4 });
+        p.panels.push(pn);
+      });
+      LC.applyNumbering(p);
+      return p;
+    }
+    return { base: build(), mine: build(), theirs: build() };
+  }
+
+  /* Identical files must merge to nothing. Without an ancestor there is no way
+     to tell a change from a disagreement, which is why three files are needed. */
+  var t = trio();
+  check('two identical copies of the same design merge cleanly',
+    LC.mergeProjects(t.base, t.mine, t.theirs).conflicts.length, 0);
+
+  /* The common case: each engineer worked on a different circuit. */
+  t.mine.panels[0].kw = 160;
+  t.theirs.panels[1].name = 'Pump 2 (duty)';
+  var m = LC.mergeProjects(t.base, t.mine, t.theirs);
+  check('different work on different circuits is not a conflict',
+    m.conflicts.length, 0);
+  check('and both changes survive',
+    m.merged['pn:DB1-1-1'].kw + '/' + m.merged['pn:DB1-1-2'].name, '160/Pump 2 (duty)');
+
+  /* Two engineers making the SAME change is not a conflict either. Agreeing is
+     agreement, and reporting it as one would make merges look alarming. */
+  check('the same change made twice is not a conflict',
+    LC.mergeProjects(t.base, t.mine, t.mine).conflicts.length, 0);
+
+  /* A genuine conflict: same field, changed differently. */
+  var t2 = trio();
+  t2.mine.panels[0].kw = 160;
+  t2.theirs.panels[0].kw = 200;
+  var c = LC.mergeProjects(t2.base, t2.mine, t2.theirs, { prefer: 'theirs' });
+  check('the same field changed differently IS a conflict', c.conflicts.length, 1);
+  check('naming the field', c.conflicts[0].field, 'kw');
+  check('and carrying all three values so a person can decide',
+    c.conflicts[0].base + '/' + c.conflicts[0].mine + '/' + c.conflicts[0].theirs, '100/160/200');
+  check('resolved as asked', c.merged['pn:DB1-1-1'].kw, 200);
+  check('and the other way gives the other answer',
+    LC.mergeProjects(t2.base, t2.mine, t2.theirs, { prefer: 'mine' }).merged['pn:DB1-1-1'].kw, 160);
+
+  /* A clean deletion is a decision, not a conflict. Someone removed it; not
+     hearing about it would resurrect it. */
+  var t3 = trio();
+  t3.mine.panels.splice(2, 1);
+  LC.applyNumbering(t3.mine);
+  var d = LC.mergeProjects(t3.base, t3.mine, t3.theirs, { prefer: 'theirs' });
+  check('a deletion nobody disputed is not a conflict', d.conflicts.length, 0);
+  check('and the deletion stands', d.merged['pn:DB1-1-3'] === undefined, true);
+
+  /* The dangerous one: one deletes, the other edits. That is a conflict,
+     because the edit was work somebody did. */
+  var t4 = trio();
+  t4.mine.panels[2].kw = 250;
+  t4.theirs.panels.splice(2, 1);
+  LC.applyNumbering(t4.theirs);
+  var x = LC.mergeProjects(t4.base, t4.mine, t4.theirs, { prefer: 'theirs' });
+  check('deleted by one, edited by the other IS a conflict', x.conflicts.length, 1);
+  check('described as such', /deleted in theirs/.test(x.conflicts[0].kind), true);
+  check('preferring theirs drops it', x.merged['pn:DB1-1-3'] === undefined, true);
+  check('preferring mine keeps the edit',
+    LC.mergeProjects(t4.base, t4.mine, t4.theirs, { prefer: 'mine' }).merged['pn:DB1-1-3'].kw, 250);
+
+  /* Everything about the same reference is stable across two files, because the
+     reference is the identity — the same reason revision tracking keys on it. */
+  check('the merged records are keyed on the reference, not an id',
+    Object.keys(m.merged).filter(function (k) { return k.indexOf('DB1-1-1') > 0; }).length, 1);
+
+  /* And the result has to be a working project, not a pile of records. */
+  var t5 = trio();
+  t5.mine.panels[0].kw = 160;
+  t5.theirs.panels[1].name = 'Pump 2 (duty)';
+  var clean = LC.mergeProjects(t5.base, t5.mine, t5.theirs, { prefer: 'theirs' });
+  var built = LC.applyMerge(P(), clean);
+  LC.applyNumbering(built.p);
+  check('the merged project has all the circuits',
+    built.p.panels.length, 3);
+  check('every one of them attached to a board that exists',
+    built.p.panels.every(function (pn) { return pn.pdpId && LC.get(built.p, 'pdp', pn.pdpId); }), true);
+  check('a cable arrives as an object, not as the string it was compared as',
+    typeof built.p.panels[0].cable === 'object' && built.p.panels[0].cable.csa, 95);
+  check('and a device too', typeof built.p.panels[0].prot === 'object' && built.p.panels[0].prot.ir, 250);
+  check('the merged project still computes',
+    Math.round(LC.boardStats(built.p, built.p.pdps[0], 'pdp').kw) > 0, true);
+  check('and the audit still runs over it', Array.isArray(LC.audit(built.p)), true);
+
+  /* An item with no reference has no identity across files, so it is never
+     merged silently — it is named. */
+  var t6 = trio();
+  t6.mine.panels[0].tag = '';
+  check('an unreferenced item is listed rather than merged blindly',
+    LC.mergeBase(t6.mine).orphans.length > 0, true);
 
   /* ------------------------------------------------------ revision tracking ---
      A revision records a diff, not a copy, and the diff must be keyed on the

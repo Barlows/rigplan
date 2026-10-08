@@ -205,21 +205,71 @@ def script_syntax_errors():
     A syntax error in one file kills every suite that loads it, and the symptom
     is a blank page. Saying so directly is a much better failure message than
     forty-four failing checks in six suites.
+
+    This used to count braces. That reported calc.js as broken when it parsed
+    perfectly, because a check for "does this look like JSON" has to contain a
+    '{' in a string literal — and a check that cries wolf is worse than none,
+    because it is the one people learn to ignore. It also passed files that were
+    genuinely broken, since an unbalanced brace inside a comment cancels one in
+    code.
+
+    So it parses for real. macOS ships a JavaScript engine in osascript, so this
+    costs nothing and needs no browser: `new Function(source)` throws on a syntax
+    error and does nothing otherwise. If osascript is missing the check is
+    skipped rather than guessed at — the browser run that follows is the real
+    parser anyway.
     """
+    js_dir = os.path.join(ROOT, "js")
+    names = sorted(n for n in os.listdir(js_dir) if n.endswith(".js"))
+    if not names:
+        return []
+    try:
+        proc = subprocess.run(["osascript", "-l", "JavaScript", "-e", "1"],
+                              capture_output=True, text=True)
+        if proc.returncode != 0:
+            return []
+    except (OSError, FileNotFoundError):
+        return []
+
     errors = []
-    for name in sorted(os.listdir(os.path.join(ROOT, "js"))):
-        if not name.endswith(".js"):
-            continue
-        path = os.path.join(ROOT, "js", name)
-        with open(path, encoding="utf-8") as f:
-            src = f.read()
-        # Cheap but effective: unbalanced braces/parens inside a file that is
-        # all one expression per function will almost always show up. Not a
-        # substitute for a real parser, which is what the browser run is.
-        for opener, closer in (("{", "}"), ("(", ")"), ("[", "]")):
-            if src.count(opener) != src.count(closer):
-                errors.append("%s: %d %s vs %d %s" % (name, src.count(opener), opener,
-                                                       src.count(closer), closer))
+    # The path is built as a plain JavaScript string and only handed to
+    # Foundation at the point of reading. Concatenating onto an NSString object
+    # with `+` does not concatenate — it produces a description — so the file was
+    # never opened, the source came back nil, and `new Function(nil)` parsed
+    # happily. A check that cannot fail is worse than no check.
+    names_js = "[" + ",".join('"%s"' % n for n in names) + "]"
+    # Substitution is by .replace, not by %. The first version used the %
+    # operator with {DIR}-style names, which is not a format specifier at all:
+    # % left the text untouched, JXA then failed on an undefined NAMES, and the
+    # function returned "no errors" on a file with a syntax error in it. A guard
+    # that silently passes is the worst kind.
+    script = """
+    ObjC.import('Foundation');
+    var dir = '__DIR__';
+    var names = __NAMES__;
+    var out = [];
+    names.forEach(function (n) {
+      var s = $.NSString.stringWithContentsOfFileEncodingError(
+        $.NSString.stringWithString(dir + '/' + n), 4, $.null);
+      if (!s) { out.push(n + ': could not be read'); return; }
+      var src = s.js;
+      try { new Function(src); }
+      catch (e) { out.push(n + ': ' + String(e.message || e)); }
+    });
+    out.join('\\n');
+    """
+    script = script.replace("__DIR__", js_dir).replace("__NAMES__", names_js)
+
+    try:
+        proc = subprocess.run(["osascript", "-l", "JavaScript", "-e", script],
+                              capture_output=True, text=True)
+    except OSError:
+        return []
+    if proc.returncode != 0:
+        return []
+    for line in proc.stdout.strip().splitlines():
+        if line.strip():
+            errors.append(line.strip())
     return errors
 
 

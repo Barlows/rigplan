@@ -794,6 +794,38 @@ figure. There is a unit-cost field because somebody will want it, and a total
 built from entered costs, explicitly labelled as arithmetic on those entries and
 not a quotation.
 
+### Merging two files — and why there is no multi-user
+
+**There is no multi-user, and the reason is structural.** Shared live editing
+means one of three things stops being true: no server, no dependencies, or it
+runs from `file://`. A copy on a laptop that opens by double-clicking is why this
+app is worth using, so that property is not being given up.
+
+What *is* available is the problem multi-user actually creates in practice: two
+engineers each open the same project, each works on it, each exports a file, and
+now there are two versions and no way to tell which is which. That is a merge,
+and a merge can be done in the browser.
+
+**Three files, not two.** Without the common ancestor there is no way to know
+whether a difference is one engineer's change or a disagreement between them, and
+a two-way merge either loses work or invents it.
+
+| | |
+|---|---|
+| Different circuits edited | merged automatically, no conflict |
+| The **same** change made twice | not a conflict — agreeing is agreement |
+| The same field changed differently | **conflict**, both values shown against the base |
+| Deleted by one, untouched by the other | the deletion stands |
+| Deleted by one, **edited** by the other | **conflict** — the edit was real work |
+
+Keyed on the reference, for the same reason revision tracking is: a circuit is the
+same circuit because of what it is called. An item with no reference has no
+identity across files, so it is never merged silently — it is listed.
+
+Applying a merge rebuilds the project, reattaches circuits to boards from the
+references the merge carried, and reports anything it could not attach. It is
+undoable, because it replaces the whole design.
+
 ### Revision tracking
 
 A load schedule is a controlled document. The question asked later is not "what
@@ -1250,13 +1282,14 @@ test/csv-roundtrip-test.html 26 checks on reading the app's own export back,
                           and a vendor file with a title and revision above it
 tools/bump.py              set one cache-busting version across every HTML file
 test/run.py               headless runner — serves the directory, drives Chrome,
-                          reads the results back out of the DOM
+                          reads the results back out of the DOM, and parses every
+                          app script for real first
 test/parser-test.html     35 checks against a synthetic DXF with known geometry
 test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        36 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
-test/protection-test.html 490 checks on fault levels, device proposals, cable
+test/protection-test.html 513 checks on fault levels, device proposals, cable
                           thermal withstand, selectivity from trip curves, earth
                           fault looping, the neutral conductor on 3P+N feeders,
                           the earthing arrangement, reactive power, harmonics,

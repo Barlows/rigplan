@@ -2485,6 +2485,251 @@ function clearingTimeAt(prot, multiple) {
     };
   }
 
+/* ================================================================= merging ===
+     True multi-user is not available here and the reason is structural, not an
+     oversight: the app has no server, no dependencies and runs from a file://
+     URL. Shared live editing means one of those three things stops being true,
+     and the property is what makes the whole thing work — a copy on a laptop
+     that opens by double-clicking is why it is worth using.
+
+     What IS available is the problem multi-user actually creates in practice.
+     Two engineers each open the same project, each works on it, each exports a
+     file, and now there are two versions and no way to tell which is which. That
+     is a merge, and a merge can be done entirely in the browser.
+
+     The approach is a **three-way merge**, because two-way is not enough:
+
+         base      the common ancestor, which is what tells you whether a
+                   difference is a change or a conflict
+         mine      the first engineer's file
+         theirs    the second's
+
+     A field is a conflict only when BOTH sides changed it away from the base.
+     If only one did, that change is taken. This is the whole difference between
+     merging and concatenating, and getting it wrong either loses work or
+     invents it.
+
+     What can be merged cleanly is anything keyed on a **reference**, for the
+     same reason revision tracking is keyed that way: a circuit is the same
+     circuit because of what it is called, not because of an id a session
+     happened to mint. Anything with no reference cannot be matched between two
+     files, so it is never merged — it is listed for a decision.
+
+     The result is not written over anything. It is offered, with every conflict
+     named and every automatic decision shown, because the person who has to sign
+     the resulting schedule is not the person who merged it.
+ */
+  function mergeBase(p) {
+    /* Flattened to reference-keyed records, the same shape revision tracking
+       diffs, so the two features cannot disagree about what a circuit is. */
+    var out = {};
+    function add(kind, o, fields) {
+      var ref = (o.tag || o.ref || '').trim();
+      if (!ref) return false;
+      var rec = { kind: kind, ref: ref };
+      fields.forEach(function (f) {
+        var v = o[f];
+        rec[f] = (v === null || v === undefined) ? null
+          : (typeof v === 'object' ? stable(v) : v);
+      });
+      out[kind + ':' + ref] = rec;
+      return true;
+    }
+    (p.txs || []).forEach(function (o) {
+      add('tx', o, ['kva', 'impZ', 'kvIn', 'kvOut', 'vectorGroup', 'phases', 'notes']);
+    });
+    (p.pdbs || []).forEach(function (o) {
+      add('pdb', o, ['num', 'name', 'incomerA', 'busbarA', 'phases', 'cable', 'prot', 'notes']);
+    });
+    (p.pdps || []).forEach(function (o) {
+      add('pdp', o, ['num', 'name', 'incomerA', 'busbarA', 'ways', 'cable', 'prot', 'notes']);
+    });
+    (p.dbs || []).forEach(function (o) {
+      add('db', o, ['num', 'name', 'incomerA', 'ways', 'cable', 'prot', 'enclosure', 'notes']);
+    });
+    (p.panels || []).forEach(function (o) {
+      if (!add('pn', o, ['name', 'type', 'kw', 'kva', 'pf', 'demand', 'phases', 'volt',
+        'cable', 'prot', 'harmonicType', 'thd', 'triplen', 'neutral', 'peInCable',
+        'isMotor', 'start', 'loadTorque', 'motorClass', 'notes', 'isMotor'])) return;
+      out['pn:' + o.tag].fedFrom = o.pdpId ? (get(p, 'pdp', o.pdpId) || {}).tag
+        : (o.pdbId ? (get(p, 'pdb', o.pdbId) || {}).tag : '');
+    });
+    /* Anything with no reference cannot be matched across two files, so it is
+       never merged silently. Named instead. */
+    var orphans = [];
+    (p.panels || []).concat(p.pdps || [], p.dbs || [], p.pdbs || [], p.txs || []).forEach(function (o) {
+      if (!(o.tag || o.ref || '').trim()) orphans.push(o.name || '(unnamed)');
+    });
+    return { records: out, orphans: orphans };
+  }
+
+  function mergeProjects(base, mine, theirs, opts) {
+    opts = opts || {};
+    /* Which side wins a genuine conflict. The default is the second file, and
+       the reason is stated rather than implied: it is a choice somebody has to
+       make, not a default that should be discovered later. */
+    var prefer = opts.prefer || 'theirs';
+    var B = mergeBase(base).records, M = mergeBase(mine).records, T = mergeBase(theirs).records;
+    var keys = {};
+    Object.keys(B).forEach(function (k) { keys[k] = 1; });
+    Object.keys(M).forEach(function (k) { keys[k] = 1; });
+    Object.keys(T).forEach(function (k) { keys[k] = 1; });
+
+    var merged = {}, conflicts = [], taken = [], same = 0;
+    var order = Object.keys(keys).sort();
+
+    order.forEach(function (k) {
+      var b = B[k], m = M[k], t = T[k];
+      /* Present on one side only, and not deleted by the other: a plain add. */
+      if (b === undefined && t !== undefined && m === undefined) { merged[k] = t; taken.push({ key: k, kind: 'added in theirs' }); return; }
+      if (b === undefined && m !== undefined && t === undefined) { merged[k] = m; taken.push({ key: k, kind: 'added in yours' }); return; }
+      /* Deleted on one side and untouched on the other: the deletion stands.
+         Someone removed a circuit; not hearing about it would resurrect it. */
+      if (t === undefined && m !== undefined) {
+        if (b === undefined) { taken.push({ key: k, kind: 'removed in theirs' }); return; }
+        if (equal(b, m)) { taken.push({ key: k, kind: 'removed in theirs' }); return; }
+        conflicts.push({ key: k, field: '*', mine: m, theirs: undefined, base: b,
+          kind: 'deleted in theirs, changed in yours' });
+        merged[k] = prefer === 'theirs' ? undefined : m;
+        return;
+      }
+      if (m === undefined && t !== undefined) {
+        if (b === undefined) { taken.push({ key: k, kind: 'added in theirs' }); return; }
+        if (equal(b, t)) { taken.push({ key: k, kind: 'removed in yours' }); return; }
+        conflicts.push({ key: k, field: '*', mine: undefined, theirs: t, base: b,
+          kind: 'deleted in yours, changed in theirs' });
+        merged[k] = prefer === 'theirs' ? t : undefined;
+        return;
+      }
+      /* Present in both. */
+      if (!m || !t) { if (m) merged[k] = m; else if (t) merged[k] = t; return; }
+
+      var rec = { kind: m.kind, ref: m.ref }, changed = false;
+      Object.keys(m).forEach(function (f) {
+        if (f === 'kind' || f === 'ref') return;
+        var bv = b ? b[f] : undefined, mv = m[f], tv = t[f];
+        var mSame = bv === undefined || JSON.stringify(mv) === JSON.stringify(bv);
+        var tSame = bv === undefined || JSON.stringify(tv) === JSON.stringify(bv);
+        if (JSON.stringify(mv) === JSON.stringify(tv)) {
+          /* Both made the same change, or neither did. Either way there is no
+             decision to make — which is the common case and the reason a merge
+             this way is quick. */
+          if (!mSame) { rec[f] = mv; changed = true; }
+          else rec[f] = mv;
+          return;
+        }
+        if (mSame) { rec[f] = tv; changed = true; return; }   // only theirs moved
+        if (tSame) { rec[f] = mv; changed = true; return; }   // only mine moved
+        /* Both moved it, differently. That is the only real conflict. */
+        rec[f] = prefer === 'theirs' ? tv : mv;
+        conflicts.push({
+          key: k, field: f, mine: mv, theirs: tv, base: bv,
+          kind: 'both changed'
+        });
+        changed = true;
+      });
+      if (changed) taken.push({ key: k, kind: 'merged' });
+      else same++;
+      merged[k] = rec;
+    });
+
+    return {
+      merged: merged,
+      conflicts: conflicts,
+      /* Every automatic decision, so the merge can be checked rather than
+         trusted. */
+      taken: taken,
+      unchanged: same,
+      orphansMine: mergeBase(mine).orphans,
+      orphansTheirs: mergeBase(theirs).orphans,
+      canApply: conflicts.length === 0 || !!opts.prefer
+    };
+  }
+  function equal(a, b) {
+    if (!a || !b) return false;
+    var ks = Object.keys(a), kt = Object.keys(b);
+    if (ks.length !== kt.length) return false;
+    for (var i = 0; i < ks.length; i++) {
+      if (JSON.stringify(a[ks[i]]) !== JSON.stringify(b[kt[i]])) return false;
+    }
+    return true;
+  }
+
+  /* Write a merge back into a project. Records become items again, parent links
+     are restored from the references the merge carried, and anything that cannot
+     be rebuilt — a record with no live parent — is named rather than dropped. */
+  function applyMerge(p, merge) {
+    var built = { tx: [], pdb: [], pdp: [], db: [], pn: [] };
+    var missing = [];
+    Object.keys(merge.merged).forEach(function (k) {
+      var rec = merge.merged[k];
+      var kind = rec.kind, ref = rec.ref;
+      var item = {
+        id: uidFor(p, kind), tag: ref,
+        num: rec.num, name: rec.name || ref, notes: rec.notes || ''
+      };
+      /* Fields the merge carried that the factory does not know about are set
+         after, so a new field added to the engine does not need this function
+         changed before it survives a merge. */
+      /* Object fields were flattened to a canonical string for comparison, so
+         they are revived here rather than written straight back — a cable
+         arriving as a JSON string is not a cable, and the first symptom is a
+         feeder with no conductor size on it. Reviving is safe because the string
+         was produced by JSON.stringify on a plain object. */
+      Object.keys(rec).forEach(function (f) {
+        if (f === 'kind' || f === 'ref' || f === 'num') return;
+        item[f] = revive(rec[f]);
+      });
+      if (kind === 'pn') {
+        /* Already revived above; these only supply the default when the merge
+           carried none at all. Assigning rec.cable here would put the flattened
+           string straight back over the object the loop had just rebuilt. */
+        if (item.cable === undefined) item.cable = null;
+        if (item.prot === undefined) item.prot = null;
+        item.__kind = 'panel';
+        /* The parent comes back from a reference, resolved against what has
+           already been built, so the merge cannot create a dangling circuit. */
+        if (rec.fedFrom) {
+          var found = null;
+          built.pdp.concat(built.pdb).forEach(function (b) { if (b.tag === rec.fedFrom) found = b; });
+          if (found) {
+            if (found.__kind === 'pdb') item.pdbId = found.id; else item.pdpId = found.id;
+          } else {
+            missing.push(ref + ' (fed from ' + rec.fedFrom + ', which is not in the merge)');
+          }
+        }
+      }
+      if (kind === 'db' || kind === 'pdp') {
+        if (item.cable === undefined) item.cable = null;
+        if (item.prot === undefined) item.prot = null;
+      }
+      built[kind].push(item);
+    });
+    p.txs = built.tx; p.pdbs = built.pdb; p.pdps = built.pdp;
+    p.dbs = built.db; p.panels = built.pn;
+    return { p: p, missing: missing };
+  }
+  /* Reverse of stable(): a canonical string becomes the object it came from.
+     Applied only to strings that were flattened, which is recorded rather than
+     guessed at — a name that happens to be JSON-looking must not be revived
+     into an object. */
+  function revive(v) {
+    if (typeof v !== 'string') return v;
+    if (v.charAt(0) !== '{' && v.charAt(0) !== '[') return v;
+    try { var out = JSON.parse(v); return (out && typeof out === 'object') ? out : v; }
+    catch (e) { return v; }
+  }
+
+  /* A fresh id, because a merge is a new document rather than an edit of one.
+     The reference is what carries the identity; the id is bookkeeping. */
+  function uidFor(p, kind) {
+    var prefix = { tx: 'tx', pdb: 'pdb', pdp: 'pdp', db: 'db', pn: 'pnl' }[kind] || 'x';
+    var n = 0, id;
+    do { n++; id = prefix + '_m' + n + '_' + Math.floor(Math.random() * 1e6).toString(36); }
+    while (p.txs.concat(p.pdbs, p.pdps, p.dbs, p.panels).some(function (o) { return o.id === id; }));
+    return id;
+  }
+
 /* ============================================================ equipment ========
      A bill of materials needs quantities and catalogue references. The design
      already knows what everything is — how many boards, how many circuits, what
@@ -4810,7 +5055,7 @@ function selectivityBand(s) {
     clearingTimeAt, selectivity, selectivityMessage, selectivityBand, selectivityLadder, reactive,
     arcTimeAt, arcDistanceFactor, arcAssessment,
     COINCIDENCE_BANDS, demandMethods, boardDemandKva,
-    EQUIPMENT_GROUPS, billOfMaterials,
+    EQUIPMENT_GROUPS, billOfMaterials, mergeBase, mergeProjects, applyMerge,
     REVISION_FIELDS, snapshotForDiff, diffProjects, stable,
     voltageProfile, voltageProfileWorst, loadBelow, panelsBelow,
     pfCorrection, capResonance, impedanceBase, puImpedance, pathImpedance, faultLevel,
