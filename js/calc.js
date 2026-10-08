@@ -895,7 +895,9 @@ var LC = (function () {
         st.amp.toFixed(1) + ' A on a ' + st.rating + ' A incomer. Move a load to a new board or increase the incomer.');
       else if (st.util > 85) add('warn', 'pdp', b.id, b.tag + ' heavily loaded (' + st.util.toFixed(0) + '%)',
         st.amp.toFixed(1) + ' A of ' + st.rating + ' A. Headroom ' + (st.rating - st.amp).toFixed(1) + ' A.');
-      if (st.panels.length === 0) add('warn', 'pdp', b.id, b.tag + ' has no outgoing circuits', 'Board has no control panels assigned.');
+      if (st.panels.length === 0) add('warn', 'pdp', b.id, b.tag + ' has no outgoing circuits',
+        'No control panels are assigned to this board, and it is on the switchgear schedule.',
+        'board-empty');
       /* only judge the enclosure when the way count is actually stated */
       if (st.ways !== null && st.spareUsed > st.ways) add('bad', 'pdp', b.id, b.tag + ' more circuits than ways',
         st.spareUsed + ' circuits on a ' + st.ways + '-way board. The enclosure will not take them.');
@@ -913,8 +915,7 @@ var LC = (function () {
     var LOADA = D.DB_LOAD_MAX_A || 63;
     p.dbs.forEach(function (b) {
       var st = boardStats(p, b, 'db');
-      if (st.panels.length === 0) add('info', 'db', b.id, b.tag + ' is spare',
-        'No circuits assigned yet — worth keeping for future small loads.');
+
       /* The largest single equipment on a sub-board is a 63 A board. Anything
          bigger belongs directly on the distribution board, both because the
          board will not carry it and because a big feeder on a small board
@@ -932,8 +933,19 @@ var LC = (function () {
         st.amp.toFixed(1) + ' A on a ' + st.rating + ' A incomer. Move a load to another board or increase the incomer.');
       else if (st.util > 85) add('warn', 'db', b.id, b.tag + ' heavily loaded (' + st.util.toFixed(0) + '%)',
         st.amp.toFixed(1) + ' A of ' + st.rating + ' A. Headroom ' + (st.rating - st.amp).toFixed(1) + ' A.');
+      /* One finding, not two. "Is spare" and "has no outgoing circuits" are the
+         same condition reached twice, and a switchgear schedule with six spare
+         sub-boards produced twelve rows saying one thing. The spare way count on
+         the board is the interesting half — a board with nothing on it is
+         ordinary while a project is being built, but a board with no circuits and
+         no spare ways left is a design decision nobody made. */
       if (st.panels.length === 0) add('info', 'db', b.id, b.tag + ' has no outgoing circuits',
-        'Sub-board is spare — worth keeping for growth, but check it is needed.');
+        'Nothing is fed from this sub-board and it has ' + st.spare + ' spare way(s) spare. That is ' +
+        'ordinary while a project is still being built and worth checking before it is issued: a ' +
+        'sub-board in the switchgear schedule with no circuits and no spare capacity is a board that ' +
+        'was paid for and has nothing to do. Either put the small loads it was intended for on it, ' +
+        'or remove it from the schedule.',
+        'board-empty');
       if (st.spareUsed > st.spare) add('warn', 'db', b.id, b.tag + ' more circuits than ways',
         st.spareUsed + ' circuits on a ' + st.spare + '-way board. The enclosure will not take them.');
       if (st.dev > D.num(p.design.imbalanceBad, 25)) add('bad', 'db', b.id, b.tag + ' phase imbalance ' + st.dev.toFixed(0) + '%',
@@ -1417,7 +1429,14 @@ var LC = (function () {
     }
 
 
-    function checkProt(p, item, kind, loadA, cableA, faultKA) {
+    /* `deviceOnly` asks the questions that are about the DEVICE alone — does it
+       exist, is its setting coherent, can it interrupt the fault — and skips the
+       ones that compare the device against a conductor or a load. It is what an
+       unterminated spare way gets: a breaker that is fitted and rated but has
+       nothing connected to it, so it cannot be too large for a cable and there is
+       no load for it to be under. */
+
+    function checkProt(p, item, kind, loadA, cableA, faultKA, deviceOnly) {
       var d = item.prot;
       if (!d) { add('warn', kind, item.id, item.tag + ' has no protective device',
         'Nothing is interrupting this supply. Use Propose, or enter the device by hand.'); return; }
@@ -1465,6 +1484,15 @@ var LC = (function () {
       if (d.kind === 'mcb' && d.trip && !D.MCB_CURVES[d.trip]) {
         add('info', kind, item.id, item.tag + ' unrecognised MCB curve "' + d.trip + '"');
       }
+      /* Everything above is a question about the device alone — does it exist, is
+         its setting coherent, is its frame big enough, can it interrupt the
+         fault. That is the whole of what can be asked about an unterminated
+         spare way, and the first of the questions below is the first that needs
+         a conductor to compare against. Everything from here to the end of the
+         function is about the circuit the device protects, which a spare way
+         does not have. */
+      if (deviceOnly) return;
+
       /* The device protects the conductor as much as the load. A device set
          well above the cable's ampacity will let the cable reach its thermal
          limit before the device trips. */
@@ -1517,8 +1545,20 @@ var LC = (function () {
     });
     p.panels.forEach(function (pn) {
       if (!pn.pdpId && !pn.pdbId) return;
-      if (isSpare(pn)) return;   // nothing terminated, so nothing to check
       var d = panelDemand(p, pn);
+      /* A fitted but unterminated spare way: the device is installed and rated,
+         so it still has to be a device that can interrupt the fault — the moment
+         anything is connected to that way, the question is live. Everything that
+         assumes a conductor going somewhere is skipped, because there is no
+         conductor: no thermal withstand, no loop, no protective conductor, no
+         harmonics, no starting, no earthing.
+
+         Skipping the whole item instead was wrong and lost a real check: it is
+         the one thing a spare breaker still has to get right. */
+      if (isSpare(pn)) {
+        checkProt(p, pn, 'panel', 0, null, faultAt(p, pn, 'panel'), true);
+        return;
+      }
       var cab = pn.cable && pn.cable.csa ? cableRating(pn.cable) : null;
       var f = faultAt(p, pn, 'panel');
       checkProt(p, pn, 'panel', d.ampHarm, cab && cab.derated, f);
@@ -1562,12 +1602,20 @@ var LC = (function () {
          warning. Neither is automatically wrong — the alternative is often to
          accept a deliberate compromise — but both have to be a decision rather
          than an accident, and only a deliberate one is visible. */
+      /* Two keys, not one, because a board and a circuit are different problems:
+         a board that is not selective with the board above it is a coordination
+         setting, while a final circuit that is not selective with the board it
+         sits on is usually a deliberate compromise and is far more common. The
+         key is what lets thirty-four instances of the second read as one row
+         naming the boards, instead of thirty-four lines saying the same thing. */
       add('warn', kind, item.id,
         item.tag + ' not selectively graded against ' + up.tag +
         (s.regime === 'overload' ? ' (overload)' : ' (above ' + s.fromKA.toFixed(1) + ' kA)'),
         selectivityMessage(s, item.tag) +
         ' The curves used are the conventional envelopes from IEC 60898 and IEC 60947-2, not the ' +
-        'manufacturer\'s, so this says the two settings do not separate — check the actual curves before changing anything.');
+        'manufacturer\'s, so this says the two settings do not separate — check the actual curves before changing anything.',
+        kind === 'panel' ? 'selectivity-circuit' : 'selectivity-board',
+        num(kind === 'panel' ? item.kw : 0, 0));
     }
     p.pdps.forEach(function (d) { grade(d, 'pdp'); });
     p.dbs.forEach(function (b) { grade(b, 'db'); });
@@ -1670,7 +1718,12 @@ var LC = (function () {
       /* The minimum conductor a 20 ms device needs at this fault level. Shown
          because it turns an abstract impedance into a cable size. */
       var minCsa = Math.ceil(kA * 1000 * Math.sqrt(0.02) / 143);
-      if (tx.impZStated !== false) {
+      /* Only an EXPLICIT tick on the nameplate counts as stated. Blank, and the
+         field default stands as an assumption — which is the whole point of
+         recording the flag separately from the number. The test of it is `===
+         true` rather than `!== false`, because the common case is the one that
+         has not been ticked and it must not be the one that reads as stated. */
+      if (tx.impZStated !== true) {
         add('warn', 'tx', tx.id, tx.tag + ' impedance is an assumption, not a fact',
           'Percent impedance is not stated for this transformer, so ' + zpu.toFixed(1) +
           '% has been assumed — a usual figure for a distribution transformer, and nothing more. ' +
@@ -1904,9 +1957,15 @@ var LC = (function () {
             ' kA²s, giving a margin of ' + (lt.margin || 0).toFixed(2) + '×).'
             : 'clear fast enough. This is the ideal case with zero let-through, so the real answer is ' +
               'worse still.') +
-          ' A smaller conductor does not help at this length — the withstand goes as S² while the ' +
-          'fault current barely moves — so this needs a faster device, a shorter run, or a different ' +
-          'route.',
+          ' A smaller conductor does not help: the withstand goes as S² while the fault current ' +
+          'barely moves over a run this length, so the only ways down are a faster device or a lower ' +
+          'fault level.' + (function () {
+            var m = minimumCsa(p, pn);
+            if (!m || !m.byFault || m.byFault <= num(pn.cable.csa, 0)) return '';
+            return ' The smallest conductor that survives is ' + m.byFault + ' mm², against ' +
+              num(pn.cable.csa, 0) + ' mm² now' +
+              (m.governed === 'load' && m.byLoad ? ', and the load on its own needs ' + m.byLoad + ' mm²' : '') + '.';
+          })(),
           'let-through', num(pn.kw, 0));
       }
     });
@@ -4261,6 +4320,9 @@ function selectivityBand(s) {
     if (key === 'pf-available') return 'supply below the power factor penalty limit';
     if (key === 'motor-class') return 'machine whose overload relay class its device cannot meet';
     if (key === 'let-through') return 'feeder conductor that cannot survive the fault';
+    if (key === 'selectivity-circuit') return 'circuit not selectively graded against the board it sits on';
+    if (key === 'selectivity-board') return 'board not selectively graded against the board above it';
+    if (key === 'board-empty') return 'board on the schedule with nothing fed from it';
     if (key === 'vdrop-path') return 'circuit whose total volt drop from the transformer exceeds the limit';
     if (key === 'vdrop-incomplete') return 'circuits whose voltage drop profile cannot be completed';
     if (key === 'impz-assumed') return 'transformers whose impedance is assumed rather than stated';
@@ -4424,7 +4486,12 @@ function selectivityBand(s) {
         var t = num(opts.clearSeconds, 0);
         if (t > 0) {
           out.clearSeconds = t;
-          out.energyToClear = ideal * t;      // triangular: half the product
+          /* The whole I²t for the full clearing time, not the triangle under it.
+             The current does not fall away linearly — the device opens part way
+             through — so the triangle is the true figure and this is its upper
+             bound. A check whose job is to catch the case where the conductor does
+             not survive takes the bound, and says which bound it took. */
+          out.energyToClear = ideal * t;
           out.survivesClearingTime = out.cableIt > out.energyToClear;
           out.clearMargin = out.cableIt / out.energyToClear;
         }
@@ -5125,57 +5192,137 @@ function selectivityBand(s) {
      could become.
 
      That is why this is a tool and not a silent correction. */
+  /* What this conductor has to be. Two independent constraints, and the larger
+     answer wins.
+
+     AMPACITY — the device rating the conductor exists to protect. Searched
+     through the standard sizes rather than by inverting the rating table,
+     because the rating is a table lookup with derating applied and inverting it
+     by hand is right to within 5% and wrong in exactly the cases that matter.
+
+     SHORT CIRCUIT — k²S² against I²t for the time the device takes to clear. On a
+     weak supply this never binds and the ampacity answer stands. On a strong one
+     it binds hard and can demand two or three sizes more than the load needs,
+     which is invisible on a schedule that only records load current: 95 mm²
+     carries 240 A comfortably and cannot survive 76 kA for 40 ms.
+
+     Which of the two drove the answer is returned with it, because "load" and
+     "fault" are different conversations and one number for both hides which is
+     actually governing. */
   function minimumCsa(p, pn) {
     var prot = pn.prot;
     if (!prot) return null;
     var need = feederAmp(p, pn);
-    if (!(need > 0)) return null;
     var c = pn.cable || { cores: 4, method: 'XL-A1', group: 2, ambient: 40, sheathed: true, runs: 1 };
-    /* Search the standard sizes rather than inverting the table: the rating is a
-       table lookup with derating applied, and inverting it by hand is exactly
-       the kind of thing that is right to within 5% and wrong in the cases that
-       matter. */
-    var sizes = D.CSA;
-    for (var i = 0; i < sizes.length; i++) {
-      var trial = Object.assign({}, c, { csa: sizes[i], runs: 1 });
-      var r = cableRating(trial);
-      if (r && r.derated >= need) return sizes[i];
+    var byLoad = null;
+    if (need > 0) {
+      var sizes = D.CSA;
+      for (var i = 0; i < sizes.length; i++) {
+        var trial = Object.assign({}, c, { csa: sizes[i], runs: 1 });
+        var r = cableRating(trial);
+        if (r && r.derated >= need) { byLoad = sizes[i]; break; }
+      }
     }
-    return null;
+    var kind = pn.__kind === 'panel' ? 'panel' : pn.__kind;
+    var fl = faultLevel(p, pn, kind);
+    var clear = fl ? clearingTimeAt(prot, fl.kA * 1000 / Math.max(1, num(prot.ir, 1))) : null;
+    var insul = (D.METHODS[c.method] || D.METHODS['A1']).insul;
+    var byFault = (fl && clear) ? csaForFault(fl.kA, clear, insul, pn.conductor) : null;
+    /* The fault case is judged against ONE run. Parallel runs share the fault, so
+       a single run has to stand on its own — they are not independent paths. */
+    var csa, governed;
+    if (byFault && (!byLoad || byFault > byLoad)) { csa = byFault; governed = 'fault'; }
+    else { csa = byLoad; governed = 'load'; }
+    return { csa: csa, byLoad: byLoad, byFault: byFault, governed: governed,
+             faultKA: fl ? fl.kA : null, clearSeconds: clear };
+  }
+  /* The smallest conductor that survives a short circuit of this current for
+     this long.
+
+     The adiabatic equation rearranged. A conductor carries I²t to a limit of
+     k²S², so the conductor this fault demands is
+
+         S = I·√t / k
+
+     which for 76 kA cleared in 40 ms on XLPE copper is 106 mm² — the next
+     standard size up. That is a result worth being able to read straight off
+     the schedule, because it is the constraint that decides the size on a strong
+     supply: ampacity runs to 240 A through 95 mm², and nothing in the cable
+     schedule shows that the same conductor cannot take the fault.
+
+     Returned as an orderable size by searching the standard list rather than by
+     reporting 106. Nobody specifies 106 mm², and a number that is not a size is
+     a number nobody can act on.
+
+     The time used is the device's own clearing time, so a faster device buys a
+     smaller conductor — which is why this belongs beside the device rather than
+     in the cable. */
+  function csaForFault(iKA, seconds, insul, conductor) {
+    var k = WITHSTAND_K[insul];
+    if (!k || conductor === 'Al' || conductor === 'Alu') return null;
+    if (!(iKA > 0) || !(seconds > 0) || !isFinite(seconds)) return null;
+    var need = iKA * 1000 * Math.sqrt(seconds) / k;
+    var list = D.CSA;
+    for (var i = 0; i < list.length; i++) if (list[i] >= need) return list[i];
+    return null;                       // beyond the range — say so, do not guess
   }
 
-  /* Every circuit whose device out-rates its cable, with the size it would need.
-     Returned rather than applied — see the note above. */
-  function cableProtectionMismatches(p) {
+  /* Every feeder whose conductor is smaller than minimumCsa() says it may be,
+     with the size it needs and which of the two constraints is asking.
+
+     Two different reasons end up here, and they are worth telling apart because
+     the remedy is different:
+
+       device over-rates the cable   the breaker is larger than the conductor it
+                                     protects. Either the breaker is downrated or
+                                     the conductor upsized — a commercial choice,
+                                     since a breaker sized for the machine's
+                                     possible output rather than its present duty
+                                     is deliberate and common on drives.
+
+       cable will not take the fault  the conductor carries the load comfortably
+                                     and still fails a short circuit. There is no
+                                     choice here: the size has to go up, or the
+                                     device has to clear faster, or the fault
+                                     level has to come down.
+
+     Sorting on the larger of the two puts the ones that cannot be argued with at
+     the top. Returned rather than applied — see the note above the function. */
+  function cableShortfalls(p) {
     var out = [];
     p.panels.forEach(function (pn) {
       if (isSpare(pn) || !pn.prot || !pn.cable || !num(pn.cable.csa, 0)) return;
+      var m = minimumCsa(p, pn);
+      if (!m || !m.csa) return;
+      var now = num(pn.cable.csa, 0);
+      if (now >= m.csa) return;
       var r = cableRating(pn.cable);
-      if (!r) return;
       var ir = num(pn.prot.ir, 0);
-      if (!(ir > 0) || ir <= r.derated * 1.05) return;
-      var min = minimumCsa(p, pn);
       var dm = panelDemand(p, pn);
       out.push({
         pn: pn,
         ir: ir,
-        now: num(pn.cable.csa, 0),
-        rated: r.derated,
-        min: min,
+        now: now,
+        rated: r ? r.derated : null,
+        min: m.csa,
+        governed: m.governed,
+        byLoad: m.byLoad,
+        byFault: m.byFault,
+        faultKA: m.faultKA,
         loadA: dm.amp,
-        /* how many times over the device is, which says whether this is a data
-           error or a deliberate oversized breaker */
-        ratio: ir / Math.max(1, r.derated),
-        /* the machine's own current, where the vendor gave one: a breaker far
-           above it is worth a second look */
-        machineA: dm.amp,
-        // A breaker many times the machine's own load is common on drives and
-        // motors — it is sized for overload and for starting, not for running.
-        // That does not excuse the cable, but it changes what the fix is.
+        /* how far short, in sizes rather than in amps — the useful measure */
+        short: m.csa / now,
+        /* A breaker many times the machine's own load is sized for starting and
+           for what the machine could become, not for present duty. That does not
+           excuse the cable, but it changes who should be downrated. */
         deliberate: ir > dm.amp * 4
       });
     });
-    out.sort(function (a, b) { return b.ratio - a.ratio; });
+    /* Faults first: no one can argue with those. */
+    out.sort(function (a, b) {
+      if (a.governed !== b.governed) return a.governed === 'fault' ? -1 : 1;
+      return b.short - a.short;
+    });
     return out;
   }
 
@@ -5259,7 +5406,7 @@ function selectivityBand(s) {
     hasNeutralConductor, isThreePhaseWithNeutral, supplyArrangement, neutralCheck,
     peNeededCsa,
     startMethod, startingCurrentA, startingCheck, sourceImpedanceAt, curveInstantaneousMultiple, torqueNeeded,
-    isMotorLoad, isSpare, minimumCsa, cableProtectionMismatches,
+    isMotorLoad, isSpare, minimumCsa, cableShortfalls, csaForFault,
     SELECTIVITY_STEPS,
     choosePdp, assignPanel, createPdpFor, feederLen, syncLen,
     sizeCablesFor, sizeCablesForPdb, sizeCablesForDb, suggestDbFeeder, sizeCableForPanel, sizeAll, feederAmp, needsSizing,

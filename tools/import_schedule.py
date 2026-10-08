@@ -408,6 +408,14 @@ def main():
             "dbId": None, "autoAssign": False,
             "pos": next_pos(r["db"] or host_main, host_main),
             "notes": " ".join(bits),
+            # A fitted but unterminated spare way. The sheet says "Spare" in its
+            # load-type column and gives no load, so this is known here and not
+            # guessed at downstream — and it matters: a spare breaker is
+            # installed and rated but has no cable to anything, so the thermal
+            # withstand, earth fault loop and protective conductor checks do not
+            # apply to it. Left unset for every other row, because "no load" on
+            # its own could be an unsized machine and only the engineer knows.
+            "isSpare": True if is_spare else None,
             "cable": {"csa": None, "runs": 1, "cores": 4, "len": 0,
                       "method": "XL-A1", "group": 1, "ambient": 40, "sheathed": True},
             # kept so the vendor's own figures are not lost

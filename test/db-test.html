@@ -26,8 +26,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=328"></script>
-<script src="../js/calc.js?v=328"></script>
+<script src="../js/data.js?v=342"></script>
+<script src="../js/calc.js?v=342"></script>
 <script>
 (function () {
   var results = [];
@@ -152,7 +152,17 @@
   check('a chiller on the PDP is fine', auditTitles(p4, /CHL-01.*too large/), []);
   check('and it loads the PDP directly', LC.boardStats(p4, pdp4, 'pdp').panels.length, 1);
   check('the sub-board is still empty', LC.boardStats(p4, db4, 'db').panels.length, 0);
-  check('an empty sub-board is noted as spare', auditTitles(p4, /DB1-1-1 is spare/), ['info: DB1-1-1 is spare']);
+  /* One finding for one condition. "Is spare" and "has no outgoing circuits"
+     were the same fact reported twice, and six spare sub-boards in a switchgear
+     schedule turned into twelve rows saying it. */
+  check('an empty sub-board is reported once, not twice',
+    auditTitles(p4, /DB1-1-1 (is spare|has no outgoing)/),
+    ['info: DB1-1-1 has no outgoing circuits']);
+  /* ...and the merged row still carries the half that mattered: whether the board
+     has any spare ways left on it. */
+  check('and it says whether the board has spare ways',
+    LC.audit(p4).filter(function (f) { return /no outgoing circuits/.test(f.title); })
+      .every(function (f) { return /spare way/.test(f.detail); }), true);
 
   /* 6. auto-assignment never lands a circuit on a sub-board */
   var p5 = site();

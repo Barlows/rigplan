@@ -4469,6 +4469,16 @@
        caller that tried ended up a silent no-op. */
     openProject: openProject,
     openProjectFile: openProjectFile,
+    /* The live project, after loading has finished.
+
+       Added because the alternative was reconstructing a project by hand and
+       auditing that instead — which is what had been happening, and it gave a
+       different answer from the app every time. afterLoad places panels, fills
+       protection, derives lengths and sizes cables, so a hand-built copy of the
+       file is not the project the engineer is looking at. Every measurement of
+       this project now goes through openProject and this accessor, so the thing
+       measured is the thing shown. */
+    project: function () { return S; },
     sel: function () { return sel; },
     select: select,
     place: function (mode, x, y) {

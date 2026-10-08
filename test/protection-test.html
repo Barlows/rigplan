@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=328"></script>
-<script src="../js/calc.js?v=328"></script>
+<script src="../js/data.js?v=342"></script>
+<script src="../js/calc.js?v=342"></script>
 <script>
 (function () {
   var results = [];
@@ -2106,6 +2106,144 @@
     worst.worst !== null && worst.worst.pn !== undefined, true);
   check('and every profile is ranked',
     worst.profiles[0].wiring.pct >= worst.profiles[worst.profiles.length - 1].wiring.pct, true);
+
+  /* ---------------------------------------------- sizing a conductor properly --
+     A feeder has to satisfy two constraints at once and the second one is
+     invisible on a schedule that records load current.
+
+       AMPACITY     what the conductor carries all day. 95 mm² carries 240 A.
+       SHORT CIRCUIT what it survives when the supply lets 76 kA through and the
+                    device takes 40 ms to open. That is 106 mm², and no amount of
+                    running at 240 A makes 95 mm² the right answer there.
+
+     Sizing on ampacity alone is how a schedule ends up with a cable that is
+     comfortable in every column and cannot survive its own installation. */
+
+  /* S = I·√t / k, which is the adiabatic equation rearranged. The answers below
+     are that formula worked by hand, not remembered numbers. */
+  check('a 76 kA fault cleared in 40 ms on XLPE copper needs 106 mm²',
+    Math.round(76000 * Math.sqrt(0.04) / 143 * 10) / 10, 106.3);
+  check('and it is returned as an orderable size, not as 106',
+    LC.csaForFault(76, 0.04, 'XLPE', 'Cu'), 120);
+  check('a longer clearing time demands more, not less',
+    LC.csaForFault(76, 0.05, 'XLPE', 'Cu') >= LC.csaForFault(76, 0.04, 'XLPE', 'Cu'), true);
+  check('a lower fault level relaxes it',
+    LC.csaForFault(25, 0.04, 'XLPE', 'Cu'), 35);
+  check('PVC is the same conductor with a lower k, so it needs more copper',
+    LC.csaForFault(25, 0.04, 'PVC', 'Cu') > LC.csaForFault(25, 0.04, 'XLPE', 'Cu'), true);
+  /* No k value published for aluminium, so no answer is invented for it. The
+     same reasoning as the aluminium thermal-withstand case: "unchecked" is the
+     honest reply and a number from the copper table would be worse than none. */
+  check('aluminium gets no answer rather than a borrowed one',
+    LC.csaForFault(76, 0.04, 'XLPE', 'Al'), null);
+  check('nor does an unknown insulation',
+    LC.csaForFault(76, 0.04, 'unobtainium', 'Cu'), null);
+  check('and no fault current means no requirement',
+    LC.csaForFault(0, 0.04, 'XLPE', 'Cu'), null);
+
+  /* minimumCsa answers with both, and says which one is governing. */
+  /* The 3,150 kVA at 6% of the real project, because it is the only strength at
+     which the two constraints disagree: 76 kA cleared in 40 ms needs 106 mm²,
+     while the same fault on a 1,000 kVA site needs 35 and never bites. Testing
+     this on a small source would prove nothing about the case it exists for. */
+  var sz = site({ kva: 3150, impZ: 6 });
+  var sCircuit = load(sz.p, sz.pdp, 60, 0.9);
+  LC.protAll(sz.p, {});
+  sCircuit.prot = { kind: 'mccb', ir: 200, frame: 250, icu: 50, trip: 'TM', poles: 4 };
+  sCircuit.cable = { csa: 95, runs: 1, cores: 4, len: 25, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
+  var mm = LC.minimumCsa(sz.p, sCircuit);
+  check('minimumCsa returns both constraints, not one number',
+    mm.byLoad !== null && mm.byFault !== null, true);
+  check('the load alone is satisfied by 95 mm² and the fault is not',
+    mm.byLoad <= 95 && mm.byFault > 95, true);
+  check('so the fault governs and the answer is its size',
+    mm.governed, 'fault');
+  check('and the answer is the larger of the two',
+    mm.csa, Math.max(mm.byLoad, mm.byFault));
+
+  /* The same feeder on a weak supply: the fault constraint stops binding, which
+     is what makes this a real calculation rather than a constant. */
+  var wk = site({ kva: 250, impZ: 10 });     // a 250 kVA transformer, not 3150
+  var wCircuit = load(wk.p, wk.pdp, 60, 0.9);
+  LC.protAll(wk.p, {});
+  wCircuit.prot = { kind: 'mccb', ir: 200, frame: 250, icu: 25, trip: 'TM', poles: 4 };
+  wCircuit.cable = { csa: 95, runs: 1, cores: 4, len: 25, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
+  var wm = LC.minimumCsa(wk.p, wCircuit);
+  check('on a weak source the load constraint governs instead',
+    wm.governed, 'load');
+  check('and the same 95 mm² is then good enough', wm.csa <= 95, true);
+
+  /* cableShortfalls reports both kinds, and puts the unarguable one first. */
+  var sf = site();
+  for (var sfi = 0; sfi < 4; sfi++) load(sf.p, sf.pdp, 60, 0.9);
+  LC.protAll(sf.p, {});
+  sf.p.panels.forEach(function (pn) {
+    pn.prot = { kind: 'mccb', ir: 200, frame: 250, icu: 50, trip: 'TM', poles: 4 };
+    pn.cable = { csa: 1.5, runs: 1, cores: 4, len: 25, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
+  });
+  var short = LC.cableShortfalls(sf.p);
+  check('every undersized feeder is found', short.length, 4);
+  check('and each names the size it needs', short.every(function (r) { return r.min > 1.5; }), true);
+  check('a spare way is left out of it entirely', (function () {
+    var sp = site();
+    var c = load(sp.p, sp.pdp, 60, 0.9);
+    LC.protAll(sp.p, {});
+    c.prot = { kind: 'mccb', ir: 200, frame: 250, icu: 50, trip: 'TM', poles: 4 };
+    c.cable = { csa: 1.5, runs: 1, cores: 4, len: 25, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
+    c.isSpare = true;
+    return LC.cableShortfalls(sp.p).length;
+  })(), 0);
+
+  /* --------------------------------------------------- spares are not circuits --
+     A spare breaker is installed, rated and tested. What it has not got is a
+     cable to anything, so every check that assumes a circuit terminates
+     somewhere does not apply to it — and on a real project that was 96 findings
+     against 18 breakers, all of them meaningless. */
+  var spareSite = site();
+  var spareCircuit = load(spareSite.p, spareSite.pdp, 60, 0.9);
+  LC.protAll(spareSite.p, {});
+  /* Deliberately the worst case: a 1.5 mm² feeder on a device far too big, with
+     no loop and no protective conductor method. Everything here must go quiet. */
+  spareCircuit.cable = { csa: 1.5, runs: 1, cores: 4, len: 25, method: 'XL-A1', group: 1, ambient: 40, sheathed: true, needsNeutral: true };
+  spareCircuit.prot = { kind: 'mccb', ir: 200, frame: 250, icu: null, trip: 'TM', poles: 4 };
+  var noisyBefore = LC.audit(spareSite.p).filter(function (f) {
+    return /cannot survive|too large for its cable|breaking capacity not stated|protective conductor|earth fault loop/.test(f.title);
+  }).length;
+  check('a spare breaker with no cable to anything produces findings first', noisyBefore > 0, true);
+  spareCircuit.isSpare = true;
+  var noisyAfter = LC.audit(spareSite.p).filter(function (f) {
+    return /cannot survive|too large for its cable|protective conductor|earth fault loop/.test(f.title);
+  }).length;
+  check('and produces none of them once it is marked as a spare', noisyAfter, 0);
+  /* The one thing that still applies: it is fitted, so if a circuit is ever
+     connected to it the device has to be able to interrupt that fault. */
+  check('but its breaking capacity is still asked for, because it is fitted',
+    LC.audit(spareSite.p).some(function (f) { return /breaking capacity not stated/.test(f.title); }), true);
+  /* Only an EXPLICIT spare counts. A circuit with no load could be an unsized
+     machine, and guessing is the failure mode this app has been bitten by. */
+  var blank = site();
+  var bc = load(blank.p, blank.pdp, 60, 0.9);
+  LC.protAll(blank.p, {});
+  bc.prot = { kind: 'mccb', ir: 200, frame: 250, icu: 50, trip: 'TM', poles: 4 };
+  bc.cable = { csa: 1.5, runs: 1, cores: 4, len: 25, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
+  check('a circuit with nothing declared is NOT treated as a spare',
+    LC.isSpare(bc), false);
+
+  /* ------------------------------------------- an assumption is not a fact ---- */
+  var imp = site();
+  var zt = imp.tx;
+  zt.impZStated = false;
+  var fnd = LC.audit(imp.p).filter(function (f) { return /impedance is an assumption/.test(f.title); });
+  check('an assumed impedance is called out before anything that depends on it', fnd.length, 1);
+  check('and the finding carries the fault level that assumption produces',
+    /kA/.test(fnd[0].detail) && /mm²/.test(fnd[0].detail), true);
+  check('and it names the minimum conductor that level demands',
+    /smallest conductor/.test(fnd[0].detail), true);
+  zt.impZStated = true;
+  var said = LC.audit(imp.p).filter(function (f) { return /impedance is an assumption/.test(f.title); });
+  check('a stated impedance is not reported as an assumption', said.length, 0);
+  check('but the fault level it gives is still recorded',
+    LC.audit(imp.p).some(function (f) { return /gives a fault level/.test(f.title); }), true);
 
   /* ------------------------------------------------------- everything at once */
   var z = site();
