@@ -271,13 +271,30 @@ var LC = (function () {
        it is meant to contain, and it propagates: summed over a board it makes
        the aggregate power factor nonsense too. Flagged rather than silently
        corrected, because the entered number is probably a typo worth seeing. */
-    var impossible = kvaD > 0 && kvaD < kw;
+    /* A kVA below its kW is a power factor above 1, which does not exist — but
+       the two figures must be on the SAME basis before that means anything.
+
+       kvaD is the diversified kVA and kw is the connected kW, so any demand
+       factor below 1 makes the diversified figure the smaller one and the check
+       fires on every circuit whose demand is not 1. It fired on 78 of 97 here,
+       every one of them false: a 44.8 kW circuit at 0.5 demand is 23.6 kVA and
+       44.8 kW, which is an ordinary machine and not a power factor of 1.9.
+
+       So the impossibility test is against the CONNECTED kVA, which is like for
+       like. A genuine data error — a kVA override smaller than the kW it is
+       meant to contain — still trips, and that is the case worth catching. */
+    var impossible = kva > 0 && kva < kw;
     /* Reactive power falls out of kW, kVA and power factor by the
-       Pythagorean relation, so nothing needs storing: S² = P² + Q². This is
-       the number that decides whether a supply is penalised for a poor power
-       factor, and it is the number a capacitor calculation works from. */
-    var kvarD = Math.sqrt(Math.max(0, kvaD * kvaD - kw * kw));
-    if (impossible) kvarD = 0;
+       Pythagorean relation, so nothing needs storing: S² = P² + Q². This is the
+       number that decides whether a supply is penalised for a poor power
+       factor, and it is the number a capacitor calculation works from.
+
+       Computed on the connected figures, where S and P share a basis, then
+       scaled by the demand factor — the right way round, because demand scales
+       the whole load rather than one term of it. */
+    var kvar = Math.sqrt(Math.max(0, kva * kva - kw * kw));
+    var kvarD = kvar * dem;
+    if (impossible) { kvar = 0; kvarD = 0; }
     /* Total demand distortion, as a percentage of the fundamental. A circuit
        that declares harmonics raises its own RMS current, which is what actually
        heats a cable — the fundamental alone understates it.
@@ -1116,7 +1133,7 @@ var LC = (function () {
          good and the route must not be extended. */
       var ratio = e.tActual === null ? null : e.tActual / e.tMax;
       if (ratio !== null && ratio > 0.4) {
-        add('info', kind, item.id, what + ' earth fault loop leaves little margin',
+        if (!isSpare(item)) add('info', kind, item.id, what + ' earth fault loop leaves little margin',
           'The loop carries ' + e.ia.toFixed(0) + ' A against a ' + e.ir +
           ' A setting, which clears in ' + LC_ms(e.tActual) + ' against a ' +
           (e.tMax * 1000).toFixed(0) + ' ms limit — ' + (ratio * 100).toFixed(0) +
@@ -1242,7 +1259,7 @@ var LC = (function () {
          is the same cable as 4 cores that are a PEN. So this asks the question
          rather than reporting a fault it cannot establish, and it stays at info
          for the same reason. */
-      if (c.needsNeutral && arr.system === 'TN-S' && c.cores === 4 && !c.peInCable) {
+      if (!isSpare(pn) && c.needsNeutral && arr.system === 'TN-S' && c.cores === 4 && !c.peInCable) {
         add('info', 'panel', pn.id, pn.tag + ' — confirm how the protective conductor is provided',
           'Four cores to a three-phase circuit carries three phases and a neutral, which is correct for TN-S ' +
           'provided the protective conductor is formed separately. If this cable\'s fourth core is in fact the ' +
@@ -1500,6 +1517,7 @@ var LC = (function () {
     });
     p.panels.forEach(function (pn) {
       if (!pn.pdpId && !pn.pdbId) return;
+      if (isSpare(pn)) return;   // nothing terminated, so nothing to check
       var d = panelDemand(p, pn);
       var cab = pn.cable && pn.cable.csa ? cableRating(pn.cable) : null;
       var f = faultAt(p, pn, 'panel');
@@ -1631,6 +1649,47 @@ var LC = (function () {
         'vector-group', nThreePN, 'circuits');
     });
 
+    /* The assumed transformer impedance, stated first because everything below
+       depends on it.
+
+       %Z sets the fault level, and the fault level sets the minimum conductor a
+       feeder may use, the breaking capacity a device needs, and whether the
+       coordination holds. On a real project the field default of 6% gave 73 kA,
+       which failed a 16 mm² feeder's thermal withstand — and at 10% the fault is
+       44 kA and the same feeder passes easily.
+
+       A finding buried at the bottom of a list of 200 is not a finding. This one
+       goes at the top, with the numbers, so nobody acts on the conclusions
+       before seeing the assumption they rest on. */
+    (p.txs || []).forEach(function (tx) {
+      if (num(tx.kva, 0) <= 0) return;
+      var zpu = num(tx.impZ, 6);
+      if (!isFinite(zpu) || zpu <= 0) zpu = 6;
+      var v = Math.max(50, num(tx.kvOut, 0.415) * 1000);
+      var kA = (num(tx.kva, 0) * 1000 / (Math.sqrt(3) * v)) / (zpu / 100) / 1000;
+      /* The minimum conductor a 20 ms device needs at this fault level. Shown
+         because it turns an abstract impedance into a cable size. */
+      var minCsa = Math.ceil(kA * 1000 * Math.sqrt(0.02) / 143);
+      if (tx.impZStated !== false) {
+        add('warn', 'tx', tx.id, tx.tag + ' impedance is an assumption, not a fact',
+          'Percent impedance is not stated for this transformer, so ' + zpu.toFixed(1) +
+          '% has been assumed — a usual figure for a distribution transformer, and nothing more. ' +
+          'That single number sets the fault level at ' + kA.toFixed(1) + ' kA, and the fault level ' +
+          'sets the smallest conductor a feeder may use: at ' + kA.toFixed(0) +
+          ' kA a device clearing in 20 ms needs about ' + minCsa + ' mm². Every thermal withstand, ' +
+          'breaking capacity and coordination finding below is computed from this figure. ' +
+          'It is on the transformer nameplate or in its test certificate — one number, and the whole ' +
+          'protection case stops being an estimate. If the transformer is one of a pair on a common ' +
+          'LV board, the impedance has to be checked against the shared contribution as well.',
+          'impz-assumed', num(tx.kva, 0), 'kVA');
+      } else {
+        add('info', 'tx', tx.id, tx.tag + ' impedance ' + zpu.toFixed(1) +
+          '% gives a fault level of ' + kA.toFixed(1) + ' kA',
+          'Taken as stated. The smallest conductor a feeder may use at that fault level, with a device ' +
+          'clearing in 20 ms, is about ' + minCsa + ' mm².',
+          'impz-stated', num(tx.kva, 0), 'kVA');
+      }
+    });
     /* Power factor correction, assessed where a bank is actually connected: at
        the main board, against the whole site. Sizing it is exact arithmetic; the
        finding that matters is whether the bank's resonance lands on a harmonic
@@ -1759,6 +1818,7 @@ var LC = (function () {
     vprof.profiles.forEach(function (v) { vpById[v.pn.id] = v; });
     p.panels.forEach(function (pn) {
       if (!pn.pdpId && !pn.pdbId) return;
+      if (isSpare(pn)) return;
       var vp = vpById[pn.id];
       if (!vp || !vp.over) return;
       var own = vp.steps.filter(function (s) { return s.kind === 'panel' && !s.unknown; })[0];
@@ -1797,6 +1857,7 @@ var LC = (function () {
        contain. */
     p.panels.forEach(function (pn) {
       if (!pn.pdpId && !pn.pdbId) return;
+      if (isSpare(pn)) return;
       var prot = pn.prot;
       if (!prot) return;
       var fl = faultLevel(p, pn, 'panel');
@@ -2165,6 +2226,15 @@ function clearingTimeAt(prot, multiple) {
      panel type that only ever contains rotating machines. A motor that is
      simply a motor in a panel typed "Plant" gets nothing, which is the correct
      outcome for undeclared data. */
+  /* Is this item an unterminated spare way?
+
+     Only an EXPLICIT spare counts. A circuit with no load could be a spare or an
+     unsized machine, and guessing would silence real findings — the failure mode
+     this app has been bitten by more than once. Declared means declared. */
+  function isSpare(o) {
+    return !!(o && o.isSpare === true);
+  }
+
   function isMotorLoad(pn) {
     /* The properties panel writes this from a dropdown, so it arrives as 'yes'
        or 'no' rather than a boolean. Both are accepted; 'no' being a non-empty
@@ -4193,6 +4263,9 @@ function selectivityBand(s) {
     if (key === 'let-through') return 'feeder conductor that cannot survive the fault';
     if (key === 'vdrop-path') return 'circuit whose total volt drop from the transformer exceeds the limit';
     if (key === 'vdrop-incomplete') return 'circuits whose voltage drop profile cannot be completed';
+    if (key === 'impz-assumed') return 'transformers whose impedance is assumed rather than stated';
+    if (key === 'impz-stated') return 'transformer fault levels';
+    if (key === 'spare-way') return 'unterminated spare ways';
     if (key === 'demand-ratio') return 'boards running at a small fraction of their connected load';
     if (key === 'demand-band') return 'boards using a coincidence factor with no band declared';
     if (key === 'vector-group') return 'transformer whose vector group is not stated';
@@ -4415,6 +4488,24 @@ function selectivityBand(s) {
      is reported as a pass/marginal/fail against the band's own figure and says
      so. The bands are set toward the slow end of their published range, so the
      check errs towards reporting a problem rather than missing one. */
+  /* How long the device takes to clear a SHORT CIRCUIT — not an overload.
+
+     These are band-wide figures, not manufacturer curves, and the distinction
+     matters more than it looks. Every device here has an instantaneous element:
+     TM picks up at 5–10 × In, LI/LS/LSI at 10 × In. A short circuit on a
+     distribution board is several hundred times In, so every one of them is deep
+     on its magnetic trip and clears in tens of milliseconds. The long-time
+     element is never involved.
+
+     An LI used to report 5 seconds here, on the reasoning that it has no
+     short-time stage. That is true of its SHORT-TIME element and irrelevant to
+     an instantaneous one: the LI has no S-stage precisely so that the I-element
+     can clear the short circuit. It reported a 250 A LI as taking 5 s to clear a
+     75 kA fault, and every cable behind it as failing thermal withstand by a
+     factor of 485. The cables were fine. The band was wrong.
+
+     IEC 60947-2 gives 10–50 ms for the magnetic operation; the slow end is used
+     throughout, because the slow end is the one that has to survive. */
   function clearingTimeS(prot, isFuse) {
     if (isFuse) return { t: 5, band: 'inverse-time', why: 'a fuse is inverse-time by design' };
     if (!prot) return null;
@@ -4422,11 +4513,18 @@ function selectivityBand(s) {
       return { t: 0.01, band: 'magnetic', why: 'magnetic trip, typically 2.5–10 ms' };
     }
     switch (prot.trip) {
+      /* TM at 5–10 × In. */
       case 'TM':    return { t: 0.05, band: 'magnetic',  why: 'magnetic trip, typically 20–50 ms with the arc' };
-      case 'LI':    return { t: 5,    band: 'thermal',   why: 'no short-time stage, so the long-time element clears it' };
-      case 'LS':    return { t: 0.3,  band: 'short-time', why: 'short-time stage, typically 0.1–0.3 s' };
-      case 'LSI':   return { t: 0.3,  band: 'short-time', why: 'short-time stage, typically 0.1–0.3 s' };
-      case 'eLSI':  return { t: 0.3,  band: 'short-time', why: 'short-time stage, typically 0.1–0.3 s' };
+      /* LI at 10 × In. The absence of a short-time stage makes no difference to
+         a fault at several hundred × In — it is all instantaneous. */
+      case 'LI':    return { t: 0.04, band: 'magnetic',  why: 'instantaneous element, typically 20–40 ms with the arc' };
+      /* LS and LSI have a short-time stage that deliberately holds the device
+         back — but only up to the instantaneous pickup at 10 × In, which a
+         distribution short circuit is far beyond. The short-time band belongs
+         to selectivity, not to the withstand case. */
+      case 'LS':    return { t: 0.04, band: 'magnetic',  why: 'instantaneous element, typically 20–40 ms with the arc' };
+      case 'LSI':   return { t: 0.04, band: 'magnetic',  why: 'instantaneous element, typically 20–40 ms with the arc' };
+      case 'eLSI':  return { t: 0.03, band: 'magnetic',  why: 'instantaneous element, typically 15–30 ms with the arc' };
       default:      return { t: 0.05, band: 'magnetic',  why: 'magnetic trip' };
     }
   }
@@ -5003,6 +5101,84 @@ function selectivityBand(s) {
     p.panels.forEach(function (n) { sizeCableForPanel(p, n); });
   }
 
+/* ============================================== sizing cables to the protection ==
+     The single most common fault on a schedule built from a vendor's switchgear
+     sheet: the device rating and the cable size come from different columns and
+     are not consistent with each other.
+
+     A vendor's schedule states, per circuit, the device rating (400 A) AND the
+     machine's actual current (66 A). The cable gets sized for the machine,
+     because that is what carries the load. The device keeps its rating,
+     because that is what was ordered. Nothing checks the two against each
+     other, and nothing should — until now.
+
+     IEC 60364-5-52 requires the protective device's rating not to exceed the
+     conductor's current-carrying capacity. A 400 A device on 35 mm² is not a
+     marginal case, it is a cable that will be destroyed long before the device
+     protects it.
+
+     What is done here is the calculation, not the decision. The minimum size
+     this device needs is computed and reported; whether to upsize the cable or
+     downrate the device is a commercial and engineering judgement, because a
+     400 A device on a 217 kW machine may be deliberate — the machine may be
+     capable of more than it currently does, and the breaker sized for what it
+     could become.
+
+     That is why this is a tool and not a silent correction. */
+  function minimumCsa(p, pn) {
+    var prot = pn.prot;
+    if (!prot) return null;
+    var need = feederAmp(p, pn);
+    if (!(need > 0)) return null;
+    var c = pn.cable || { cores: 4, method: 'XL-A1', group: 2, ambient: 40, sheathed: true, runs: 1 };
+    /* Search the standard sizes rather than inverting the table: the rating is a
+       table lookup with derating applied, and inverting it by hand is exactly
+       the kind of thing that is right to within 5% and wrong in the cases that
+       matter. */
+    var sizes = D.CSA;
+    for (var i = 0; i < sizes.length; i++) {
+      var trial = Object.assign({}, c, { csa: sizes[i], runs: 1 });
+      var r = cableRating(trial);
+      if (r && r.derated >= need) return sizes[i];
+    }
+    return null;
+  }
+
+  /* Every circuit whose device out-rates its cable, with the size it would need.
+     Returned rather than applied — see the note above. */
+  function cableProtectionMismatches(p) {
+    var out = [];
+    p.panels.forEach(function (pn) {
+      if (isSpare(pn) || !pn.prot || !pn.cable || !num(pn.cable.csa, 0)) return;
+      var r = cableRating(pn.cable);
+      if (!r) return;
+      var ir = num(pn.prot.ir, 0);
+      if (!(ir > 0) || ir <= r.derated * 1.05) return;
+      var min = minimumCsa(p, pn);
+      var dm = panelDemand(p, pn);
+      out.push({
+        pn: pn,
+        ir: ir,
+        now: num(pn.cable.csa, 0),
+        rated: r.derated,
+        min: min,
+        loadA: dm.amp,
+        /* how many times over the device is, which says whether this is a data
+           error or a deliberate oversized breaker */
+        ratio: ir / Math.max(1, r.derated),
+        /* the machine's own current, where the vendor gave one: a breaker far
+           above it is worth a second look */
+        machineA: dm.amp,
+        // A breaker many times the machine's own load is common on drives and
+        // motors — it is sized for overload and for starting, not for running.
+        // That does not excuse the cable, but it changes what the fix is.
+        deliberate: ir > dm.amp * 4
+      });
+    });
+    out.sort(function (a, b) { return b.ratio - a.ratio; });
+    return out;
+  }
+
   /* ------------------------------------------------------------- totals    */
   function totals(p) {
     /* Connected kW and diversified kVA are different quantities, and adding them
@@ -5083,7 +5259,7 @@ function selectivityBand(s) {
     hasNeutralConductor, isThreePhaseWithNeutral, supplyArrangement, neutralCheck,
     peNeededCsa,
     startMethod, startingCurrentA, startingCheck, sourceImpedanceAt, curveInstantaneousMultiple, torqueNeeded,
-    isMotorLoad,
+    isMotorLoad, isSpare, minimumCsa, cableProtectionMismatches,
     SELECTIVITY_STEPS,
     choosePdp, assignPanel, createPdpFor, feederLen, syncLen,
     sizeCablesFor, sizeCablesForPdb, sizeCablesForDb, suggestDbFeeder, sizeCableForPanel, sizeAll, feederAmp, needsSizing,

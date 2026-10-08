@@ -991,7 +991,17 @@
       fRow('HV', '<span class="unit">' + nIn('tx', o.id, 'kvIn', o.kvIn, { step: 0.1, unit: 'kV' }) + '<span class="u">kV</span></span>') +
       fRow('LV', '<span class="unit">' + nIn('tx', o.id, 'kvOut', o.kvOut, { step: 0.005, unit: 'kV' }) + '<span class="u">kV</span></span>') +
       fRow('Power factor', nIn('tx', o.id, 'pf', o.pf, { step: 0.01 })) +
-      fRow('Impedance', '<span class="unit">' + nIn('tx', o.id, 'impZ', o.impZ, { step: 0.5, unit: '%' }) + '<span class="u">% uk</span></span>') +
+      fRow('Impedance', '<span class="unit">' + nIn('tx', o.id, 'impZ', o.impZ, { step: 0.5, unit: '%' }) + '<span class="u">% uk</span></span>' +
+      /* Whether the figure above is a nameplate value or a default. Without this
+         the two are indistinguishable, and every protection number on the
+         project rests on it. */
+      fRow('', '<label style="font-size:11px;display:flex;gap:6px;align-items:center;cursor:pointer">' +
+        '<input type="checkbox" data-bind="zstated" data-kind="tx" data-id="' + o.id + '"' +
+        (o.impZStated === true ? ' checked' : '') + '>' +
+        'From the nameplate or test certificate</label>' +
+        '<div class="hint">' + (o.impZStated === true
+          ? 'Treated as a fact. The fault level and every check that depends on it are computed from it.'
+          : 'Treated as an assumption, and the audit says so before anything that depends on it.') + '</div>')) +
       fRow('Vector group', selIn('tx', o.id, 'vecGroup', o.vecGroup || 'Dyn11', LS.VECTOR_GROUPS,
         function (v) { return v + (LS.blocksTriplen(v) ? ' — LV delta, blocks 3rd harmonic' : ' — LV star, 3rd harmonic reaches the neutral'); })) +
       fRow('Neutral bonded', '<label style="display:flex;gap:6px;align-items:center;cursor:pointer;font-size:11.5px"><input type="checkbox" data-bind="item" data-kind="tx" data-id="' + o.id + '" data-f="neutralBonded"' + (o.neutralBonded ? ' checked' : '') + '> bring the star point out and bond it</label>') +
@@ -1206,6 +1216,19 @@
       /* IEC 60947-4-1 overload relay class. A commercial judgement about how long
          the machine can be down rather than a calculation, so it is declared and
          never inferred from the machine name. */
+      /* A fitted but unterminated spare way. Not a circuit: there is no
+         conductor to overheat and nothing to loop through, so every check that
+         assumes a circuit terminates somewhere is skipped for it. */
+      fRow('', '<label style="font-size:11px;display:flex;gap:6px;align-items:center;cursor:pointer">' +
+        '<input type="checkbox" data-bind="spare" data-kind="panel" data-id="' + o.id + '"' +
+        (o.isSpare === true ? ' checked' : '') + '>Unterminated spare way</label>' +
+        '<div class="hint">A spare breaker is installed and rated but has no cable to anything. ' +
+        'Cable, earth fault loop and protective conductor checks do not apply to it. Leave this ' +
+        'clear for a machine that simply has not been sized yet.</div>') +
+      /* Concatenated, not a statement of its own: the whole group is one string
+         expression, and a `+` chain broken by a semicolon leaves the ternary
+         below as a bare parenthesised expression — which parses as a statement
+         and silently drops the relay-class field. */
       (LC.isMotorLoad(o) ? fRow('Relay class', selIn('panel', o.id, 'motorClass',
         o.motorClass === null || o.motorClass === undefined ? '' : String(o.motorClass),
         ['', '10', '20', '30'], function (v) {
@@ -2513,6 +2536,18 @@
       var o2 = itemById(id); if (!o2) return;
       o2[f] = (v === '' ? null : num(v));
       if (f === 'num') { renumber(); renderProps(); return; }
+    } else if (b === 'zstated') {
+      /* A checkbox, so the flag is explicit rather than inferred from whether
+         the number looks like a round one. */
+      var oz = itemById(id); if (!oz) return;
+      oz.impZStated = !!el.checked;
+      renderProps(); renderTab();
+      return;
+    } else if (b === 'spare') {
+      var osp = itemById(id); if (!osp) return;
+      osp.isSpare = !!el.checked;
+      renderProps(); renderTab();
+      return;
     } else if (b === 'capnum') {
       /* A capacitor bank is one object with two numbers, not two fields, so the
          binding has to keep them together: clearing the output removes the bank,

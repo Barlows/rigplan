@@ -138,6 +138,13 @@ var LS = (function () {
        magnetic release shall operate within 0.1 s at the multiple its curve
        names. The slow end of each magnetic band is used.
 
+       IEC 60947-2 requires the magnetic release to operate within 0.1 s and
+       gives 10-50 ms as the usual band. Every magnetic point above is at or
+       below 0.05 s, inside it: an LI ending at 0.06 s sat just outside, which
+       is enough to fail a 240 mm² feeder's thermal withstand that a real 40 ms
+       device would pass. Where a device has no published curve the worst case
+       in the band is used, not a number chosen outside it.
+
        Between 1.45 In and the magnetic multiple the standard specifies nothing,
        and it is exactly that region that decides whether two devices overlap —
        so it cannot be left as one long interpolation. With a single jump from
@@ -164,7 +171,7 @@ var LS = (function () {
        stage then picks up at 10 In, which in absolute terms is a high current
        and is why an LI above a TM can be selective where an LI above an LI
        cannot. */
-    'LI': { points: [[0.80, 20], [0.94, 10], [1.05, 2], [1.20, 1.2], [1.50, 0.9], [2, 0.6], [3, 0.35], [6, 0.2], [9.5, 0.2], [10, 0.06]] },
+    'LI': { points: [[0.80, 20], [0.94, 10], [1.05, 2], [1.20, 1.2], [1.50, 0.9], [2, 0.6], [3, 0.35], [6, 0.2], [9.5, 0.2], [10, 0.04]] },
     /* With a short-time stage: the long-time band as LI, then a deliberate
        plateau at 0.1 s across the short-time band — the stage exists precisely
        to hold the device back over the range where the instantaneous would
@@ -466,7 +473,25 @@ var LS = (function () {
       num: p.num === undefined ? null : p.num,
       ref: p.ref === undefined || p.ref === null ? '' : p.ref,
       kva: num(p.kva, 1000), kvIn: num(p.kvIn, 11), kvOut: num(p.kvOut, 0.415),
-      phases: '3', pf: 0.9, impZ: 6, faultKVA: null, at: 0,
+      phases: '3', pf: 0.9,
+      /* Percent impedance, and whether it is KNOWN.
+
+         This is the single most consequential number in the app and it is
+         usually a guess. %Z is the drop at rated current, so it sets the fault
+         level directly — and the fault level decides the minimum conductor size
+         a feeder may use, which device breaking capacity is needed, and whether
+         the protection coordination works at all.
+
+         On a real project the default of 6% produced 73 kA, which meant a 16 mm²
+         feeder "failed" thermal withstand when the true impedance might be 10%
+         and the fault 44 kA, where it passes comfortably. The answer changed
+         completely on an assumption nobody had made and nobody could see.
+
+         So a stated impedance is recorded as a fact (impZStated true) and a
+         default is recorded as an assumption (impZStated false). The audit says
+         which, at the top, before any finding that depends on it. */
+      impZ: 6, impZStated: p.impZStated === undefined ? null : !!p.impZStated,
+      faultKVA: null, at: 0,
       /* Vector group. Only the part that matters here is modelled: whether the
          LV side is a delta or a star, and whether the winding is earthed. A
          delta on the LV blocks third-harmonic zero-sequence current from
@@ -774,6 +799,22 @@ var LS = (function () {
          is worse than a blank that asks. */
       startInferred: p.startInferred === undefined ? false : !!p.startInferred,
       contingency: num(p.contingency, 0),
+      /* A fitted but unterminated spare way.
+
+         This is not the same thing as an empty way on a board, and it is not a
+         circuit. A spare breaker is installed, rated and tested; what it has not
+         got is a cable to anything. So none of the checks that assume a circuit
+         terminates somewhere apply to it — there is no conductor to overheat, no
+         protective conductor to ask about, no earth fault loop to calculate.
+
+         Without this distinction the audit reported 96 findings against spares on
+         a real project, every one of them meaningless: 1.5 mm² of cable "failing"
+         a thermal withstand check for a breaker that terminates nothing.
+
+         Blank means not stated, which is not the same as false — a circuit with
+         no kW could be a spare or a machine someone has not sized yet, and only
+         the engineer knows which. */
+      isSpare: p.isSpare === undefined || p.isSpare === null ? null : !!p.isSpare,
       /* Total harmonic distortion, as a percentage of the fundamental. Null
          unless a circuit declares it: assuming harmonic content for every motor
          would derate every cable on the project, and the great majority of
