@@ -758,6 +758,33 @@ that is what fails capacitors.
 The 7% reactor costs about 7% of output and is normally in the bank price rather
 than an accessory.
 
+### Demand and coincidence
+
+Two ways to get from connected load to the load a supply carries, and they are
+**alternatives, not layers**:
+
+| Method | What it assumes |
+|---|---|
+| **Per-circuit demand factor** | Each circuit has its own duty cycle — a chiller at 0.8, a sump pump at 0.3. The board total is the sum. |
+| **Coincidence factor** | The connected load is summed, then the *board* gets one multiplier, because its circuits do not all peak together. |
+
+Stacking them is the common mistake and a serious one: a 0.8 coincidence factor
+on top of per-circuit factors of 0.1–0.8 double-counts the same diversity. On
+this project that would report **1,545 kVA against 1,932 kVA** — 20% low, and
+the numbers would still look plausible.
+
+So the method is a declared setting, not a default in the arithmetic, and the app
+reports both figures with the comparison between them. Five coincidence bands
+from 0.60 (repetitive plant) to 1.00 (continuous, no diversity), each stating
+when it applies.
+
+**The finding this produced:** PDB8's per-circuit factors sum to **0.30** of its
+connected load — 1,932 kVA against 6,497 kVA connected, with 32 of 63 circuits
+below 0.35 and the lowest at 0.10. That may well be right; these are drive
+panels and a board of drives seldom runs flat out. But it is the single
+assumption the transformer size rests on, and a factor that low is worth
+confirming against measured data rather than taking from a vendor's sheet.
+
 ### Voltage profile
 
 Voltage drop is a property of a **path**, not of a circuit. Every metre of cable
@@ -1149,7 +1176,7 @@ test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        36 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
-test/protection-test.html 433 checks on fault levels, device proposals, cable
+test/protection-test.html 450 checks on fault levels, device proposals, cable
                           thermal withstand, selectivity from trip curves, earth
                           fault looping, the neutral conductor on 3P+N feeders,
                           the earthing arrangement, reactive power, harmonics,

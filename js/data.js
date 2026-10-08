@@ -257,6 +257,23 @@ var LS = (function () {
        chosen for availability, which is the opposite trade. */
     motorClassDefault: 10,
 
+    /* --------------------------------------------- demand and coincidence ---
+       Two ways from connected load to the load a supply carries, and they are
+       alternatives rather than layers. `per-circuit` sums each circuit's own
+       demand factor. `coincidence` sums the connected load and applies one
+       factor to the board, because its circuits do not all peak together.
+
+       Applying both double-counts the same diversification and can report half
+       the real load, silently. The method is therefore a declared setting rather
+       than a default in the arithmetic, and the schedule reports both figures so
+       the choice is visible. */
+    demandMethod: 'per-circuit',   // 'per-circuit' | 'coincidence'
+    demandMethodBand: null,        // which coincidence band, when that method is used
+    /* Kept false and explained rather than offered as a checkbox: the two
+       methods compound the same assumption, so there is no setting of this
+       switch that is correct. */
+    applyCoincidence: false,
+
     /* ---------------------------------------------------- PF correction -----
        Whether a power factor is worth correcting, and to what. The economics are
        a supplier's tariff rather than physics, so the target is a setting with

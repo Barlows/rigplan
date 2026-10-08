@@ -1702,6 +1702,53 @@ var LC = (function () {
         'is where a drive-fed supply wants it' + (res.detune ? ', with a ' + res.detune.toFixed(0) +
         '% detuning reactor delivering ' + res.delivered.toFixed(0) + ' kvar of the ' + fitted.toFixed(0) : '') + '.');
     });
+    /* Demand and coincidence. Two methods exist and they are alternatives, not
+       layers; and a per-circuit ratio far below what the duty cycles can support
+       is worth a second look, because it is the assumption the whole supply size
+       rests on. */
+    (p.pdbs || []).forEach(function (pdb) {
+      if (!pdb.txId) return;
+      var m = demandMethods(p, pdb, 'pdb');
+      if (!(m.connectedKva > 0)) return;
+
+      /* A ratio this low means the schedule assumes the board runs at a small
+         fraction of its connected load. That can be right — a bank of identical
+         pumps genuinely does not all run at once — but it is a big claim and it
+         sizes the transformers, so it is asked about rather than assumed. */
+      if (m.perCircuitRatio < 0.35) {
+        var lowest = m.bands.slice().sort(function (a, b) { return a.kva - b.kva; })[0];
+        var pn = boardStats(p, pdb, 'pdb').panels;
+        var nLow = pn.filter(function (x) { return D.num(x.demand, 1) < 0.35; }).length;
+        add('warn', 'pdb', pdb.id, pdb.tag + ' runs at ' +
+          (m.perCircuitRatio * 100).toFixed(0) + '% of its connected load',
+          'The per-circuit demand factors on this board sum to ' +
+          m.perCircuitRatio.toFixed(2) + ' of the connected load, giving ' +
+          m.perCircuitKva.toFixed(0) + ' kVA against ' + m.connectedKva.toFixed(0) +
+          ' kVA connected. ' + nLow + ' of ' + pn.length + ' circuits are below 0.35' +
+          (nLow ? ', and the lowest is ' + Math.min.apply(null, pn.map(function (x) { return D.num(x.demand, 1); })).toFixed(2) : '') +
+          '. That may be right — these are drive panels, and a board of drives ' +
+          'seldom runs flat out — but it is the single assumption the transformer ' +
+          'size rests on, and a factor this low is worth confirming against ' +
+          'measured data rather than taking from the vendor’s sheet. The same ' +
+          'diversity expressed as a coincidence factor would land at about ' +
+          lowest.factor.toFixed(2) + ' and give ' + lowest.kva.toFixed(0) + ' kVA; the two ' +
+          'methods are alternatives and applying both would give ' +
+          (lowest.kva * m.perCircuitRatio).toFixed(0) + ' kVA, which is ' +
+          ((1 - m.perCircuitRatio) * 100).toFixed(0) + '% below the honest answer.',
+          'demand-ratio', m.connectedKva, 'kVA');
+      }
+
+      /* The method in force, stated where a reader will meet it. */
+      if (m.method === 'coincidence' && !p.design.demandMethodBand) {
+        add('warn', 'pdb', pdb.id, pdb.tag + ' uses a coincidence factor with no band declared',
+          'The project is set to the coincidence method but no band has been chosen, so the ' +
+          'conservative connected load of ' + m.connectedKva.toFixed(0) + ' kVA is being used. ' +
+          'That is the safe direction and it is almost certainly more than the board carries, ' +
+          'but it is a placeholder rather than an answer. Declaring a band puts a number on the ' +
+          'page that somebody chose.',
+          'demand-band', m.connectedKva, 'kVA');
+      }
+    });
     /* Voltage drop, accumulated along the whole path from the transformer rather
        than across the circuit's own feeder alone. Judged on the wiring only: the
        transformer's own drop is cancelled by the tap, so counting it would fail
@@ -2436,6 +2483,96 @@ function clearingTimeAt(prot, multiple) {
       /* the device cannot clear this fast however good the loop is */
       unachievable: mNeeded === null
     };
+  }
+
+/* ======================================================== demand coincidence ==
+     There are two ways to get from connected load to the load a supply actually
+     carries, and they are alternatives rather than layers.
+
+     **Per-circuit demand factor.** Every circuit is given its own multiplier,
+     from its own duty cycle — a chiller at 0.8, a sump pump at 0.3. The board
+     total is the sum of the diversified circuits. This is what a load schedule
+     carries, and it is right for a board whose circuits have genuinely different
+     duty cycles.
+
+     **Coincidence factor.** The connected load is summed first and the *board*
+     is then given a multiplier, because its circuits do not all peak together.
+     This is right for a board of identical loads — twenty identical pumps do not
+     all run at once — and it is the only one of the two that says anything about
+     simultaneity.
+
+     Stacking them is the common mistake, and it is a serious one: applying a
+     0.8 coincidence factor on top of per-circuit factors of 0.1 to 0.8
+     double-counts the same diversification and can report half the real load.
+     Worse, it does it silently — the numbers still look plausible.
+
+     So the method is a *declared choice*, and the app says which one is in use
+     and what each would give. That way the assumption is visible and the two
+     figures can be compared rather than one being quietly compounded.
+
+     Neither is wrong. They answer different questions, and the honest thing is
+     to state which question was asked. */
+  var COINCIDENCE_BANDS = [
+    { name: 'identical mixed loads', factor: 0.70, note: 'A board of identical or similar loads — a bank of pumps, a row of fans — where the diversity is entirely in the simultaneity rather than in the duty cycles.' },
+    { name: 'repetitive plant',       factor: 0.60, note: 'Repetitive production load with a well-established running pattern: a test rig, a filling line, a set of identical machines on a common cycle.' },
+    { name: 'mixed plant, known duty', factor: 0.80, note: 'A mixed board whose per-circuit demand factors are known and well founded. The diversity is in the duty cycles, and the simultaneity is assumed to follow it.' },
+    { name: 'mixed plant, unknown duty', factor: 0.90, note: 'No information about duty cycles. A conservative figure — it assumes most of the board is running together.' },
+    { name: 'continuous, no diversity', factor: 1.00, note: 'Everything runs continuously and there is no diversity to allow for. A value of 1.0 is the honest answer for a board of constant loads.' }
+  ];
+
+  /* One board, by both methods, so the comparison is on the page rather than in
+     someone's head. */
+  function demandMethods(p, board, kind) {
+    var st = boardStats(p, board, kind);
+    /* Method 1: sum of per-circuit diversified loads. This is what the schedule
+       already carries, so it is the default and it is what everything else in
+       the app has been reporting. */
+    var perCircuit = 0, connected = 0;
+    st.panels.forEach(function (pn) {
+      var d = panelDemand(p, pn);
+      perCircuit += d.kva;
+      connected += d.kw / d.pf;
+    });
+    /* Method 2: connected total times a coincidence factor. */
+    var bands = COINCIDENCE_BANDS.map(function (b) {
+      return {
+        name: b.name, factor: b.factor, note: b.note,
+        kva: connected * b.factor,
+        /* How far this lands from the per-circuit answer, which is the useful
+           number: a factor that nearly halves the load is worth knowing about. */
+        vsPerCircuit: perCircuit > 0 ? (connected * b.factor) / perCircuit : null
+      };
+    });
+    return {
+      connectedKva: connected,
+      perCircuitKva: perCircuit,
+      perCircuitRatio: connected > 0 ? perCircuit / connected : null,
+      bands: bands,
+      /* Declared on the project, so the choice is a fact about the design rather
+         than a default buried in the arithmetic. */
+      method: p.design.demandMethod || 'per-circuit',
+      /* Stating whether both are in play is the whole point of this section. */
+      stacking: p.design.applyCoincidence === true && p.design.demandMethod !== 'per-circuit'
+    };
+  }
+
+  /* Which figure the app uses. Kept in one place so the schedule, the board
+     statistics, the audit and the capacity check cannot disagree about it. */
+  function boardDemandKva(p, board, kind) {
+    var st = boardStats(p, board, kind);
+    var m = demandMethods(p, board, kind);
+    if (p.design.demandMethod === 'coincidence') {
+      /* Which band, if declared. An undeclared band is a gap and is reported
+         rather than filled with a number nobody chose. */
+      var band = null;
+      if (p.design.demandMethodBand) {
+        m.bands.forEach(function (b) { if (b.name === p.design.demandMethodBand) band = b; });
+      }
+      /* With no band declared the conservative end is used — the one that does
+         not understate the load — and the audit says so. */
+      return band ? band.kva : m.connectedKva;
+    }
+    return m.perCircuitKva;
   }
 
 /* =========================================================== voltage profile ===
@@ -3414,6 +3551,8 @@ function selectivityBand(s) {
     if (key === 'let-through') return 'feeder conductor that cannot survive the fault';
     if (key === 'vdrop-path') return 'circuit whose total volt drop from the transformer exceeds the limit';
     if (key === 'vdrop-incomplete') return 'circuits whose voltage drop profile cannot be completed';
+    if (key === 'demand-ratio') return 'boards running at a small fraction of their connected load';
+    if (key === 'demand-band') return 'boards using a coincidence factor with no band declared';
     if (key === 'vector-group') return 'transformer whose vector group is not stated';
     if (key === 'withstand') return 'cable that cannot survive the fault';
   if (key === 'power-factor') return 'board below the power factor limit';
@@ -4273,6 +4412,7 @@ function selectivityBand(s) {
     groupFindings, worstLevel, groupTitle, boardTagOf, MIN_GROUP, MAX_LIST,
     clearingTimeAt, selectivity, selectivityMessage, selectivityBand, selectivityLadder, reactive,
     arcTimeAt, arcDistanceFactor, arcAssessment,
+    COINCIDENCE_BANDS, demandMethods, boardDemandKva,
     voltageProfile, voltageProfileWorst, loadBelow, panelsBelow,
     pfCorrection, capResonance, impedanceBase, puImpedance, pathImpedance, faultLevel,
     earthLoop, disconnectionMultipleAt, earthFaultCheck, neutralCurrent, neutralCsaFor,

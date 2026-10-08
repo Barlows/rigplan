@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=278"></script>
-<script src="../js/calc.js?v=278"></script>
+<script src="../js/data.js?v=283"></script>
+<script src="../js/calc.js?v=283"></script>
 <script>
 (function () {
   var results = [];
@@ -1547,6 +1547,72 @@
   var atSix = LC.clearingTimeAt(slowProt, 1.0);
   check('a curve C device at exactly its own rating is slow enough to matter',
     atSix !== null && atSix > 10, true);
+
+  /* ------------------------------------------------- demand and coincidence ---
+     Two methods from connected load to supply load. They are alternatives, not
+     layers, and stacking them is the common and serious mistake. */
+  var co = site({ kva: 2500 });
+  var c1 = load(co.p, co.pdp, 100, 0.8);      // three 100 kW at pf 0.8, demand 1
+  load(co.p, co.pdp, 100, 0.8);
+  load(co.p, co.pdp, 100, 0.8);
+  var cm = LC.demandMethods(co.p, co.pdb, 'pdb');
+  /* 100 kW at 0.8 is 125 kVA each, so 375 kVA connected and, at demand 1, the
+     same diversified. */
+  check('with every demand factor at 1 the two methods agree',
+    Math.round(cm.perCircuitKva), Math.round(cm.connectedKva));
+  check('and the ratio is 1', Math.round(cm.perCircuitRatio * 100), 100);
+  check('the bands are ordered from aggressive to none',
+    cm.bands[0].factor < cm.bands[cm.bands.length - 1].factor, true);
+  check('the conservative band is 1.0, i.e. no diversity claimed',
+    cm.bands[cm.bands.length - 1].factor, 1.00);
+  check('every band carries a note saying when it applies',
+    cm.bands.every(function (b) { return b.note && b.note.length > 40; }), true);
+
+  /* Lower the demand factors and the two methods part company — which is the
+     point of showing both. */
+  co.p.panels.forEach(function (pn) { pn.demand = 0.5; });
+  var cm2 = LC.demandMethods(co.p, co.pdb, 'pdb');
+  check('halving every demand factor halves the per-circuit answer',
+    Math.round(cm2.perCircuitKva), Math.round(cm.connectedKva * 0.5));
+  check('and leaves the connected total alone',
+    Math.round(cm2.connectedKva), Math.round(cm.connectedKva));
+  check('a coincidence factor is unaffected by the per-circuit factors',
+    Math.round(cm2.bands[0].kva * 100), Math.round(cm.bands[0].kva * 100));
+  /* Compared against the band from the same snapshot, not a remembered total:
+     the property under test is that the band does not move when the per-circuit
+     factors do, and the only way to show that is to compare across the two. */
+
+  /* The trap, stated as arithmetic so it cannot be argued with. */
+  var both = cm2.connectedKva * cm2.bands[0].factor * cm2.perCircuitRatio;
+  check('applying both double-counts the same diversification',
+    both < cm2.perCircuitKva, true);
+  check('and reports less than the per-circuit answer alone',
+    both / cm2.perCircuitKva < 0.75, true);
+
+  /* Which figure the app uses follows the declared method. */
+  check('per-circuit is the method in force by default',
+    Math.round(LC.boardDemandKva(co.p, co.pdb, 'pdb') * 100),
+    Math.round(cm2.perCircuitKva * 100));
+  co.p.design.demandMethod = 'coincidence';
+  check('switching to coincidence changes the figure the app reports',
+    LC.boardDemandKva(co.p, co.pdb, 'pdb') !== Math.round(cm2.perCircuitKva), true);
+  check('and with no band declared it falls back to the connected load',
+    LC.boardDemandKva(co.p, co.pdb, 'pdb'), Math.round(cm2.connectedKva));
+  co.p.design.demandMethodBand = 'repetitive plant';
+  check('declaring a band applies that band’s factor',
+    LC.boardDemandKva(co.p, co.pdb, 'pdb'), Math.round(cm2.connectedKva * 0.60));
+  co.p.design.demandMethod = 'per-circuit';
+
+  /* A ratio this low is the assumption the transformer size rests on. */
+  co.p.panels.forEach(function (pn) { pn.demand = 0.2; });
+  var hits = LC.audit(co.p).filter(function (x) { return /connected load/.test(x.title); });
+  check('a board running far below its connected load raises a finding',
+    hits.length > 0, true);
+  check('which names the figure rather than only the ratio',
+    hits.length ? /kVA/.test(hits[0].detail) : false, true);
+  co.p.panels.forEach(function (pn) { pn.demand = 0.9; });
+  check('and a board near its connected load does not',
+    LC.audit(co.p).some(function (x) { return /connected load/.test(x.title); }), false);
 
   /* ------------------------------------------------------ voltage profile ---
      Voltage drop is a property of a path, not of a circuit. Each feeder carries
