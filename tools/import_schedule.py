@@ -442,4 +442,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # main() returns a status and it is used as one. Without this a usage
+    # error printed its message and then exited 0, so a script that had been
+    # called wrongly looked like one that had run.
+    sys.exit(main() or 0)
