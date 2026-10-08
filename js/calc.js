@@ -1702,6 +1702,47 @@ var LC = (function () {
         'is where a drive-fed supply wants it' + (res.detune ? ', with a ' + res.detune.toFixed(0) +
         '% detuning reactor delivering ' + res.delivered.toFixed(0) + ' kvar of the ' + fitted.toFixed(0) : '') + '.');
     });
+    /* Voltage drop, accumulated along the whole path from the transformer rather
+       than across the circuit's own feeder alone. Judged on the wiring only: the
+       transformer's own drop is cancelled by the tap, so counting it would fail
+       every circuit for the same reason and say nothing about which are the
+       problem. */
+    var vprof = voltageProfileWorst(p);
+    var vpById = {};
+    vprof.profiles.forEach(function (v) { vpById[v.pn.id] = v; });
+    p.panels.forEach(function (pn) {
+      if (!pn.pdpId && !pn.pdbId) return;
+      var vp = vpById[pn.id];
+      if (!vp || !vp.over) return;
+      var own = vp.steps.filter(function (s) { return s.kind === 'panel' && !s.unknown; })[0];
+      var upstream = vp.wiring.volts - (own ? own.volts : 0);
+      add('bad', 'panel', pn.id, pn.tag + ' volt drop from the transformer is ' +
+        vp.wiring.pct.toFixed(2) + '% — over the ' + vp.limit + '% limit',
+        'Total from the transformer to this circuit is ' + vp.wiring.pct.toFixed(2) +
+        '%, of which ' + (own ? own.volts.toFixed(2) + ' V' : 'nothing') + ' is this circuit’s own ' +
+        (own && own.csa ? own.csa + ' mm² over ' + own.len + ' m' : 'feeder') +
+        ' and ' + upstream.toFixed(2) + ' V is everything above it' +
+        (vp.incomplete ? ' — and ' + vp.unknownCount + ' of the hops above it have no route data' : '') +
+        '. The transformer’s own ' + vp.transformer.pct.toFixed(2) + '% is a tap setting rather than a ' +
+        'design limit and is not counted here. BS 7671 allows 3% for lighting and 5% for other uses. ' +
+        'Where the drop is mostly in the final leg, up-sizing it is the cheapest fix because it is ' +
+        'usually the shortest; where it is mostly upstream, the fix belongs in the board feeder, and ' +
+        'moving the circuit to a nearer board can be cheaper than either.',
+        'vdrop-path', num(pn.kw, 0));
+    });
+    /* A gap in the data rather than a proven failure, so a warning. */
+    var vgaps = vprof.profiles.filter(function (v) { return v.incomplete; });
+    if (vgaps.length) {
+      add('warn', 'tx', p.txs[0] && p.txs[0].id, vgaps.length + ' of ' +
+        vprof.profiles.length + ' circuits have an incomplete voltage drop profile',
+        'A hop in the path has no conductor size or no route length, so its contribution is unknown ' +
+        'rather than zero, and the totals for those circuits are optimistic. Affected: ' +
+        vgaps.slice(0, 12).map(function (v) { return v.pn.tag; }).join(', ') +
+        (vgaps.length > 12 ? ' and ' + (vgaps.length - 12) + ' more' : '') +
+        '. Stating a length and a size for each feeder above them completes the profile. Busbars and ' +
+        'joints are not modelled at all, so these figures are a small under-estimate.',
+        'vdrop-incomplete', vgaps.length, 'circuits');
+    }
     /* Motor overload relay class, and the let-through a device permits.
 
        Both are the same shape of problem: a cable is asked whether it survives
@@ -2395,6 +2436,258 @@ function clearingTimeAt(prot, multiple) {
       /* the device cannot clear this fast however good the loop is */
       unachievable: mNeeded === null
     };
+  }
+
+/* =========================================================== voltage profile ===
+     Voltage drop is not a property of a circuit. It is a property of a *path*:
+     every metre of cable between the transformer and the far end of the site
+     carries every ampere flowing through it, and the drops add.
+
+     BS 7671 sets 3% on lighting and 5% on other uses for the total from the
+     origin. Almost every spreadsheet reports one number per circuit — the drop
+     across that circuit's own feeder — and it is the wrong number, because the
+     drop across the board's own feeder, and the main board's feeder, and the
+     transformer's own winding, are all upstream of it and all count.
+
+     The difference is not marginal. On this project the feeders contribute a few
+     tenths of a percent, so the total is dominated by whatever sits above them.
+     A circuit reported at 1.2% that sits 180 m from the transformer on a long
+     thin feeder can be at 4% overall, which fails.
+
+     What is summed here, in order from the source:
+
+       - the transformer's own impedance, as a voltage drop at the load power
+         factor — a transformer has a finite %Z and it drops voltage under load
+         exactly as a cable does
+       - each board's incoming feeder
+       - the circuit's own feeder
+
+     Busbars and joints are neglected. That is the honest approximation: busbar
+     drops are small, joint contact resistances are unknown, and a figure quoted
+     to a thousandth of a percent that ignores both is theatre.
+
+     The result is the one number that answers "is the far end of this site
+     within limits", and it is the number that decides whether the answer is
+     still yes after another phase is added to the plant. */
+  function voltageProfile(p, pn, opts) {
+    opts = opts || {};
+    /* Walk the path from the transformer down to the circuit. Each hop carries
+       the load below it, which is the whole point — the drop on a feeder is
+       driven by everything downstream of it, not by the circuit it serves. */
+    var ch = chain(p, pn);
+    var path = [];
+    if (ch.tx) path.push({ item: ch.tx, kind: 'tx', cable: null });
+    if (ch.pdb) path.push({ item: ch.pdb, kind: 'pdb', cable: ch.pdb.cable });
+    if (ch.pdp) path.push({ item: ch.pdp, kind: 'pdp', cable: ch.pdp.cable });
+    /* A sub-board, if there is one. chain() does not resolve it, because a
+       circuit may hang off a sub-board or straight off a distribution board. */
+    var db = pn.dbId ? get(p, 'db', pn.dbId) : null;
+    if (db) path.push({ item: db, kind: 'db', cable: db.cable });
+    path.push({ item: pn, kind: 'panel', cable: pn.cable });
+
+    /* The current each hop carries is everything below it. Building it from the
+       bottom up means the deepest feeder is asked for its own current and each
+       level above inherits that plus its own other children. */
+    var steps = [];
+    var volts = 0;
+    for (var i = 0; i < path.length; i++) {
+      var hop = path[i];
+      /* What flows through this hop: the total of every circuit at or below it.
+         For a board that is the whole sub-tree, for a circuit it is itself. */
+      var below = loadBelow(p, hop.item, hop.kind);
+      if (!below || !(below.amp > 0)) continue;
+      var drop;
+      if (hop.kind === 'tx') {
+        /* The transformer's own voltage drop. %Z is measured at rated current,
+           so the drop is (%Z/100) × V × cos(φ) at the load power factor — the
+           resistive part only, because the reactance's contribution to a drop
+           is small at these power factors and excluding it is conservative in
+           the wrong direction only marginally. */
+        var zpu = num(hop.item.impZ, 6);
+        if (!isFinite(zpu) || zpu <= 0) zpu = 6;
+        var vtx = num(hop.item.kvOut, num(hop.item.volt, 400), 400) * 1000;
+        /* %Z is the drop at RATED current, so the drop at the actual load scales
+           with the loading ratio. Omitting that ratio reports the worst case
+           always, which on a lightly-loaded transformer is several times the real
+           figure — and a volt drop that is overstated everywhere is worthless,
+           because the point of the number is finding the circuits that genuinely
+           fail. */
+        var ratedA = (num(hop.item.kva, 0) * 1000) / (Math.sqrt(3) * vtx);
+        var loading = ratedA > 0 ? below.amp / ratedA : 1;
+        /* Above rating the drop keeps rising, but the linear extrapolation stops
+           being meaningful — a transformer at 130% is a problem the volt drop
+           calculation is not the way to find. Capped, and flagged. */
+        var capped = loading > 1.25;
+        drop = (zpu / 100) * vtx * Math.max(0, below.pf) * Math.min(loading, 1.25);
+      } else if (hop.cable && num(hop.cable.csa, 0) && num(hop.cable.len, 0)) {
+        var cab = hop.cable;
+        var r = voltDrop(cab, below.amp, below.pf, below.phases, below.volt);
+        drop = r.volts;
+      } else {
+        /* No cable stated. Not zero — unknown. The hop is recorded so the total
+           is visibly incomplete rather than quietly optimistic. */
+        steps.push({
+          tag: hop.item.tag || hop.item.ref || '—', kind: hop.kind,
+          volts: 0, unknown: true, amp: below.amp,
+          label: hop.cable && num(hop.cable.len, 0)
+            ? 'no conductor size stated'
+            : 'no route length stated'
+        });
+        continue;
+      }
+      volts += drop;
+      steps.push({
+        tag: hop.item.tag || hop.item.ref || '—', kind: hop.kind,
+        volts: drop, amp: below.amp, pf: below.pf,
+        loading: loading, overloaded: capped,
+        csa: hop.cable ? num(hop.cable.csa, 0) : null,
+        len: hop.cable ? num(hop.cable.len, 0) : null
+      });
+    }
+
+    var v = num(pn.volt, 400) || 400;
+    var pct = (volts / v) * 100;
+
+    /* The transformer's own drop is a commissioning setting, not a design
+       defect.
+
+       A distribution transformer has a tap selector — normally on-load — and it
+       is set to raise the LV terminals so the voltage at the expected load
+       point is right. The %Z drop is what the tap is there to cancel. Including
+       it in the design total would make every circuit on the installation fail
+       for the same reason, which destroys the one thing the number is for:
+       telling you which circuits are the problem.
+
+       So both figures are reported. The wiring drop is what the design controls
+       and what the limit is applied to. The transformer drop is stated
+       separately, as the number that sets the tap. */
+    var txVolts = 0, wiringVolts = 0;
+    steps.forEach(function (s) {
+      if (s.kind === 'tx') txVolts += s.volts; else wiringVolts += s.volts;
+    });
+
+    var limit = opts.limit === undefined ? num(p.design.vdropLimitLv, 3) : opts.limit;
+    return {
+      volts: volts, pct: pct, steps: steps,
+      volt: v, limit: limit,
+      /* the design figure: what the cables cost */
+      wiring: { volts: wiringVolts, pct: (wiringVolts / v) * 100 },
+      /* what the tap has to cancel */
+      transformer: { volts: txVolts, pct: (txVolts / v) * 100 },
+      /* Anything unaccounted for is flagged, not folded in silently. */
+      incomplete: steps.some(function (s) { return s.unknown; }),
+      unknownCount: steps.filter(function (s) { return s.unknown; }).length,
+      /* Judged on the wiring, because that is what the design can change. */
+      over: (wiringVolts / v) * 100 > limit + 1e-9,
+      /* and the total, for anyone who wants it — reported, not used to fail it */
+      overIncludingTransformer: pct > limit + 1e-9
+    };
+  }
+
+  /* Everything fed at or below one point, as the current that actually flows
+     through the feeder arriving at it. This is the load the *upstream* cable
+     carries, and getting it right is what makes the profile a profile rather
+     than a sum of individual circuit drops. */
+  function loadBelow(p, item, kind) {
+    if (kind === 'tx') {
+      /* A transformer's outgoing total is the site total — every main board it
+         feeds, in parallel. */
+      var all = [], seen = {};
+      (p.pdbs || []).forEach(function (b) {
+        if (b.txId !== item.id) return;
+        panelsBelow(p, b, 'pdb').forEach(function (pn) {
+          var k = (pn.__kind || 'panel') + ':' + pn.id;
+          if (seen[k]) return;
+          seen[k] = 1; all.push(pn);
+        });
+      });
+      return summariseLoad(p, all);
+    }
+    if (kind === 'pdb')  return summariseLoad(p, panelsBelow(p, item, 'pdb'));
+    if (kind === 'pdp')  return summariseLoad(p, panelsBelow(p, item, 'pdp'));
+    if (kind === 'db')    return summariseLoad(p, panelsBelow(p, item, 'db'));
+    if (kind === 'panel') return summariseLoad(p, [item]);
+    return null;
+  }
+
+  /* Everything downstream of a board, circuit by circuit.
+
+     Written as a walk rather than by reusing the panelsOn* helpers because each
+     of those answers a different question — panelsOnPdb is deliberately the
+     circuits hanging *directly* off a main board, not the whole sub-tree — and
+     reaching for the nearest one that looked right would have quietly counted
+     half a board's load. */
+  function collectDown(p, board, kind, out) {
+    if (kind === 'pdb') {
+      /* circuits straight off this board, plus everything under each PDP */
+      (p.panels || []).forEach(function (pn) { if (pn.pdbId === board.id && !pn.pdpId) out.push(pn); });
+      (p.pdps || []).forEach(function (b) { if (b.pdbId === board.id) collectDown(p, b, 'pdp', out); });
+    } else if (kind === 'pdp') {
+      (p.panels || []).forEach(function (pn) { if (pn.pdpId === board.id && !pn.dbId) out.push(pn); });
+      (p.dbs || []).forEach(function (b) { if (b.pdpId === board.id) collectDown(p, b, 'db', out); });
+    } else if (kind === 'db') {
+      (p.panels || []).forEach(function (pn) { if (pn.dbId === board.id) out.push(pn); });
+    }
+  }
+
+  /* The same walk, but returning a de-duplicated list. A circuit reachable by two
+     routes would otherwise be counted twice, which is precisely what a tree
+     prevents — and a load counted twice reports a volt drop twice as large as
+     it is, which is the more dangerous of the two errors here. */
+  function panelsBelow(p, board, kind) {
+    var acc = [];
+    collectDown(p, board, kind, acc);
+    var seen = {}, uniq = [];
+    acc.forEach(function (pn) {
+      var k = (pn.__kind || 'panel') + ':' + pn.id;
+      if (seen[k]) return;
+      seen[k] = 1; uniq.push(pn);
+    });
+    return uniq;
+  }
+
+  /* One set of circuits, as the current their feeder carries. Three-phase is
+     the default because that is what a board feeder is; a site mixing phases
+     cannot be summarised by a single number, and saying so beats a figure
+     that silently assumes. */
+  function summariseLoad(p, panels) {
+    if (!panels || !panels.length) return null;
+    var amp = 0, kva = 0, kw = 0, mixed = false, phases = '3';
+    panels.forEach(function (pn) {
+      var d = panelDemand(p, pn);
+      /* Harmonic current adds to the RMS the conductor carries, and this is the
+         one place that matters: a run sized on the fundamental RMS can be
+         driven harder by the harmonic content than by the load itself. */
+      amp += d.ampHarm || d.amp;
+      kva += d.kva; kw += d.kw;
+      if (String(pn.phases) !== '3') mixed = true;
+    });
+    return {
+      amp: amp, kva: kva, kw: kw,
+      pf: kva > 0 ? D.clamp(kw / kva, 0.01, 1) : 1,
+      phases: mixed ? '1' : '3',
+      count: panels.length,
+      /* Stated rather than assumed away: a path that mixes single- and
+         three-phase cannot be given one volt drop. */
+      mixedPhases: mixed
+    };
+  }
+
+  /* The worst end of the site, which is the answer to the question a client
+     actually asks. Not an average and not a worst case — the circuit with the
+     largest total drop from its transformer, which is the one that decides
+     whether the installation complies. */
+  function voltageProfileWorst(p, opts) {
+    var worst = null, profiles = [];
+    (p.panels || []).forEach(function (pn) {
+      var vp = voltageProfile(p, pn, opts);
+      if (!vp) return;
+      vp.pn = pn;
+      profiles.push(vp);
+      if (!worst || vp.pct > worst.pct) worst = vp;
+    });
+    profiles.sort(function (a, b) { return b.pct - a.pct; });
+    return { worst: worst, profiles: profiles };
   }
 
 /* ============================================================ arc flash =====
@@ -3119,8 +3412,8 @@ function selectivityBand(s) {
     if (key === 'pf-available') return 'supply below the power factor penalty limit';
     if (key === 'motor-class') return 'machine whose overload relay class its device cannot meet';
     if (key === 'let-through') return 'feeder conductor that cannot survive the fault';
-    if (key === 'motor-class') return 'machine whose overload relay class its device cannot meet';
-    if (key === 'let-through') return 'feeder conductor that cannot survive the fault';
+    if (key === 'vdrop-path') return 'circuit whose total volt drop from the transformer exceeds the limit';
+    if (key === 'vdrop-incomplete') return 'circuits whose voltage drop profile cannot be completed';
     if (key === 'vector-group') return 'transformer whose vector group is not stated';
     if (key === 'withstand') return 'cable that cannot survive the fault';
   if (key === 'power-factor') return 'board below the power factor limit';
@@ -3980,6 +4273,7 @@ function selectivityBand(s) {
     groupFindings, worstLevel, groupTitle, boardTagOf, MIN_GROUP, MAX_LIST,
     clearingTimeAt, selectivity, selectivityMessage, selectivityBand, selectivityLadder, reactive,
     arcTimeAt, arcDistanceFactor, arcAssessment,
+    voltageProfile, voltageProfileWorst, loadBelow, panelsBelow,
     pfCorrection, capResonance, impedanceBase, puImpedance, pathImpedance, faultLevel,
     earthLoop, disconnectionMultipleAt, earthFaultCheck, neutralCurrent, neutralCsaFor,
     hasNeutralConductor, isThreePhaseWithNeutral, supplyArrangement, neutralCheck,

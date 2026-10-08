@@ -758,6 +758,40 @@ that is what fails capacitors.
 The 7% reactor costs about 7% of output and is normally in the bank price rather
 than an accessory.
 
+### Voltage profile
+
+Voltage drop is a property of a **path**, not of a circuit. Every metre of cable
+between the transformer and the far end carries every ampere flowing through it,
+and the drops add:
+
+```
+ΔV_total = ΔV_transformer + ΔV_main feeder + ΔV_board feeder + ΔV_circuit
+```
+
+A spreadsheet that reports one figure per circuit — the drop across that
+circuit's own feeder — is reporting the wrong number, because the drops above it
+count too. On this project the circuit feeders contribute 0.1–1.3% and the board
+feeders sit on top of that.
+
+**The transformer's contribution is reported but not counted against the limit.**
+%Z is the drop at *rated* current, so the drop scales with loading — and the tap
+selector is there to cancel it. Including it would put ~4.9% on every circuit and
+97 of 97 would fail for the same reason, which destroys the one thing the number
+is for. The wiring drop is what the design controls, so that is what the limit is
+judged against, and the transformer figure is stated separately as the number
+that sets the tap.
+
+On this project, judged that way: **0 circuits over 3%, 3 over 2%**, worst
+`Misc. Sump Pumps 901` at 2.78% — of which 7.46 V is its own 1.5 mm² over 23 m.
+That is the answer to "is the far end of the site within limits", and it is the
+number that decides whether the answer is still yes after another phase is added.
+
+A hop with no stated conductor size or route length contributes **unknown, not
+zero**, and the profile is flagged incomplete. An unaccounted hop is a gap in the
+data, not a proven pass — eight circuits are currently incomplete.
+
+Busbars and joints are not modelled, so the figures are a small under-estimate.
+
 ### Excel export
 
 **Export Excel** on the load schedule writes a real `.xlsx`.
@@ -1115,7 +1149,7 @@ test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        36 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
-test/protection-test.html 417 checks on fault levels, device proposals, cable
+test/protection-test.html 433 checks on fault levels, device proposals, cable
                           thermal withstand, selectivity from trip curves, earth
                           fault looping, the neutral conductor on 3P+N feeders,
                           the earthing arrangement, reactive power, harmonics,

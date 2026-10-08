@@ -3054,7 +3054,7 @@
     put([S.name]); put(['Client', S.client, 'Project', S.ref, 'Designer', S.designer, 'Date', S.date]);
     put('');
     put(['LOAD SCHEDULE']);
-    put(['Reference', 'Board', 'Board description', 'Description', 'Type', 'Connected kW', 'Design kVA', 'kvar', 'pf', 'Demand', 'Phases', 'Voltage V', 'Current A', 'Non-linear load', 'THD %', '3rd harmonic %', 'Neutral carried', 'Imbalance %', 'PE in cable', 'Protective device', 'Device frame A', 'Breaking capacity kA', 'Trip unit', 'Feeder runs', 'Feeder mm2', 'Cores', 'Length m', 'Installation', 'Rated A', 'Utilisation %', 'Volt drop %', 'PE mm2', 'R1+R2 ohm', 'Loop A', 'Max t s', 'Actual t s', 'Motor', 'Starting method', 'Starting source', 'Load torque', 'Starting together', 'Full load A', 'Starting A', 'All together A', 'Board at start V', 'Dip %', 'Torque at start', 'Grid ref E', 'Grid ref N', 'Status']);
+    put(['Reference', 'Board', 'Board description', 'Description', 'Type', 'Connected kW', 'Design kVA', 'kvar', 'pf', 'Demand', 'Phases', 'Voltage V', 'Current A', 'Non-linear load', 'THD %', '3rd harmonic %', 'Neutral carried', 'Imbalance %', 'PE in cable', 'Protective device', 'Device frame A', 'Breaking capacity kA', 'Trip unit', 'Feeder runs', 'Feeder mm2', 'Cores', 'Length m', 'Installation', 'Rated A', 'Utilisation %', 'Volt drop % (own feeder)', 'Volt drop % (whole path)', 'Transformer % (tap)', 'PE mm2', 'R1+R2 ohm', 'Loop A', 'Max t s', 'Actual t s', 'Motor', 'Starting method', 'Starting source', 'Load torque', 'Starting together', 'Full load A', 'Starting A', 'All together A', 'Board at start V', 'Dip %', 'Torque at start', 'Grid ref E', 'Grid ref N', 'Status']);
     var un = [];
     /* One row per circuit, wherever it is fed from. Declared up here because
        the main-board circuits are written before the distribution boards. */
@@ -3063,7 +3063,17 @@
       var cab = pn.cable && pn.cable.csa ? LC.cableRating(pn.cable) : null;
       var vd = cab ? LC.voltDrop(pn.cable, dm.amp, dm.pf, pn.phases, pn.volt) : null;
       var cu = cab ? (dm.amp / cab.derated) * 100 : '';
-      var stt = (dm.amp <= (cab ? cab.derated : 0)) && (vd ? vd.pct <= num(S.design.vdropLimitLv, 3) : true) ? 'OK' : 'CHECK';
+      /* The whole path from the transformer, not just this feeder. Computed once
+         per audit pass would be better; done per row here because the schedule is
+         the export and the profile walk is cheap next to the fifty other figures
+         already being derived. */
+      var vpp = (pn.pdpId || pn.pdbId) ? LC.voltageProfile(S, pn) : null;
+      /* Judged on the whole path, because that is what BS 7671 sets a limit
+         against — and the transformer part is a tap setting, so it is excluded
+         rather than counted. */
+      var stt = (dm.amp <= (cab ? cab.derated : 0)) &&
+                (vd ? vd.pct <= num(S.design.vdropLimitLv, 3) : true) &&
+                (!vpp || !vpp.over) ? 'OK' : 'CHECK';
       var pr = pn.prot || null;
       /* Six starting columns, or six blanks — never a short row, because the CSV
          parser reads by position and a missing field shifts everything after it. */
@@ -3089,6 +3099,12 @@
         pr && pr.trip ? pr.trip : '',
         cab ? cab.runs : '', cab ? cab.csa : '', pn.cable.cores, pn.cable.len, cab ? cab.method.name : pn.cable.method,
         cab ? cab.derated.toFixed(0) : '', cu === '' ? '' : cu.toFixed(0), vd ? vd.pct.toFixed(2) : '',
+        /* The path figure is the one that decides compliance; the own-feeder
+           figure is what a cable schedule conventionally shows, and the two
+           together say whether the problem is the final leg or everything
+           upstream of it. */
+        vpp ? vpp.wiring.pct.toFixed(2) + (vpp.incomplete ? '*' : '') : '',
+        vpp ? vpp.transformer.pct.toFixed(2) : '',
         loopOf(pn, 'panel'),
         /* Starting. Empty for anything the model does not apply to, so the column
            is never a guess — and the source column says whether a stated method

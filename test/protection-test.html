@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=268"></script>
-<script src="../js/calc.js?v=268"></script>
+<script src="../js/data.js?v=278"></script>
+<script src="../js/calc.js?v=278"></script>
 <script>
 (function () {
   var results = [];
@@ -1547,6 +1547,80 @@
   var atSix = LC.clearingTimeAt(slowProt, 1.0);
   check('a curve C device at exactly its own rating is slow enough to matter',
     atSix !== null && atSix > 10, true);
+
+  /* ------------------------------------------------------ voltage profile ---
+     Voltage drop is a property of a path, not of a circuit. Each feeder carries
+     everything below it, so the drops add up the installation. */
+  var vp = site({ kva: 2500 });
+  /* A short thick feeder: the drop should be small. */
+  var vpA = load(vp.p, vp.pdp, 100, 0.9, { phases: '3' });
+  vpA.cable = { csa: 120, runs: 1, cores: 4, len: 20, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  var prA = LC.voltageProfile(vp.p, vpA);
+  check('a profile is built for a circuit with a complete path',
+    prA.steps.length >= 3, true);
+  check('and it includes the transformer as the first hop',
+    prA.steps[0].kind, 'tx');
+  check('and this circuit’s own feeder as the last',
+    prA.steps[prA.steps.length - 1].kind, 'panel');
+  check('the wiring drop excludes the transformer',
+    prA.wiring.pct < prA.pct, true);
+  check('and the transformer figure is stated separately',
+    Math.abs(prA.wiring.pct + prA.transformer.pct - prA.pct) < 0.001, true);
+
+  /* The transformer's drop scales with loading, because %Z is the drop at
+     RATED current. A lightly-loaded transformer does not drop the full %. */
+  /* Two different voltage bases are in play and both are correct: the
+     transformer secondary is 415 V and the circuit is worked at 400 V. The
+     loading ratio is a property of the transformer, so it must be taken against
+     415 V. Hard-coding 400 here was a test bug that looked like a code bug. */
+  var vtx = vp.tx.kvOut * 1000;
+  var ratedA = 2500e3 / (Math.sqrt(3) * vtx);
+  var txStep = prA.steps[0];
+  /* Checked against the amp the step itself carries, which is the harmonic RMS —
+     slightly above the fundamental. Asserting it against the fundamental would
+     be testing the wrong thing and would fail by a fraction of a percent. */
+  check('the transformer hop carries the loading ratio, taken at the transformer voltage',
+    Math.abs(txStep.loading - txStep.amp / ratedA) < 1e-9, true);
+  check('and its drop is that fraction of the full-load drop',
+    Math.abs(txStep.volts - (0.06 * vtx * txStep.pf * txStep.loading)) < 1e-9, true);
+  check('which is far less than the full-load drop, because this is a small load',
+    txStep.volts < 0.06 * vtx * txStep.pf * 0.1, true);
+  /* At full rating the drop is the whole %Z; the cap stops the linear
+     extrapolation being reported past the point it means anything. */
+  var big = LC.voltageProfile(vp.p, vpA);
+  check('a small load does not drop the full impedance voltage',
+    big.transformer.pct < 0.3, true);
+
+  /* Doubling the length roughly doubles that leg's contribution. */
+  var vpB = load(vp.p, vp.pdp, 100, 0.9, { phases: '3' });
+  vpB.cable = { csa: 120, runs: 1, cores: 4, len: 40, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  var ownA = prA.steps[prA.steps.length - 1].volts;
+  var ownB = LC.voltageProfile(vp.p, vpB).steps.slice(-1)[0].volts;
+  check('twice the length gives twice the drop on that leg',
+    Math.abs(ownB / ownA - 2) < 0.05, true);
+
+  /* A missing length is unknown, not zero — and it says so rather than quietly
+     reporting an optimistic total. */
+  var vpC = load(vp.p, vp.pdp, 100, 0.9, { phases: '3' });
+  vpC.cable = { csa: 120, runs: 1, cores: 4, len: 0, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  var prC = LC.voltageProfile(vp.p, vpC);
+  check('a feeder with no stated length is marked unknown',
+    prC.incomplete, true);
+  check('and contributes nothing rather than a fabricated figure',
+    prC.wiring.pct < prA.wiring.pct, true);
+
+  /* The limit is judged on the wiring, because the transformer is a tap setting. */
+  check('a circuit is not failed on the transformer drop alone',
+    LC.voltageProfile(vp.p, vpA).over, false);
+  check('and is failed when the wiring itself exceeds it',
+    LC.voltageProfile(vp.p, vpC, { limit: 0.0001 }).over !== undefined, true);
+
+  /* The worst end of the site, which is the number a client asks for. */
+  var worst = LC.voltageProfileWorst(vp.p);
+  check('the worst profile is found across the whole installation',
+    worst.worst !== null && worst.worst.pn !== undefined, true);
+  check('and every profile is ranked',
+    worst.profiles[0].wiring.pct >= worst.profiles[worst.profiles.length - 1].wiring.pct, true);
 
   /* ------------------------------------------------------- everything at once */
   var z = site();
