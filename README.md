@@ -212,11 +212,15 @@ the board they are fed from.
 
 ## Importing a vendor's load schedule
 
-`tools/roeslein_import.py` converts the Roeslein **AG230-25** spreadsheet into a
-project file:
+`tools/import_schedule.py` converts a vendor's load-schedule spreadsheet into a
+project file. Nothing identifying is baked into it — the project name, the client
+and the drawing reference are all arguments. A name left in a script ends up in a
+commit, a fork and somebody else's checkout, and removing it afterwards does not
+remove it from the history:
 
 ```
-python3 tools/roeslein_import.py "All loads L5.xlsx" tools/roeslein-line5.json
+python3 tools/import_schedule.py "All loads.xlsx" tools/project.json \
+        "Line 5 & 9" "Client Ltd" "DR-123"
 ```
 
 Then **Import JSON** in the app. It needs nothing but python3 — the spreadsheet
@@ -1047,10 +1051,10 @@ and a 100 kA one. `uk` is the transformer's **Impedance** field.
 project file, matched by the sheet row the importer recorded:
 
 ```
-python3 tools/add_protection.py tools/wxm-line5.json "All loads L5.xlsx"
+python3 tools/add_protection.py tools/project.json "All loads.xlsx"
 ```
 
-On the Roeslein schedule that is 97 circuits — **56 TM and 41 LI**, from 15 A
+On the project it was built against that is 97 circuits — **56 TM and 41 LI**, from 15 A
 up to 800 A in 250 / 400 / 600 / 800 A frames. These are read from the sheet
 rather than proposed, because they came off the switchgear schedule.
 
@@ -1273,9 +1277,9 @@ js/sld.js           single line diagram: tree layout and IEC 60617 symbols
 js/ui.js            shell: properties, schedules, site map, export, import, print
 js/xlsx.js          XLSX writer: CRC-32, a ZIP writer and SpreadsheetML, no deps
 tools/xlsx_read.py        minimal spreadsheet reader, standard library only
-tools/roeslein_import.py  vendor load schedule → project file
+tools/import_schedule.py   vendor load schedule → project file
 tools/add_protection.py   vendor switchgear schedule → circuit devices
-tools/wxm-line5.json      the Roeslein Line 5 & Auxiliaries project, ready to import
+tools/project.json        the example project, gitignored with the rest of tools/*.json
 test/csv-test.html         102 checks on the CSV parser, the column mapper and
                           the value readers
 test/csv-roundtrip-test.html 26 checks on reading the app's own export back,

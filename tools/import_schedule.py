@@ -1,24 +1,38 @@
 #!/usr/bin/env python3
-"""Convert 'All loads L5.xlsx' into a project file for the load-schedule workbench.
+"""Convert a vendor's load-schedule spreadsheet into a project file.
 
-Reads the vendor's schedule and writes JSON in exactly the shape the app's
-Import button expects, so the file can be dropped straight in.
+Writes JSON in exactly the shape the app's Import button expects, so the file can
+be dropped straight in.
 
-Decisions taken with the engineer (2026-10-02), each marked with a NOTE below
-so the reasoning travels with the code:
+    python3 import_schedule.py <source.xlsx> [out.json] [project name] \
+                               [client] [drawing ref]
 
-  1. Two transformers, one per main board, 3,150 kVA each.
-  2. PDP5001 / PDP5002 / PDP5003 are fed from MSB8. The sheet has a handful of
-     rows on those boards whose "LV Board" cell says MSB9, which would give one
-     distribution board two parents. Those cells are typos and are corrected.
-  3. The nine DF-* feeder panels are collapsed. Each carries exactly one load,
-     so the load is placed straight on the main board as a single way and the
-     DF-* name is kept as the circuit's reference.
-  4. Rated kW is imported as the connected load; the sheet's own load factor and
-     diversity factor are combined into the app's demand factor. The app's own
-     engine then reproduces the vendor's consumption figure independently.
-  5. Board ratings are inferred from the sum of outgoing frame sizes and marked
-     as estimates, because the sheet gives no board ratings at all.
+The project name, client and drawing reference are arguments rather than
+constants: this was written against a real client's sheet, and a name left in a
+script ends up in a commit, a fork and somebody else's checkout. Removing it
+afterwards does not remove it from the history.
+
+The decisions below are the ones that had to be taken with the engineer while
+reading that particular schedule. They are marked with a NOTE in the code so the
+reasoning travels with the script — but they are decisions about ONE schedule,
+not rules to carry to the next one. Read them before reusing this for a different
+vendor:
+
+  1. The transformers and main boards were read from the sheet's own structure
+     rather than inferred.
+  2. A handful of rows on some boards named a different main board in their
+     "LV Board" cell, which would have given one distribution board two
+     parents. Those cells were typos and were corrected by hand.
+  3. The single-load feeder panels were collapsed: each carries exactly one load,
+     so the load goes straight onto its board as one way and the panel's own
+     name is kept as the circuit reference.
+  4. Rated kW is imported as the connected load, and the sheet's own load factor
+     and diversity factor are combined into the app's single demand factor. The
+     app then reproduces the vendor's consumption figure independently, which is
+     the check worth doing on any import.
+  5. Board ratings were inferred from the sum of the outgoing frame sizes and
+     marked as estimates, because that sheet gave no board ratings at all. A
+     vendor who does give them should be believed instead.
 
 Only the standard library is used — no openpyxl — so this runs anywhere python3
 does. xlsx_read.py holds the minimal spreadsheet reader.
@@ -32,8 +46,22 @@ from collections import defaultdict
 
 from xlsx_read import read, letter
 
-SRC = sys.argv[1] if len(sys.argv) > 1 else "/Users/sean/Downloads/All loads L5.xlsx"
-OUT = sys.argv[2] if len(sys.argv) > 2 else "roeslein-line5.json"
+SRC = sys.argv[1] if len(sys.argv) > 1 else ""
+OUT = sys.argv[2] if len(sys.argv) > 2 else "project.json"
+
+# The project this was written for was a real client's, so nothing identifying is
+# baked in: the name, the client and the drawing reference are arguments. A name
+# left in a script is a name that ends up in a commit, in a fork, in a screenshot
+# and in somebody else's checkout, and removing it afterwards does not remove it
+# from the history.
+#
+#   python3 import_schedule.py "All loads.xlsx" out.json "Line 5 & 9" "Client Ltd" "DR-123"
+PROJECT_NAME = sys.argv[3] if len(sys.argv) > 3 else "Load schedule"
+CLIENT = sys.argv[4] if len(sys.argv) > 4 else ""
+DRAWING_REF = sys.argv[5] if len(sys.argv) > 5 else ""
+# Short, non-identifying. These ids go into the project file, into diffs and
+# into every commit that touches one, so it is a label and nothing more.
+TAG_PREFIX = "imp"
 
 # --------------------------------------------------------------------------
 # Column numbers in the sheet, from its own header row (row 10).
@@ -172,10 +200,13 @@ def infer_rating(sum_frame):
 
 
 def uid(prefix, n):
-    return "%s_roeslein_%03d" % (prefix, n)
+    return "%s_%s_%03d" % (prefix, TAG_PREFIX, n)
 
 
 def main():
+    if not SRC:
+        print(__doc__, file=sys.stderr)
+        return 2
     rows = read_rows()
     if not rows:
         raise SystemExit("no rows found in %s" % SRC)
@@ -208,9 +239,9 @@ def main():
     tx_ids, pdb_ids, pdp_ids = {}, {}, {}
 
     out = {
-        "name": "Roeslein Line 5 & 9 — production and support",
-        "client": "Roeslein AG",
-        "ref": "AG230-25",
+        "name": PROJECT_NAME,
+        "client": CLIENT,
+        "ref": DRAWING_REF,
         "designer": "",
         "date": "2026-10-02",
         "site": {"w": SITE_W, "h": SITE_H, "ox": 0, "oy": 0},
@@ -332,7 +363,7 @@ def main():
             bits.append("Fed from its own feeder panel %s, taken as one way "
                         "on %s; the %s layer was collapsed on import."
                         % (r["feederPanel"], host_main, r["feederPanel"]))
-        bits.append("Roeslein: rated %.1f A, breaker %g A, frame %g A, "
+        bits.append("Vendor sheet: rated %.1f A, breaker %g A, frame %g A, "
                     "nominal %.0f A; rated %.1f kW, nominal %.1f kW, "
                     "estimated consumption %.1f kW; load factor %g, "
                     "diversity factor %g, pf %g."

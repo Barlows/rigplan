@@ -42,14 +42,15 @@ jobs:
 
       # The app itself must never carry a client or project name. It is the
       # part that gets copied around, opened from disk and shown to people, and
-      # a stray project reference in a comment outlives everything else in the
-      # repository. The importer and the README are allowed to mention the
-      # project they were built from — that is what they are documentation of,
-      # and the repository is private.
+      # A stray project reference in a comment outlives everything else in the
+      # repository. The app files are what a user sees, so the name must not be
+      # in them at all — not in a comment, not in a placeholder, not in an
+      # example. The importer takes the client as an argument rather than
+      # carrying one, so there is nothing left for this guard to allow.
       - name: no client identifiers in the app
         run: |
-          if git grep -I -n -i -E 'roeslein|wxm[- ]?line' -- index.html js css test; then
-            echo "::error::a client identifier has reached the app files"
+          if git grep -I -n -i -E 'roeslein|wxm[- ]?line' -- index.html js css test tools; then
+            echo "::error::a client identifier has reached the app or tools"
             exit 1
           fi
           echo "app files clean"

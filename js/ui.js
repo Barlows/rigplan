@@ -3040,7 +3040,7 @@
       '<div class="hint" style="margin-bottom:10px">' + preview + '.</div>' +
       fRow('What changed and why', '<textarea class="ta" id="revNote" rows="3" ' +
         'placeholder="e.g. comments back from the client; pump 501 uprated, cable increased to 95 mm²"></textarea>') +
-      fRow('Issued to', '<input class="inp" id="revToWhom" placeholder="e.g. Roeslein Ltd — for construction">') +
+      fRow('Issued to', '<input class="inp" id="revToWhom" placeholder="e.g. the client — for construction">') +
       '</div>' +
       '<div class="hint" style="margin-top:10px">Write it while you know it. A revision number with no ' +
       'reason behind it is a timestamp, and the reason is the part that is worth keeping.</div>',
