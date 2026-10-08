@@ -798,6 +798,34 @@ figure. There is a unit-cost field because somebody will want it, and a total
 built from entered costs, explicitly labelled as arithmetic on those entries and
 not a quotation.
 
+### Opening a project
+
+`App.openProject(project)` and `App.openProjectFile(file)` are the one way in,
+used by the file picker, by the tests, and by anything else holding a project.
+They did not exist before: importing was an inline handler on the file input,
+invisible from outside the page, so **every attempt to open a project without
+going through the picker did nothing at all** — and did so quietly, because the
+callers were written as a feature test that was never true.
+
+Two bugs that caused, both now fixed and both covered:
+
+- **The sample was persisted on first run.** `afterLoad()` ends in a save, so a
+  fresh profile wrote a 51-circuit demonstration project into storage under the
+  engineer's own key. On the next open it read as "a saved project" and was
+  offered in place of anything real. The sample is prepared like a real project
+  but never written, and the decision is made before anything can save.
+- **Loading overwrote stated route lengths** with the straight-line distance
+  between two points on a schematic plan. A layout drawing positions equipment
+  for legibility, so that is not a route length, and replacing a measured one
+  with it is the most destructive thing this app can do to a cable schedule —
+  silently. A stated length now always wins; the drawn distance fills in a
+  length nobody has measured and is recorded as inferred. **Lengths from plan**
+  on the cables tab overwrites deliberately, and says how many it will replace
+  before it does.
+
+Opening a file leaves the design exactly as it was: the bill of materials is
+identical before and after, which is the assertion that pins both.
+
 ### Merging two files — and why there is no multi-user
 
 **There is no multi-user, and the reason is structural.** Shared live editing
@@ -1293,7 +1321,7 @@ test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        36 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
-test/protection-test.html 513 checks on fault levels, device proposals, cable
+test/protection-test.html 520 checks on fault levels, device proposals, cable
                           thermal withstand, selectivity from trip curves, earth
                           fault looping, the neutral conductor on 3P+N feeders,
                           the earthing arrangement, reactive power, harmonics,

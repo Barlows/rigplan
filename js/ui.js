@@ -157,7 +157,18 @@
 
   /* ------------------------------------------------------------------ init */
   function init() {
-    S = load() || LS.sampleProject();
+    /* Whether this is a real project or the sample is decided BEFORE anything
+       can save, and it is remembered rather than re-derived later.
+
+       The sample used to be persisted on first run, because afterLoad() ends in
+       a save(). That put a 51-circuit demonstration project into storage under
+       the engineer's own key: on the next open it was "a saved project", so the
+       app showed it instead of anything real, and the Import button looked like
+       the only way back. The sample is not the engineer's work and must never be
+       stored as though it were. */
+    var had = load();
+    var isSample = !had;
+    S = had || LS.sampleProject();
     bootstrap(S);
     document.querySelectorAll('datalist#dlIncomer, datalist#dlCsa, datalist#dlKva').forEach(function (d) { d.remove(); });
     buildDatalists();
@@ -165,9 +176,8 @@
     PLAN.init(el('plan'), el('canvasWrap'), S, App);
     syncToolbar();
     renderAll(true);
-    var fresh = !load();
-    if (fresh) {
-      setTimeout(function () { afterLoad(); }, 30);
+    if (isSample) {
+      setTimeout(function () { afterLoad(true); }, 30);
       return;
     }
     /* A restored project deliberately does not get the auto-assign and cable
@@ -1579,7 +1589,8 @@
       rows.push({ from: up ? up.tag : '—', to: pn.tag, kind: up && up.__kind === 'db' ? 'Sub-board to panel' : 'Control panel', o: pn, c: pn.cable, load: d.amp, pf: d.pf, ph: pn.phases, volt: pn.volt, id: pn.id, tkind: 'panel' });
     });
     var h = '<div class="toolbar-inline"><span style="font-size:11px;color:var(--fg-dim)">' + rows.length + ' circuits · volt drop limit ' + S.design.vdropLimitLv + '%</span>' +
-      '<span style="margin-left:auto"></span>' + btn2('autocables', 'Size all cables') + btn2('csv', 'Export CSV') + '</div>';
+      '<span style="margin-left:auto"></span>' + btn2('autolen', 'Lengths from plan') +
+      btn2('autocables', 'Size all cables') + btn2('csv', 'Export CSV') + '</div>';
     h += '<table class="grid"><thead><tr><th class="l">From</th><th class="l">To</th><th class="l">Circuit</th><th>Runs</th><th>Core mm²</th><th>Cores</th><th>Length m</th><th class="l">Installation</th><th>Grouped</th><th>Amb °C</th><th>Base A</th><th>Derated A</th><th>Load A</th><th>%</th><th>Drop V</th><th>Drop %</th><th>PE mm²</th><th>R1+R2 Ω</th><th>Loop A</th><th>Max t ms</th><th>Act t ms</th><th>Verdict</th></tr></thead><tbody>';
     rows.forEach(function (r) {
       var cab = r.c && r.c.csa ? LC.cableRating(r.c) : null;
@@ -2567,7 +2578,10 @@
       commit(false);
     }
   }
-  function autoLen(o) { /* keep feeder length in step with the drawn position */
+  /* Fill in a route length that has not been stated, from the drawn position.
+     Never overwrite one that has — see syncLen() for why the drawn distance is
+     not a route. */
+  function autoLen(o) {
     if (!o || !o.cable || !o.pos) return;
     LC.syncLen(S, o);
   }
@@ -3089,7 +3103,12 @@
      geometry and fill in blank cable sizes. Existing assignments are never
      shuffled — re-balancing is an explicit action (Auto-balance button),
      because moving circuits is a design decision, not a side effect. */
-  function afterLoad() {
+  /* `discardable` is true when the project being prepared is the built-in
+     sample. The sample still gets auto-placed and cable-sized so it looks like
+     a real design, but the save at the end is skipped: persisting the
+     demonstration project is what turns a first run into a locked-in state that
+     looks like somebody's engineering. */
+  function afterLoad(discardable) {
     var added = 0, made = [];
     S.panels.forEach(function (pn) {
       /* a circuit already fed off a main board is placed on purpose — it is
@@ -3117,7 +3136,57 @@
     if (filled) bits.push(filled + ' protective device(s) filled in');
     var msg = bits.length ? bits.join(' · ') : 'Schedule ready';
     toast(msg + ' · press <b>Auto-balance</b> to level the boards', (added || filled) ? 'good' : '');
-    commit(true);
+    /* commit(true) is what writes to storage. Skipped for the sample — and the
+       skip is unconditional, not conditional on localStorage being empty,
+       because by this point the sample has been mutated by every step above. */
+    if (!discardable) commit(true);
+    else App.sampleShown = true;
+  }
+
+  /* ------------------------------------------------------------- loading ---
+     One way in, used by the file picker, by the tests and by anything else that
+     has a project in hand.
+
+     It existed before only as an inline handler on the file input, which is
+     invisible from outside the page. Every attempt to open a saved project
+     without going through the picker therefore did nothing at all — and did so
+     quietly, because the callers were guarded with a feature test that was
+     never true. A named function is the difference between "this is handled"
+     and "this silently does not happen". */
+  function openProject(p, opts) {
+    opts = opts || {};
+    /* `S = LS.newProject(p)` normalises a hand-edited or imported file: missing
+       arrays become empty rather than undefined, and defaults are filled. It is
+       what the file picker has always used, so behaviour is unchanged. */
+    S = LS.newProject(p);
+    bootstrap(S);
+    PLAN.setProject(S);
+    sel = null;
+    syncToolbar();
+    /* A project opened deliberately is prepared like one just imported: panels
+       placed, protection completed, cables sized. A project restored from
+       storage on boot is not, because that would churn a saved design. */
+    afterLoad(!!opts.discardable);
+    if (opts.quiet !== true) {
+      var extra = (S.underlay && S.underlay.kind) ? ' — site map: ' + S.underlay.name : '';
+      toast('Opened ' + (p.name || 'project') + extra, 'good');
+    }
+    return S;
+  }
+
+  /* From a file on disk. Kept separate because it needs a FileReader and is the
+     only asynchronous way in. */
+  function openProjectFile(file, opts) {
+    return new Promise(function (res, rej) {
+      if (!file) return rej(new Error('no file'));
+      var r = new FileReader();
+      r.onload = function () {
+        try { res(openProject(JSON.parse(r.result), opts)); }
+        catch (e) { rej(e); }
+      };
+      r.onerror = function () { rej(new Error('could not read the file')); };
+      r.readAsText(file);
+    });
   }
 
   /* ------------------------------------------------------------- exporting */
@@ -3595,8 +3664,44 @@
     return guess || null;
   }
 
-  function autoLenForAll() {
-    S.panels.forEach(function (pn) { if (!pn.cable) return; autoLen(pn); });
+  /* Deliberate, unlike autoLen: this one DOES overwrite, because the engineer
+     has pressed a button asking for it. The count of stated lengths it is about
+     to replace is said first — overwriting a measured route is the single most
+     destructive thing this app can do to a cable schedule, and it should not be
+     one keystroke away. */
+  /* Replace stated route lengths with the drawn distance. Confirmed first,
+     because the drawn distance is a schematic position and not a route — see
+     syncLen() — so this is for a rough plan, not for a schedule being issued. */
+  function planLengths() {
+    var stated = S.panels.filter(function (pn) { return pn.cable && num(pn.cable.len, 0) > 0; }).length;
+    if (!stated) { autoLenForAll(true); commit(true); renderTab(); toast('Route lengths taken from the plan', 'good'); return; }
+    modal('Replace route lengths with plan distances?',
+      '<div style="max-width:540px"><div class="hint">' +
+      '<b>' + stated + ' circuit' + (stated === 1 ? '' : 's') + '</b> already ' +
+      (stated === 1 ? 'has' : 'have') + ' a stated route length, and this will replace ' +
+      (stated === 1 ? 'it' : 'them all') + ' with the straight-line distance on the plan.</div>' +
+      '<div class="hint" style="margin-top:8px">A layout drawing positions equipment for legibility, ' +
+      'so that distance is not the length of the run. Useful for a rough plan early on; ' +
+      'wrong for a schedule being issued.</div></div>',
+      [{ label: 'Replace them', cls: 'danger', fn: function () {
+          var n = autoLenForAll(true);
+          commit(true); renderTab();
+          toast(n + ' route length' + (n === 1 ? '' : 's') + ' taken from the plan — marked as inferred', '');
+        } },
+       { label: 'Cancel' }]);
+  }
+
+  function autoLenForAll(force) {
+    var n = 0;
+    S.panels.forEach(function (pn) {
+      if (!pn.cable) return;
+      if (force) {
+        pn.cable.len = LC.feederLen(S, pn);
+        pn.cable.lenSource = 'drawn';
+        n++;
+      } else if (autoLen(pn)) n++;
+    });
+    return n;
   }
 
   /* The earth fault columns for a schedule row: PE size, loop impedance, the
@@ -4113,18 +4218,9 @@
     };
     el('fileJson').onchange = function (e) {
       var f = e.target.files[0]; if (!f) return;
-      var r = new FileReader();
-      r.onload = function () {
-        try {
-          var p = JSON.parse(r.result);
-          S = LS.newProject(p); bootstrap(S);
-          PLAN.setProject(S); sel = null; syncToolbar(); afterLoad();
-          var extra = (S.underlay && S.underlay.kind) ? ' — site map: ' + S.underlay.name : '';
-          toast('Imported ' + (p.name || 'project') + extra, 'good');
-        } catch (err) { toast('Could not read that file: ' + err.message, 'bad'); }
-      };
-      r.readAsText(f);
-      e.target.value = '';
+      openProjectFile(f)
+        .catch(function (err) { toast('Could not read that file: ' + err.message, 'bad'); })
+        .then(function () { e.target.value = ''; });
     };
     document.addEventListener('keydown', function (e) {
       if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName)) return;
@@ -4187,6 +4283,7 @@
   function globalAction(a) {
     if (a === 'merge-run') return runMerge();
     if (a === 'merge-pick') return mergeState = null, renderTab();
+    if (a === 'autolen') return planLengths();
     if (a === 'bom-csv') return exportBom();
     if (a === 'bom-add') return bomAddModal();
     if (a === 'rev-take') { return revNoteModal(); }
@@ -4331,6 +4428,12 @@
 
   /* ------------------------------------------------------ public to plan.js */
   var App = {
+    /* openProject / openProjectFile are here so a project can be loaded from
+       outside the page — a test, a bookmarklet, or the console. The previous
+       version had neither, so there was no supported way to do it and every
+       caller that tried ended up a silent no-op. */
+    openProject: openProject,
+    openProjectFile: openProjectFile,
     sel: function () { return sel; },
     select: select,
     place: function (mode, x, y) {

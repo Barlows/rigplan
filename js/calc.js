@@ -4628,10 +4628,30 @@ function selectivityBand(s) {
     if (!parent || !parent.pos) return 0;
     return D.r1(Math.hypot(parent.pos.x - item.pos.x, parent.pos.y - item.pos.y) * 1.2 + 1);
   }
+  /* Keep a feeder length in step with the drawn position — but ONLY where the
+     length is not already known.
+
+     This ran on every panel at load, overwriting a stated route length with the
+     distance between two points on a schematic plan. That is not the same thing:
+     a layout drawing positions equipment for legibility, so the straight-line
+     distance between a board and a machine is close to meaningless as a route.
+     On a real project it quietly rewrote measured lengths and inflated the
+     bill of materials — 2,039 m of cable became 2,072 m, with no change to the
+     design and nothing to indicate where the extra metres came from.
+
+     So a length that has been stated wins. The drawn distance is a starting
+     point for a circuit nobody has measured yet, which is all it is good for,
+     and saying so is better than presenting it as a route. */
   function syncLen(p, item) {
-    if (!item || !item.cable) return;
+    if (!item || !item.cable) return false;
+    if (num(item.cable.len, 0) > 0) return false;
     var L = feederLen(p, item);
-    if (L > 0) item.cable.len = L;
+    if (!(L > 0)) return false;
+    item.cable.len = L;
+    /* Recorded as inferred rather than measured, so anything that reports route
+       lengths can tell the two apart. */
+    item.cable.lenSource = 'drawn';
+    return true;
   }
   /* What a feeder has to carry.
 

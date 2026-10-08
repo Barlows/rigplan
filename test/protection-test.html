@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=302"></script>
-<script src="../js/calc.js?v=302"></script>
+<script src="../js/data.js?v=307"></script>
+<script src="../js/calc.js?v=307"></script>
 <script>
 (function () {
   var results = [];
@@ -1840,6 +1840,53 @@
     len: 40, cores: 4, csa: 95, runs: 1 };
   check('a cable rebuilt with its keys in another order is still unchanged',
     LC.diffProjects(rA, reordered).total, 0);
+
+  /* ------------------------------------------------------- loading a project ---
+     Opening a file must not change the design. Two things used to do it silently:
+
+     - autoLen overwrote stated route lengths with the straight-line distance
+       between two points on a schematic plan, which is not a route
+     - the built-in sample was persisted on first run, so the next open treated
+       it as a saved project and offered it in place of anything real
+
+     The first is the dangerous one: overwriting a measured route is the most
+     destructive thing this app can do to a cable schedule, and it happened with
+     no indication. */
+  var lp = site({ kva: 2500 });
+  var lpA = load(lp.p, lp.pdp, 160, 0.85);
+  lpA.cable = { csa: 240, runs: 1, cores: 4, len: 85, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  var lpB = load(lp.p, lp.pdp, 100, 0.9);
+  lpB.cable = { csa: 95, runs: 1, cores: 4, len: 0, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  LC.applyNumbering(lp.p);
+
+  check('a stated route length is not overwritten by the drawn position',
+    (function () { LC.syncLen(lp.p, lpA); return lpA.cable.len; })(), 85);
+  check('and is not marked as inferred',
+    lpA.cable.lenSource === undefined, true);
+  check('a length that has never been stated is filled in',
+    (function () { LC.syncLen(lp.p, lpB); return lpB.cable.len > 0; })(), true);
+  check('and is marked as inferred, so it can be told from a measured one',
+    lpB.cable.lenSource, 'drawn');
+  /* Doing it twice must be idempotent, or a second open would move a length
+     that the first open had inferred. */
+  var once = lpB.cable.len;
+  LC.syncLen(lp.p, lpB);
+  check('and doing it again changes nothing',
+    lpB.cable.len, once);
+
+  /* Loading a project must not alter the bill. This is the assertion that
+     would have caught the autoLen overwrite, and it is written as a comparison
+     rather than a remembered number so it survives any change to the design. */
+  var before = LC.billOfMaterials(lp.p);
+  var beforeMeters = before.cableMeters;
+  var beforeLines = before.items.length;
+  /* what opening a project does */
+  lp.p.panels.forEach(function (pn) { LC.syncLen(lp.p, pn); });
+  LC.applyNumbering(lp.p);
+  var after = LC.billOfMaterials(lp.p);
+  check('opening a project leaves the cable quantities alone',
+    Math.round(after.cableMeters), Math.round(beforeMeters));
+  check('and leaves the bill the same length', after.items.length, beforeLines);
 
   /* ------------------------------------------------- demand and coincidence ---
      Two methods from connected load to supply load. They are alternatives, not
