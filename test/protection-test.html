@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=283"></script>
-<script src="../js/calc.js?v=283"></script>
+<script src="../js/data.js?v=289"></script>
+<script src="../js/calc.js?v=289"></script>
 <script>
 (function () {
   var results = [];
@@ -1547,6 +1547,92 @@
   var atSix = LC.clearingTimeAt(slowProt, 1.0);
   check('a curve C device at exactly its own rating is slow enough to matter',
     atSix !== null && atSix > 10, true);
+
+  /* ------------------------------------------------------ revision tracking ---
+     A revision records a diff, not a copy, and the diff must be keyed on the
+     reference rather than a generated id — an id is minted per session, so
+     diffing on one reports every object as removed and added. */
+  function pair() {
+    var p = P();
+    var tx = LS.newTx({ tag: 'TX1', kva: 2500, impZ: 6, pos: { x: 5, y: 30 } }); p.txs.push(tx);
+    var pdb = LS.newPdb({ tag: 'PDB1', txId: tx.id, incomerA: 2500, pos: { x: 10, y: 30 } }); p.pdbs.push(pdb);
+    var pdp = LS.newPdp({ tag: 'PDP1', pdbId: pdb.id, incomerA: 1000, ways: 36, pos: { x: 20, y: 30 } }); p.pdps.push(pdp);
+    [0, 1, 2].forEach(function (i) {
+      var pn = LS.newPanel({ tag: 'DB1-1-' + (i + 1), name: 'Pump ' + (i + 1), kw: 100, pf: 0.85,
+        phases: '3', volt: 400, pdpId: pdp.id, autoAssign: false });
+      pn.__kind = 'panel';
+      pn.cable = { csa: 95, runs: 1, cores: 4, len: 40, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+      p.panels.push(pn);
+    });
+    LC.applyNumbering(p);
+    return p;
+  }
+  var rA = pair(), rB = pair();
+
+  /* Two independent builds of the SAME design must diff to nothing at all.
+     This is the assertion that catches an id-keyed diff: with ids, it would
+     report every object as removed and added. */
+  check('two builds of the same design produce no diff',
+    LC.diffProjects(rA, rB).total, 0);
+
+  /* Now a real change. */
+  rB.panels[0].kw = 160;
+  var d1 = LC.diffProjects(rA, rB);
+  check('a circuit uprated is one change', d1.total, 1);
+  check('and it affects an issued schedule', d1.critical, 1);
+  check('on the circuit that changed',
+    d1.changes[0].key.indexOf('DB1-1-1') > 0, true);
+  check('naming the field and both values',
+    d1.changes[0].fields[0].field + ' ' + d1.changes[0].fields[0].from + ' ' + d1.changes[0].fields[0].to,
+    'kw 100 160');
+
+  /* A note and a move on the plan are cosmetic — they change the document but
+     not its validity. */
+  rB = pair();
+  rB.panels[1].notes = 'checked by RW';
+  rB.panels[1].pos = { x: 44, y: 30 };
+  var d2 = LC.diffProjects(rA, rB);
+  check('a note and a reposition are not critical', d2.critical, 0);
+  check('though they are still recorded', d2.total > 0, true);
+
+  /* A board's rating alters the board schedule, so it cannot be cosmetic. */
+  rB = pair();
+  rB.pdps[0].incomerA = 800;
+  var d3 = LC.diffProjects(rA, rB);
+  check('an incomer changed from 1000 A to 800 A affects the schedule', d3.critical, 1);
+
+  /* A cable diff must be legible. The first version emitted a JSON blob, in
+     which the one thing that had changed was invisible. */
+  rB = pair();
+  rB.panels[0].cable = { csa: 150, runs: 1, cores: 4, len: 40, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  var d4 = LC.diffProjects(rA, rB);
+  var cf = d4.changes[0].fields[0];
+  check('a cable change names the conductor size in words', /150 mm²/.test(cf.to), true);
+  check('and the one it was, not a JSON blob', /95 mm²/.test(cf.from), true);
+  check('and no raw JSON anywhere in it', /[{]/.test(String(cf.from) + String(cf.to)), false);
+
+  /* Added and removed. */
+  rB = pair();
+  var extra = LS.newPanel({ tag: 'DB1-1-4', name: 'Pump 4', kw: 75, pf: 0.85, phases: '3',
+    volt: 400, pdpId: rB.pdps[0].id, autoAssign: false });
+  extra.__kind = 'panel';
+  extra.cable = { csa: 35, runs: 1, cores: 4, len: 20, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  rB.panels.push(extra);
+  rB.panels.splice(2, 1);
+  LC.applyNumbering(rB);
+  var d5 = LC.diffProjects(rA, rB);
+  var kinds = d5.changes.map(function (c) { return c.kind; }).sort();
+  check('an added and a removed circuit are reported as such',
+    kinds.join(','), 'added,removed');
+
+  /* The snapshot is order-independent. Key order in an object is insertion
+     order, which is not the same after two different load paths — and "unchanged"
+     has to mean unchanged. */
+  var reordered = JSON.parse(JSON.stringify(rA));
+  reordered.panels[0].cable = { sheathed: true, ambient: 40, group: 2, method: 'XL-A1',
+    len: 40, cores: 4, csa: 95, runs: 1 };
+  check('a cable rebuilt with its keys in another order is still unchanged',
+    LC.diffProjects(rA, reordered).total, 0);
 
   /* ------------------------------------------------- demand and coincidence ---
      Two methods from connected load to supply load. They are alternatives, not

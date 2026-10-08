@@ -10,6 +10,14 @@
   var sort = { col: null, dir: 1 };
   var filter = { q: '', unassigned: false, noCable: false };
   var store = 'eload-sched-v1';
+  /* Revisions live under their own key so clearing the project does not silently
+     destroy the record of what was issued. */
+  var revStore = 'eload-sched-revisions-v1';
+  /* Enough history to be useful and small enough for localStorage. A revision
+     is the diff against the previous one plus the design's own totals, not the
+     whole project — so a hundred of them is a few hundred kilobytes, and the
+     cap is never reached by accident. */
+  var REV_MAX = 100;
   /* Whether the audit folds repeated findings together. On by default, because
      a list where the same finding appears once per affected circuit cannot be
      read — on the real project 36 of 59 rows were the same note about large
@@ -244,6 +252,115 @@
       setTimeout(function () { toast('The site photo was too large to save with the project — re-drop the image to use it again.', ''); }, 600);
     }
   }
+  /* ======================================================== revision tracking
+     Undo is 25 levels of in-session editing that vanishes when the tab closes.
+     A revision is the opposite: deliberately kept, labelled, and meant to
+     outlive the session — because the question asked later is not "what is the
+     current design" but "what did we issue, and what has changed since".
+
+     A revision records the *diff* against the previous one, not a copy of the
+     project. A list of timestamps tells a reader nothing; a list of changes does.
+     What is kept per revision:
+
+       - the label and the date
+       - the diff, so any two revisions can be compared with the same engine
+       - the site's own totals at that point, because a schedule is also a
+         capacity statement and "it went from 1,932 to 2,410 kVA" is the kind of
+         change that gets an engineer called
+
+     The oldest revisions are dropped past REV_MAX rather than refusing to record
+     a new one. Losing the oldest history is better than losing today's design,
+     and the cap is stated where it bites so nobody assumes otherwise. */
+  function revisions() {
+    try { return JSON.parse(localStorage.getItem(revStore) || '[]'); }
+    catch (e) { return []; }
+  }
+  function saveRevisions(list) {
+    try {
+      localStorage.setItem(revStore, JSON.stringify(list));
+      return true;
+    } catch (e) {
+      /* Out of quota. Drop the oldest quarter and try once more rather than
+         losing the revision just taken — the new one is the one that matters,
+         and the note below says what happened. */
+      try {
+        var trimmed = list.slice(Math.floor(list.length / 4));
+        localStorage.setItem(revStore, JSON.stringify(trimmed));
+        return 'trimmed';
+      } catch (e2) { return false; }
+    }
+  }
+  /* The label a revision is issued under. Sequential from whatever is already
+     there, so importing an older project continues its numbering rather than
+     restarting at A and colliding. */
+  function nextRevLetter(list) {
+    var letters = list.map(function (r) { return String(r.label || '').toUpperCase().charAt(0); })
+      .filter(function (c) { return c >= 'A' && c <= 'Z'; });
+    if (!letters.length) return 'A';
+    /* Take the next free letter after the highest in use. Gaps are filled first
+       only if nothing has been issued at all, because a gap usually means a
+       revision was abandoned and reusing its letter would be confusing. */
+    var highest = letters.reduce(function (a, b) { return b > a ? b : a; }, '@');
+    var next = String.fromCharCode(highest.charCodeAt(0) + 1);
+    return next <= 'Z' ? next : 'A' + (letters.length + 1);
+  }
+  function totalsFor(p) {
+    /* LC., because totals() is the engine's and not this file's — the four other
+       call sites in here all qualify it. */
+    var t = LC.totals(p);
+    return {
+      kwConnected: Math.round(t.kw), kwDiversified: Math.round(t.kwDiv),
+      kva: Math.round(t.kva), kvar: Math.round(t.kvar), pf: Number(t.pf.toFixed(3)),
+      circuits: (p.panels || []).length,
+      findings: LC.groupFindings(LC.audit(p)).length
+    };
+  }
+  /* Take a revision. `note` is free text — what changed and why, in the words of
+     whoever knows, because "circuit resized" is not an audit trail. */
+  function takeRevision(note) {
+    var list = revisions();
+    var before = list.length ? list[list.length - 1].snapshot : null;
+    var d = before ? LC.diffProjects(before, S) : { changes: [], critical: 0, total: 0 };
+    var label = nextRevLetter(list);
+    var rev = {
+      label: label,
+      at: new Date().toISOString(),
+      note: note || '',
+      diff: d.changes,
+      critical: d.critical,
+      total: d.total,
+      totals: totalsFor(S),
+      /* The snapshot is the project as it stands, kept so any two revisions can
+         be compared later. It is the only place the whole design is duplicated,
+         which is why the cap exists. */
+      snapshot: JSON.parse(JSON.stringify(serialise()))
+    };
+    list.push(rev);
+    if (list.length > REV_MAX) list = list.slice(list.length - REV_MAX);
+    var res = saveRevisions(list);
+    renderRevisions();
+    if (res === 'trimmed') {
+      toast('Revision ' + label + ' recorded. History is full, so the oldest quarter was dropped.', '');
+    } else if (res === false) {
+      toast('Revision ' + label + ' could not be stored — browser storage is full.', 'bad');
+    } else {
+      toast(d.total
+        ? 'Revision ' + label + ' — ' + d.total + ' change' + (d.total === 1 ? '' : 's') +
+          (d.critical ? ', ' + d.critical + ' affecting the schedule' : '')
+        : 'Revision ' + label + ' recorded, no change from the previous one', 'good');
+    }
+    return rev;
+  }
+  /* Compare any two revisions with the same engine used to build them, so the
+     answer cannot differ from the history. */
+  function compareRevisions(aLabel, bLabel) {
+    var list = revisions();
+    var a = list.filter(function (r) { return r.label === aLabel; })[0];
+    var b = list.filter(function (r) { return r.label === bLabel; })[0];
+    if (!a || !b || !a.snapshot || !b.snapshot) return null;
+    return LC.diffProjects(a.snapshot, b.snapshot);
+  }
+
   function save() {
     try {
       localStorage.setItem(store, JSON.stringify(serialise()));
@@ -1248,6 +1365,7 @@
     else if (tab === 'sld') { host.innerHTML = viewSld(); wireSld(); wireSldSelect(); }
     else if (tab === 'audit') host.innerHTML = viewAudit();
     else if (tab === 'map') { host.innerHTML = viewMap(); wireMapPanel(); }
+    else if (tab === 'revisions') { host.innerHTML = viewRevisions(); wireRevisions(); }
     else host.innerHTML = viewNotes();
     if (tab === 'loads') wireLoadsTable();
   }
@@ -1595,6 +1713,145 @@
     return h;
   }
   function btn2(a, label) { return '<button class="btn sm" data-global="' + a + '">' + label + '</button>'; }
+
+  /* =========================================================== revisions tab ---
+     The history is read, not written, from here. Taking a revision is a
+     deliberate act with a label and a reason, and the tab's job is to make the
+     history legible and to let any two revisions be compared. */
+  function viewRevisions() {
+    var list = revisions();
+    var h = '<div class="btn-row"><button class="btn" data-global="rev-take">Take a revision</button>' +
+      '<button class="btn" data-global="rev-export">Export history</button>' +
+      '<span style="margin-left:auto;font-size:10px;color:var(--fg-mute)">' +
+      list.length + ' of ' + REV_MAX + ' kept</span></div>';
+
+    if (!list.length) {
+      return h + '<div class="fieldset"><h4>No revisions yet</h4>' +
+        '<div class="hint">A revision records what changed since the last one, together with the ' +
+        'site totals at that point. It is not taken automatically: a revision number is a claim about ' +
+        'the document\u2019s status, and only the engineer can make that claim. Undo is the opposite — ' +
+        'twenty-five levels of in-session editing that disappear when the tab closes. ' +
+        'Take one when a design goes out, or when it comes back with comments.</div></div>';
+    }
+
+    /* Newest first, because the question being asked is always "what changed
+       most recently". */
+    var rows = list.slice().reverse().map(function (r) {
+      var d = new Date(r.at);
+      return '<tr>' +
+        '<td class="c" style="text-align:center"><b>' + esc(r.label) + '</b></td>' +
+        '<td class="c" style="white-space:nowrap">' + d.toLocaleDateString() + ' ' +
+          String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') + '</td>' +
+        '<td>' + (r.critical
+          ? '<span style="color:var(--bad)">' + r.critical + ' affecting the schedule</span>'
+          : (r.total ? r.total + ' cosmetic' : 'no change')) + '</td>' +
+        '<td class="n">' + r.totals.kva + '</td>' +
+        '<td class="n">' + r.totals.kvar + '</td>' +
+        '<td class="n">' + r.totals.circuits + '</td>' +
+        '<td>' + (r.note ? esc(r.note) : '<span style="color:var(--fg-mute)">no note</span>') + '</td>' +
+        '</tr>';
+    }).join('');
+
+    h += '<table class="tbl"><thead><tr>' +
+      '<th>Rev</th><th>When</th><th>Changes</th><th class="c">kVA</th>' +
+      '<th class="c">kvar</th><th class="c">Circuits</th><th>Note</th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table>';
+
+    /* The most recent change set in full, because "4 changes affecting the
+       schedule" is not an answer to "what changed". */
+    var last = list[list.length - 1];
+    if (last && last.diff && last.diff.length) {
+      h += '<div class="fieldset"><h4>What changed in rev ' + esc(last.label) + '</h4>' +
+        changeList(last.diff) +
+        '<div class="hint">A change marked <b>affecting the schedule</b> would have invalidated a ' +
+        'drawing, a cable schedule or an approval already issued. The others are cosmetic.</div></div>';
+    }
+
+    /* Any two revisions, compared. The engine is the one that built the history,
+       so the comparison cannot disagree with it. */
+    var opts = list.map(function (r) { return r.label; });
+    h += '<div class="fieldset"><h4>Compare two revisions</h4>' +
+      '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">' +
+      '<span><label class="lbl">From</label><select class="sel" id="revFrom">' +
+        opts.map(function (l, i) { return '<option value="' + l + '"' + (i === opts.length - 2 ? ' selected' : '') + '>' + l + '</option>'; }).join('') +
+        '</select></span>' +
+      '<span><label class="lbl">To</label><select class="sel" id="revTo">' +
+        opts.map(function (l) { return '<option value="' + l + '"' + (l === opts[opts.length - 1] ? ' selected' : '') + '>' + l + '</option>'; }).join('') +
+        '</select></span>' +
+      '<button class="btn" id="revCompare">Compare</button></div>' +
+      '<div id="revDiff"></div></div>';
+
+    return h;
+  }
+
+  /* One change, in a sentence a reader can act on. */
+  function changeList(changes) {
+    if (!changes || !changes.length) return '<div class="hint">Nothing changed.</div>';
+    return '<div style="font-size:11px;line-height:1.6">' + changes.map(function (c) {
+      var tag = c.key.split(':')[0];
+      var label = tag === 'pn' ? 'Circuit' : tag === 'pdb' ? 'Main board' :
+                  tag === 'pdp' ? 'Board' : tag === 'db' ? 'Sub-board' : 'Transformer';
+      /* The key already carries the reference, which is the one thing that is
+         stable across a re-created or re-imported project. Preferring a stored
+         tag over it would reintroduce exactly the instability the key avoids. */
+      var keyRef = c.key.indexOf(':') >= 0 ? c.key.split(':').slice(1).join(':') : c.key;
+      var name = (keyRef && keyRef.indexOf('_:') !== 0 ? keyRef : null) ||
+                 (c.after && (c.after.tag || c.after.name)) ||
+                 (c.before && (c.before.tag || c.before.name)) || 'unreferenced';
+      var mark = c.critical
+        ? '<span style="color:var(--bad);font-weight:700">affecting the schedule</span>'
+        : '<span style="color:var(--fg-mute)">cosmetic</span>';
+      if (c.kind === 'added') {
+        return '<div style="padding:3px 0;border-bottom:1px solid var(--line)">' + mark +
+          ' &nbsp;<b>Added</b> ' + label + ' ' + esc(name) + '</div>';
+      }
+      if (c.kind === 'removed') {
+        return '<div style="padding:3px 0;border-bottom:1px solid var(--line)">' + mark +
+          ' &nbsp;<b>Removed</b> ' + label + ' ' + esc(name) + '</div>';
+      }
+      var fields = c.fields.map(function (f) {
+        return '<code>' + esc(f.field) + '</code> ' + fmtRev(f.from) + ' &rarr; ' + fmtRev(f.to);
+      }).join('<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;');
+      return '<div style="padding:3px 0;border-bottom:1px solid var(--line)">' + mark +
+        ' &nbsp;<b>' + label + ' ' + esc(name) + '</b><br>' + fields + '</div>';
+    }).join('') + '</div>';
+  }
+  /* Values shown the way they are stored, not prettified into something that
+     looks like a different number. */
+  function fmtRev(v) {
+    if (v === null || v === undefined) return '<i>blank</i>';
+    if (v === '') return '<i>blank</i>';
+    var s = String(v);
+    if (s.length > 90) return '<code>' + esc(s.slice(0, 90)) + '…</code>';
+    return '<code>' + esc(s) + '</code>';
+  }
+  function wireRevisions() {
+    var b = el('revCompare');
+    if (b) b.onclick = function () {
+      var f = el('revFrom'), t = el('revTo');
+      var d = compareRevisions(f.value, t.value);
+      var out = el('revDiff');
+      if (!d) { out.innerHTML = '<div class="hint">Either revision is missing its stored design.</div>'; return; }
+      out.innerHTML = '<div style="margin-top:8px;font-size:11px;color:var(--fg-dim)">' +
+        d.total + ' change' + (d.total === 1 ? '' : 's') + ', ' + d.critical + ' affecting the schedule.</div>' +
+        changeList(d.changes);
+    };
+  }
+  function renderRevisions() { if (tab === 'revisions') renderTab(); }
+  /* The history on its own, so it can go to whoever asked for it without the
+     whole project file. */
+  function exportRevisions() {
+    var list = revisions();
+    if (!list.length) { toast('No revisions recorded yet', ''); return; }
+    /* Snapshots are dropped: the diffs are the record, and a history file the
+       size of the project defeats the purpose of exporting it. */
+    download((S.name || 'project').replace(/[^\w\-]+/g, '_') + '-revisions.json',
+      JSON.stringify(list.map(function (r) {
+        return { label: r.label, at: r.at, note: r.note, critical: r.critical,
+                 total: r.total, totals: r.totals, diff: r.diff };
+      }), null, 2), 'application/json');
+    toast('Revision history exported', 'good');
+  }
 
   function viewNotes() {
     return '<div class="notes-wrap">' +
@@ -2475,6 +2732,39 @@
   }
   function closeModal() { el('modal').hidden = true; }
   /* site extent and the rules used when a new board has to be placed */
+  /* The note is not optional decoration. A revision labelled only "rev B" is a
+     timestamp; the reason it was issued is the audit trail, and it has to be
+     written while whoever is doing it still knows. */
+  function revNoteModal() {
+    var list = revisions();
+    var label = nextRevLetter(list);
+    var before = list.length ? list[list.length - 1].snapshot : null;
+    var d = before ? LC.diffProjects(before, S) : null;
+    var preview = d
+      ? (d.total
+        ? '<b>' + d.total + ' change' + (d.total === 1 ? '' : 's') + '</b> since rev ' +
+          esc(list[list.length - 1].label) + ', of which <b>' + d.critical +
+          '</b> would affect an issued schedule'
+        : 'No change since rev ' + esc(list[list.length - 1].label))
+      : 'The first revision — this records the design as it stands';
+    modal('Take revision ' + label,
+      '<div style="max-width:600px">' +
+      '<div class="hint" style="margin-bottom:10px">' + preview + '.</div>' +
+      fRow('What changed and why', '<textarea class="ta" id="revNote" rows="3" ' +
+        'placeholder="e.g. comments back from the client; pump 501 uprated, cable increased to 95 mm²"></textarea>') +
+      fRow('Issued to', '<input class="inp" id="revToWhom" placeholder="e.g. Roeslein Ltd — for construction">') +
+      '</div>' +
+      '<div class="hint" style="margin-top:10px">Write it while you know it. A revision number with no ' +
+      'reason behind it is a timestamp, and the reason is the part that is worth keeping.</div>',
+      [{ label: 'Record rev ' + label, cls: 'primary', fn: function () {
+          var note = (el('revNote').value || '').trim();
+          var whom = (el('revToWhom').value || '').trim();
+          takeRevision(note ? (whom ? note + ' — issued to ' + whom : note) : ('Issued to ' + whom || ''));
+          tab = 'revisions'; renderTab();
+        } },
+       { label: 'Cancel' }]);
+  }
+
   function siteModal() {
     modal('Site and board placement',
       '<div class="two" style="max-width:560px">' +
@@ -3607,6 +3897,8 @@
     if (changed) saveTree();
   }
   function globalAction(a) {
+    if (a === 'rev-take') { return revNoteModal(); }
+    if (a === 'rev-export') return exportRevisions();
     if (a === 'csv') return exportCsv();
     if (a === 'xlsx') return exportXlsx();
     if (a === 'print') return printReport();

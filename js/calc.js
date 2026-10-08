@@ -2485,6 +2485,200 @@ function clearingTimeAt(prot, multiple) {
     };
   }
 
+/* ======================================================== revision tracking ===
+     A load schedule is a controlled document. Somebody approves it, it goes out
+     for construction, and then it changes — and the question that gets asked
+     later is not "what is the current design" but "what did we actually issue,
+     and what has changed since".
+
+     Undo is not an answer to that. Undo is 25 levels of in-session editing, it
+     vanishes when the tab closes, and it has no notion of an issue. A revision
+     history is the opposite: deliberately kept, labelled, and meant to outlive
+     the session.
+
+     What is recorded is not a blob but a **diff**, because a list of timestamps
+     tells you nothing and a list of changes does. The three things that matter on
+     a load schedule are:
+
+       - a circuit added, removed or resized
+       - a protection device changed
+       - a board's rating or cable changed
+
+     Those are the edits that invalidate a drawing, a cable schedule or an
+     approval. Renaming a circuit or moving one on the plan is recorded but
+     marked as not affecting the schedule, so a reader can filter to the changes
+     that would actually have required a reissue.
+
+     Nothing is recorded automatically on every keystroke. A revision is
+     something somebody says happened — "rev C, wiring coordinator's comments" —
+     because a revision number is a claim about the document's status and only
+     the engineer can make that claim. */
+  var REVISION_FIELDS = {
+    /* The fields whose change would invalidate something already issued. Board
+       rating, busbar and cable are here as well as the circuit's own: an
+       incomer changed from 1000 A to 800 A alters the board schedule and every
+       drawing that shows it, so it cannot be filed as cosmetic. A circuit's
+       parent is included too — moving it between boards is a different circuit
+       as far as the contractor is concerned — though the stored value is an id,
+       which diffProjects replaces with the board's reference before comparing. */
+    critical: ['kw', 'kva', 'phases', 'volt', 'demand', 'pf', 'harmonicType',
+      'cable', 'prot', 'neutral', 'peInCable', 'fedFrom', 'onTx', 'onPdb', 'onPdp',
+      'incomerA', 'busbarA', 'impZ', 'vectorGroup', 'kvOut', 'ways', 'enclosure',
+      'capacitors'],
+    /* the fields that change the document but not its validity */
+    cosmetic: ['name', 'notes', 'type', 'thd', 'triplen', 'imbalance',
+      'loadTorque', 'start', 'motorClass', 'isMotor', 'pos']
+  };
+
+  function snapshotForDiff(p) {
+    /* A flat map of every electrically meaningful thing, keyed so a diff is a
+       plain key comparison. Built fresh rather than diffing two JSON trees,
+       because the question is never "what does the JSON look like" — it is
+       "what has the designer's answer changed from". */
+    /* Keyed on the REFERENCE, not the id.
+
+       This is the whole basis of a revision history and getting it wrong is
+       silently catastrophic. Ids are generated per session: a project exported
+       and re-imported keeps them, but a project re-created, merged or imported
+       from a vendor's file does not. Diffing on ids then reports every object as
+       removed and added, which is both unreadable and uniformly critical, since
+       a removal always is. That is exactly what the first version did.
+
+       The reference is the stable identity. It is what appears on the drawing
+       and what the contractor quotes, so it is the right key and the right thing
+       to name in the history.
+
+       A circuit whose reference is blank cannot be keyed by it, so those fall
+       back to the id and are marked — a blank reference is itself worth knowing
+       about, and a revision history that silently conflated them would be worse
+       than one that says so. */
+    var out = {};
+    function key(o, kind, tag, num) {
+      var ref = (tag || '').trim();
+      if (!ref) return kind + ':_:' + o.id;
+      return kind + ':' + ref;
+    }
+    (p.txs || []).forEach(function (o) { out[key(o, 'tx', o.tag, o.num)] = pick(o, ['tag', 'num', 'kva', 'impZ', 'kvIn', 'kvOut', 'vectorGroup', 'phases']); });
+    (p.pdbs || []).forEach(function (o) { out[key(o, 'pdb', o.tag, o.num)] = pick(o, ['tag', 'num', 'incomerA', 'busbarA', 'phases', 'cable', 'prot', 'capacitors']);
+    out[key(o, 'pdb', o.tag, o.num)].onTx = o.txId ? (get(p, 'tx', o.txId) || {}).tag : ''; });
+    (p.pdps || []).forEach(function (o) { out[key(o, 'pdp', o.tag, o.num)] = pick(o, ['tag', 'num', 'incomerA', 'busbarA', 'ways', 'cable', 'prot']);
+    out[key(o, 'pdp', o.tag, o.num)].onPdb = o.pdbId ? (get(p, 'pdb', o.pdbId) || {}).tag : ''; });
+    (p.dbs || []).forEach(function (o) { out[key(o, 'db', o.tag, o.num)] = pick(o, ['tag', 'num', 'incomerA', 'ways', 'cable', 'prot', 'enclosure']);
+    out[key(o, 'db', o.tag, o.num)].onPdp = o.pdpId ? (get(p, 'pdp', o.pdpId) || {}).tag : ''; });
+    (p.panels || []).forEach(function (o) {
+      out[key(o, 'pn', o.tag, o.num)] = pick(o, ['name', 'type'].concat(REVISION_FIELDS.critical, REVISION_FIELDS.cosmetic));
+    /* pdpId/pdbId are ids, and ids are not comparable across a re-created
+       project — they changed for every circuit in this diff even though
+       none of them moved. The board's REFERENCE is the identity that matters,
+       and fedFrom below already resolves it. */
+    delete out[key(o, 'pn', o.tag, o.num)].pdpId;
+    delete out[key(o, 'pn', o.tag, o.num)].pdbId;
+    delete out[key(o, 'pn', o.tag, o.num)].dbId;
+    });
+    /* Where a circuit hangs is part of its identity on the schedule: the same
+       reference on a different board is a different circuit as far as the
+       contractor is concerned, and a move is a change worth recording. */
+    Object.keys(out).forEach(function (k) {
+      if (k.slice(0, 3) !== 'pn:') return;
+    });
+    (p.panels || []).forEach(function (o) {
+      var k = key(o, 'pn', o.tag, o.num);
+      if (!out[k]) return;
+      out[k].fedFrom = o.pdpId ? (get(p, 'pdp', o.pdpId) || {}).tag
+        : (o.pdbId ? (get(p, 'pdb', o.pdbId) || {}).tag : '');
+    });
+    return out;
+  }
+  function pick(o, fields) {
+    var r = {};
+    fields.forEach(function (f) {
+      var v = o[f];
+      if (v === null || v === undefined) { r[f] = null; return; }
+      /* A cable is compared field by field rather than as a JSON blob, because
+         the blob is what a diff must never show a reader: a changed conductor
+         appears as "cable: {...forty characters of JSON...} -> {...}" and the one
+         thing that changed is invisible in it. */
+      /* Compact but labelled, so a reader sees what changed rather than having
+         to remember which position held the conductor size. */
+      if (f === 'cable') {
+        r['cable'] = num(v.csa, 0) + ' mm²' + (num(v.runs, 1) > 1 ? ' × ' + num(v.runs, 1) : '') +
+          ', ' + num(v.cores, 0) + ' core, ' + num(v.len, 0) + ' m, ' + (v.method || '') +
+          ', group ' + num(v.group, 1) + ', ' + num(v.ambient, 0) + ' °C';
+        return;
+      }
+      if (f === 'prot') {
+        r['prot'] = (v.kind === 'mcb' ? 'MCB' : 'MCCB') + ' ' + num(v.ir, 0) + ' A' +
+          (num(v.frame, 0) ? ' / ' + num(v.frame, 0) + ' A frame' : '') +
+          (num(v.icu, 0) ? ', ' + num(v.icu, 0) + ' kA' : '') +
+          (v.trip ? ', ' + v.trip : '') +
+          (num(v.poles, 0) ? ', ' + num(v.poles, 0) + ' pole' : '');
+        return;
+      }
+      if (f === 'pos') {
+        r['pos'] = num(v.x, 0).toFixed(1) + ' , ' + num(v.y, 0).toFixed(1);
+        return;
+      }
+      if (f === 'capacitors') {
+        r['capacitors'] = (v || []).map(function (c) {
+          return num(c.kvar, 0) + ' kvar at ' + num(c.detune, 0) + '% detuning';
+        }).join(', ') || 'none';
+        return;
+      }
+      /* Nested objects are compared by value, so two identical things are equal
+         rather than merely structurally similar. JSON with sorted keys gives a
+         canonical string for that. */
+      r[f] = (typeof v === 'object') ? stable(v) : v;
+    });
+    return r;
+  }
+  /* Key order in an object is insertion order, which is stable for the same
+     construction path but not across two loads of the same data. Sorting the keys
+     is what makes "unchanged" mean unchanged. */
+  function stable(v) {
+    if (v === null || typeof v !== 'object') return v;
+    if (Array.isArray(v)) return v.map(stable);
+    var k = Object.keys(v).sort(), o = {};
+    k.forEach(function (x) { o[x] = stable(v[x]); });
+    return JSON.stringify(o);
+  }
+
+  /* The diff itself. Each entry says what changed and whether it would have
+     required the drawing or the schedule to be reissued — which is the only
+     reason to record the distinction. */
+  function diffProjects(pBefore, pAfter) {
+    var a = snapshotForDiff(pBefore), b = snapshotForDiff(pAfter);
+    var changes = [];
+    Object.keys(b).forEach(function (k) {
+      var before = a[k], after = b[k];
+      if (before === undefined) {
+        changes.push({ kind: 'added', key: k, after: after, critical: true });
+        return;
+      }
+      if (before === null) return;
+      var fields = [];
+      Object.keys(after).forEach(function (f) {
+        if (JSON.stringify(before[f]) !== JSON.stringify(after[f])) {
+          fields.push({ field: f, from: before[f], to: after[f] });
+        }
+      });
+      if (!fields.length) return;
+      /* A change is critical if any field it touches is. The position of a
+         circuit on the plan is not; its rating is. */
+      var critical = fields.some(function (f) {
+        return REVISION_FIELDS.critical.indexOf(f.field) >= 0;
+      });
+      changes.push({ kind: 'changed', key: k, fields: fields, critical: critical });
+    });
+    Object.keys(a).forEach(function (k) {
+      if (b[k] === undefined) changes.push({ kind: 'removed', key: k, before: a[k], critical: true });
+    });
+    return {
+      changes: changes,
+      critical: changes.filter(function (c) { return c.critical; }).length,
+      total: changes.length
+    };
+  }
+
 /* ======================================================== demand coincidence ==
      There are two ways to get from connected load to the load a supply actually
      carries, and they are alternatives rather than layers.
@@ -4413,6 +4607,7 @@ function selectivityBand(s) {
     clearingTimeAt, selectivity, selectivityMessage, selectivityBand, selectivityLadder, reactive,
     arcTimeAt, arcDistanceFactor, arcAssessment,
     COINCIDENCE_BANDS, demandMethods, boardDemandKva,
+    REVISION_FIELDS, snapshotForDiff, diffProjects, stable,
     voltageProfile, voltageProfileWorst, loadBelow, panelsBelow,
     pfCorrection, capResonance, impedanceBase, puImpedance, pathImpedance, faultLevel,
     earthLoop, disconnectionMultipleAt, earthFaultCheck, neutralCurrent, neutralCsaFor,

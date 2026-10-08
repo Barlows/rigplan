@@ -758,6 +758,50 @@ that is what fails capacitors.
 The 7% reactor costs about 7% of output and is normally in the bank price rather
 than an accessory.
 
+### Revision tracking
+
+A load schedule is a controlled document. The question asked later is not "what
+is the current design" but **"what did we issue, and what has changed since"** —
+which undo cannot answer. Undo is 25 levels of in-session editing that vanish
+when the tab closes.
+
+A revision records the **diff** against the previous one, not a copy:
+
+- the letter and date
+- what changed, field by field, with the old and new values
+- whether each change **affects the schedule** — which is what decides whether a
+  drawing, a cable schedule or an approval already issued is now invalid
+- the site's totals at that point, because a schedule is also a capacity
+  statement and "it went from 1,932 to 2,410 kVA" is the kind of change that gets
+  an engineer called
+
+Nothing is recorded automatically. A revision number is a claim about a
+document's status and only the engineer can make that claim, so taking one
+prompts for the reason and who it was issued to.
+
+**Keyed on the reference, not the id.** This is the whole basis of a revision
+history and getting it wrong is silently catastrophic. Ids are generated per
+session — an export/re-import keeps them, but a re-created, merged or
+vendor-imported project does not. Diffing on ids reported every object as removed
+*and* added: 12 changes instead of 5, all critical, because a removal always is,
+and unreadable. The reference is the stable identity, and it is what appears on
+the drawing.
+
+Three more things that had to be right:
+
+- **A board's rating is critical, not cosmetic.** An incomer changed from 1000 A
+  to 800 A alters the board schedule and every drawing showing it.
+- **A cable diff must be legible.** The first version emitted a JSON blob, in
+  which the one thing that had changed — the conductor size — was invisible. It
+  now reads *"95 mm², 4 core, 40 m, XL-A1"* → *"150 mm², …"*.
+- **Key order must not matter.** A cable rebuilt with its keys in another order
+  has to read as unchanged, which is why nested values are compared through a
+  canonical string with sorted keys.
+
+Revisions are capped at 100 and the oldest are dropped when it is reached —
+losing old history is better than losing today's design — and the export omits
+the snapshots so the history file is not the size of the project.
+
 ### Demand and coincidence
 
 Two ways to get from connected load to the load a supply carries, and they are
@@ -1176,7 +1220,7 @@ test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        36 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
-test/protection-test.html 450 checks on fault levels, device proposals, cable
+test/protection-test.html 463 checks on fault levels, device proposals, cable
                           thermal withstand, selectivity from trip curves, earth
                           fault looping, the neutral conductor on 3P+N feeders,
                           the earthing arrangement, reactive power, harmonics,
