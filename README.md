@@ -955,7 +955,11 @@ changes the supply topology and should be a deliberate act.
 
 ## What is calculated
 
-- **Load** — design kVA = connected kW ÷ power factor × demand factor. Current from
+- **Load** — design kVA = connected kW ÷ power factor × demand factor. Connected
+  and diversified kW are both reported, because a power factor is only meaningful
+  against the kW that shares its basis: on the real project 9,525 kW connected
+  against 4,172 kVA diversified reads as pf 2.28, and every kvar figure derived
+  from that pairing is nonsense. Current from
   kVA at the board voltage: `I = S / (√3 · V)` three-phase, `S / V` single-phase.
   The power factor is **not** in that expression — it has already been applied to
   get to kVA. It was, once, and every three-phase current in the app came out

@@ -3209,7 +3209,16 @@ function selectivityBand(s) {
 
   /* ------------------------------------------------------------- totals    */
   function totals(p) {
+    /* Connected kW and diversified kVA are different quantities, and adding them
+       to each other produces a power factor above 1 — which is not a power factor
+       at all. On the real project, 9,525 kW connected against 4,172 kVA
+       diversified reads as pf 2.28, and every kvar figure derived from it is
+       nonsense.
+
+       Both are reported, on their own basis, and the power factor is taken from
+       the pair that belong together. */
     var kw = 0, kva = 0, amp = 0, panels = 0;
+    var kwDiv = 0;
     var phases = { L1: 0, L2: 0, L3: 0 };
     p.panels.forEach(function (pn) {
       /* placed means it is fed from something — a distribution board, a
@@ -3217,12 +3226,31 @@ function selectivityBand(s) {
       if (!pn.pdpId && !pn.pdbId) return;
       var d = panelDemand(p, pn);
       kw += d.kw; kva += d.kva; amp += d.amp; panels++;
+      /* the same kW on the same diversified basis as the kVA it is compared with */
+      kwDiv += d.kw * (d.demand === undefined || d.demand === null ? 1 : d.demand);
       var ph = phaseSplit(pn.phases, phases, d.kva);
       phases.L1 += ph.L1; phases.L2 += ph.L2; phases.L3 += ph.L3;
     });
+    /* Where the demand factor is 1 throughout, kwDiv equals kw and the two
+       figures agree — which is the sample project's case, and the ordinary one
+       on a small installation. */
+    var diverse = kwDiv < kw * 0.999;
+    var kwForPf = diverse ? kwDiv : kw;
+    var pf = kva > 0 ? kwForPf / kva : 1;
+    var kvar = Math.sqrt(Math.max(0, kva * kva - kwForPf * kwForPf));
     var txKva = p.txs.reduce(function (a, t) { return a + D.num(t.kva, 0); }, 0);
     return {
-      kw: kw, kva: kva, amp: amp, panels: panels, txKva: txKva,
+      /* connected kW — the number on the nameplate sum */
+      kw: kw,
+      /* the same kW diversified, for comparison with the kVA below */
+      kwDiv: kwDiv,
+      /* design kVA — already diversified, and what the transformers are loaded against */
+      kva: kva, amp: amp, panels: panels, txKva: txKva,
+      /* whether those two kW figures differ, so a reader is never left guessing
+         which basis a power factor was taken on */
+      diversified: diverse,
+      pf: Math.min(1, Math.max(0, pf)),
+      kvar: kvar,
       txUtil: txKva ? (kva / txKva) * 100 : 0,
       unassigned: p.panels.filter(function (x) { return !x.pdpId && !x.pdbId; }).length,
       phases: phases,

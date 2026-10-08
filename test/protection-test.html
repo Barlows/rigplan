@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=213"></script>
-<script src="../js/calc.js?v=213"></script>
+<script src="../js/data.js?v=217"></script>
+<script src="../js/calc.js?v=217"></script>
 <script>
 (function () {
   var results = [];
@@ -1300,6 +1300,38 @@
   var namedMid = /about ([0-9.]+) mm/.exec(advMid);
   check('which is at least the minimum for that phase core',
     namedMid ? parseFloat(namedMid[1]) >= LS.peMinCsa(35) : false, true);
+
+  /* ------------------------------------------------- totals on one basis ---
+     Connected kW and diversified kVA are different quantities. Added together
+     they gave a power factor above 1 — on the real project, 9,525 kW against
+     4,172 kVA read as pf 2.28, and every kvar figure derived from it was
+     nonsense. A clamp had been hiding it by printing 1.00. */
+  var tt = site({ kva: 1000 });
+  for (var ti = 0; ti < 4; ti++) load(tt.p, tt.pdp, 100, 0.8, { demand: 1 });
+  var t1 = LC.totals(tt.p);
+  check('with no demand factors the two bases agree', t1.diversified, false);
+  check('so the power factor is the simple ratio', Math.round(t1.pf * 100) / 100, 0.8);
+  check('and the kvar follows from it — 400 kW at 0.8 pf is 300 kvar', Math.round(t1.kvar), 300);
+
+  var td = site({ kva: 1000 });
+  for (var di = 0; di < 4; di++) load(td.p, td.pdp, 100, 0.8, { demand: 0.5 });
+  var t2 = LC.totals(td.p);
+  check('with a demand factor they differ', t2.diversified, true);
+  check('connected kW is reported undiversified', t2.kw, 400);
+  check('and the diversified figure separately', t2.kwDiv, 200);
+  check('the design kVA is the diversified one', Math.round(t2.kva), 250);
+  /* The point of the fix: the kW it is compared with shares its basis. */
+  check('and the power factor is 0.80, not 1.6', Math.round(t2.pf * 100) / 100, 0.8);
+  check('never above 1 however the two are mixed',
+    LC.totals(td.p).pf <= 1, true);
+  check('the kvar is that of the diversified load — 200 kW at 0.8 pf is 150 kvar', Math.round(t2.kvar), 150);
+  /* A mixed project — some circuits with demand, some without — still works. */
+  var tm = site({ kva: 1000 });
+  load(tm.p, tm.pdp, 100, 0.9, { demand: 1 });
+  load(tm.p, tm.pdp, 100, 0.9, { demand: 0.4 });
+  var t3 = LC.totals(tm.p);
+  check('a mixed project gives a power factor within range', t3.pf > 0.85 && t3.pf < 1, true);
+  check('and a positive kvar', t3.kvar > 0, true);
 
   /* ------------------------------------------------------- everything at once */
   var z = site();

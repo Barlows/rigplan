@@ -307,11 +307,14 @@
     var warn = issues.filter(function (i) { return i.level === 'warn'; }).length;
     el('topStats').innerHTML =
       stat('Connected', t.kw.toFixed(0) + ' <small>kW</small>') +
-      stat('Design load', t.kva.toFixed(0) + ' <small>kVA</small>') +
-      /* Clamped, because a kVA total below the kW total can only come from a
-         circuit with a bad kVA override, and reporting a power factor of 2.3
-         reads as a bug in the app rather than as the data entry it is. */
-      stat('Reactive', (function () { var q = Math.sqrt(Math.max(0, t.kva * t.kva - t.kw * t.kw)); return q.toFixed(0) + ' <small>kvar</small> · ' + (t.kva > 0 ? Math.min(1, t.kw / t.kva).toFixed(2) : '—') + ' pf</small>'; })()) +
+      stat('Design load', t.kva.toFixed(0) + ' <small>kVA</small>' +
+        /* Both bases shown when they differ, because a power factor is only
+           meaningful against the kW that shares its demand basis. The real
+           project has 9,525 kW connected and 4,172 kVA diversified — comparing
+           those two gave a power factor of 2.28 and a meaningless kvar. */
+        (t.diversified ? '<br><small style="color:var(--fg-mute)">' + t.kwDiv.toFixed(0) + ' kW diversified</small>' : '')) +
+      stat('Reactive', t.kvar.toFixed(0) + ' <small>kvar</small> · ' + t.pf.toFixed(2) + ' pf<small>' +
+        (t.diversified ? ' at design load' : '') + '</small>') +
       stat('TX installed', t.txKva.toFixed(0) + ' <small>kVA</small>') +
       stat('TX loading', '<span style="color:' + (t.txUtil > 100 ? '#fca5a5' : t.txUtil > 90 ? '#fcd34d' : '#86efac') + '">' + t.txUtil.toFixed(0) + '%</span>') +
       stat('Phase imbalance', '<span style="color:' + (t.dev > 25 ? '#fca5a5' : t.dev > 15 ? '#fcd34d' : '#86efac') + '">' + t.dev.toFixed(0) + '%</span>') +
