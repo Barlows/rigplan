@@ -2485,6 +2485,209 @@ function clearingTimeAt(prot, multiple) {
     };
   }
 
+/* ============================================================ equipment ========
+     A bill of materials needs quantities and catalogue references. The design
+     already knows what everything is — how many boards, how many circuits, what
+     rating, what conductor — so the count is arithmetic. What it does not know is
+     what any of it costs or what it is called in a manufacturer's catalogue.
+
+     So the library holds **what the app can derive** and the **items it cannot**.
+     Anything derivable is grouped from the design on every render, so it cannot
+     go stale: three 160 A MCBs are three 160 A MCBs whether or not anybody
+     remembered to add them. Anything not derivable — a gland plate, a label
+     printer, an enclosure — is a manual line the engineer adds, because only the
+     engineer knows it is needed.
+
+     That split is the design. A catalogue database would need to be maintained
+     and would be out of date the moment a manufacturer revised a datasheet. What
+     is worth having is the **count**, and the count is exact.
+
+     What is deliberately absent is pricing. A price is commercial, it changes,
+     it depends on the supplier and on the day, and a figure in a design tool
+     that nobody can trace is worse than no figure. There is a unit-cost field
+     because somebody will want it, and a total that is explicitly labelled as
+     built from entered costs — not as a quotation.
+
+     Cable quantities are the interesting part and they are genuinely worth
+     getting right, because they are the largest line in most bills and the one
+     everybody gets wrong. A circuit's cable is its length plus the tails at
+     either end, and the tails are the difference between a cable schedule and a
+     cutting list: without them every drum is short. The allowance per end is a
+     declared setting because it varies — a panel in a plant room has far more
+     than one in a field cabinet — and the drum rounding below is what turns a
+     cutting list into something you can actually order. */
+  var EQUIPMENT_GROUPS = {
+    tx: 'Transformers',
+    pdb: 'Main boards',
+    pdp: 'Distribution boards',
+    db: 'Sub-boards',
+    enclosure: 'Enclosures',
+    mcb: 'Circuit breakers',
+    mccb: 'Moulded case breakers',
+    cable: 'Cable',
+    gland: 'Cable glands',
+    accessories: 'Accessories'
+  };
+
+  /* Grouped straight off the design. Counts and references are exact; nothing
+     here can be out of date because it is read rather than stored. */
+  function billOfMaterials(p) {
+    var items = [];
+    function add(group, desc, qty, each, ref) {
+      /* Rounded up to whole units: you cannot buy 2.4 boards. */
+      var n = Math.ceil(qty - 1e-9);
+      if (!(n > 0)) return;
+      items.push({ group: group, desc: desc, qty: n, each: each || 1, ref: ref || '',
+        /* where it comes from, so the bill can be traced back to the design
+           rather than being a number somebody typed */
+        source: 'design' });
+    }
+
+    /* --- power transformers --- */
+    (p.txs || []).forEach(function (o) {
+      /* Both sides of the ratio carry the unit. The fields hold kilovolts, so
+         writing "11/0.415 kV" reads as though the 11 were volts — and an 11 kV
+         transformer described that way is a genuinely confusing thing to hand a
+         contractor. */
+      add('tx', (o.tag || 'TX') + ' — ' + num(o.kva, 0) + ' kVA transformer' +
+        (num(o.kvIn, 0) ? ', ' + num(o.kvIn, 0) + '/' + num(o.kvOut, 0) + ' kV' : '') +
+        (o.vectorGroup ? ', ' + o.vectorGroup : ''), 1, 1, o.tag);
+    });
+
+    /* --- boards, and their enclosures --- */
+    (p.pdbs || []).forEach(function (b) {
+      add('pdb', (b.tag || 'PDB') + ' — main board, ' + num(b.incomerA, 0) + ' A incomer' +
+        (b.enclosure ? ', ' + b.enclosure : ''), 1, 1, b.tag);
+    });
+    (p.pdps || []).forEach(function (b) {
+      add('pdp', (b.tag || 'PDP') + ' — distribution board, ' + num(b.incomerA, 0) +
+        ' A incomer, ' + num(b.ways, 0) + ' ways' + (b.enclosure ? ', ' + b.enclosure : ''), 1, 1, b.tag);
+    });
+    (p.dbs || []).forEach(function (b) {
+      add('db', (b.tag || 'DB') + ' — sub-board, ' + num(b.incomerA, 0) + ' A incomer, ' +
+        num(b.ways, 0) + ' ways' + (b.enclosure ? ', ' + b.enclosure : ''), 1, 1, b.tag);
+    });
+
+    /* --- protective devices, grouped by rating and curve ---
+       This is where a bill of quantities earns its keep: 97 circuits with
+       devices scattered through 6 A to 400 A produce a dozen or so distinct
+       catalogue entries, and that is the line the contractor actually prices. */
+    var mcbs = {}, mccbs = {};
+    (p.panels || []).concat(p.pdps || [], p.dbs || [], p.pdbs || []).forEach(function (o) {
+      var pr = o.prot;
+      if (!pr) return;
+      var key = [pr.kind, num(pr.ir, 0), num(pr.frame, 0), num(pr.icu, 0), pr.trip || '', num(pr.poles, 0)].join('|');
+      var isMcb = pr.kind === 'mcb';
+      var bag = isMcb ? mcbs : mccbs;
+      if (!bag[key]) {
+        bag[key] = {
+          group: isMcb ? 'mcb' : 'mccb',
+          desc: (isMcb ? 'MCB ' : 'MCCB ') + num(pr.ir, 0) + ' A' +
+            (num(pr.frame, 0) && num(pr.frame, 0) !== num(pr.ir, 0) ? ' / ' + num(pr.frame, 0) + ' A frame' : '') +
+            (pr.trip ? ' curve ' + pr.trip : '') +
+            (num(pr.icu, 0) ? ', ' + num(pr.icu, 0) + ' kA' : '') +
+            ', ' + num(pr.poles, 0) + ' pole',
+          qty: 0, each: 1, source: 'design', refs: []
+        };
+      }
+      bag[key].qty++;
+      if (o.tag) bag[key].refs.push(o.tag);
+    });
+    Object.keys(mcbs).forEach(function (k) { items.push(mcbs[k]); });
+    Object.keys(mccbs).forEach(function (k) { items.push(mccbs[k]); });
+
+    /* --- cable, as a cutting list ---
+       Length plus tails, then rounded up to a drum. Without the tails every drum
+       is short, and a bill that understates the cable by the tails is a bill
+       somebody has to fix before they can order anything. */
+    var tails = num(p.design.cableTailsPerEnd, 1.5);       // m, each end
+    var drum = num(p.design.cableDrumM, 100);             // m, standard drum
+    var cables = {}, unmeasured = [];
+    (p.panels || []).concat(p.pdps || [], p.dbs || [], p.pdbs || []).forEach(function (o) {
+      var c = o.cable;
+      if (!c || !(num(c.csa, 0) > 0)) return;
+      var key = [num(c.csa, 0), num(c.runs, 1), num(c.cores, 0), c.method || ''].join('|');
+      if (!cables[key]) {
+        cables[key] = {
+          group: 'cable', csa: num(c.csa, 0), runs: num(c.runs, 1), cores: num(c.cores, 0),
+          method: c.method || '', bare: 0, withTails: 0, refs: [], source: 'design'
+        };
+      }
+      var L = num(c.len, 0);
+      var one = L + tails * 2;
+      var rec = cables[key];
+      rec.bare += L;
+      rec.withTails += one;
+      /* The tail is charged per run, because a twin run needs its tail twice. */
+      rec.withTails += tails * (num(c.runs, 1) - 1);
+      if (o.tag) rec.refs.push(o.tag);
+    });
+    Object.keys(cables).forEach(function (k) {
+      var c = cables[k];
+      /* A drum is ordered whole, and a part-drum left over is not waste — it is
+         the offcut for the next termination. Both are reported.
+
+         A run with no stated route length is a gap in the data, and it must not
+         become a hundred metres of cable on a bill. It is counted and marked, so
+         somebody goes and finds the length rather than a contractor ordering
+         nine drums of 500 mm² because three routes were never entered. */
+      c.qty = c.withTails > 0 ? Math.ceil(c.withTails / drum) : 0;
+      c.unmeasured = c.bare <= 0;
+      c.desc = c.csa + ' mm² ' + (c.runs > 1 ? c.runs + ' × ' : '') + c.cores + '-core ' +
+        (c.method || '') + (c.unmeasured
+          ? ' — LENGTH NOT STATED, no cable ordered for ' + c.refs.length + ' circuit(s)'
+          : ' — ' + c.withTails.toFixed(0) + ' m with tails (' + c.bare.toFixed(0) +
+            ' m route), ' + c.qty + ' × ' + drum.toFixed(0) + ' m drum' +
+            (c.qty * drum - c.withTails > 0.5 ? ', ' + (c.qty * drum - c.withTails).toFixed(0) + ' m offcut' : ''));
+      c.each = drum;
+      /* A run with no stated length is not a bill line. Dropping it silently
+         would make the bill look complete when it is not, so it goes to its own
+         list and the view says how many there are. */
+      if (c.unmeasured) unmeasured.push(c);
+      else items.push(c);
+    });
+
+    /* --- the manual lines --- */
+    (p.bomExtra || []).forEach(function (l) {
+      items.push({ group: l.group || 'accessories', desc: l.desc, qty: num(l.qty, 1),
+        each: 1, ref: l.ref || '', unitCost: num(l.unitCost, 0), source: 'manual' });
+    });
+
+    /* Grouped, in the order a bill is read: down the installation, then the
+       devices, then the cable, then the extras. */
+    var order = ['tx', 'pdb', 'pdp', 'db', 'enclosure', 'mccb', 'mcb', 'cable', 'gland', 'accessories'];
+    items.sort(function (a, b) {
+      var d = order.indexOf(a.group) - order.indexOf(b.group);
+      if (d) return d;
+      /* Ratings in their natural order, not string order — 100 before 160
+         before 250 reads properly; "100" before "16" does not. */
+      var av = parseFloat(String(a.desc).match(/([\\d.]+)\\s*A/)?.[1] || 0);
+      var bv = parseFloat(String(b.desc).match(/([\\d.]+)\\s*A/)?.[1] || 0);
+      if (av !== bv) return av - bv;
+      return String(a.desc).localeCompare(String(b.desc));
+    });
+
+    var derived = items.filter(function (i) { return i.source === 'design'; }).length;
+    return {
+      items: items,
+      /* Runs with no stated length: counted, named, and deliberately ordered
+         nothing for. A bill that looked complete and was short of nine hundred
+         metres of cable is worse than one that says it is short. */
+      unmeasured: unmeasured,
+      unmeasuredRefs: unmeasured.reduce(function (a, c) { return a.concat(c.refs); }, []),
+      groups: EQUIPMENT_GROUPS,
+      /* What the design produced and what a person added. Worth stating, because
+         a bill that is entirely derived is a different document from one that is
+         half catalogue knowledge. */
+      derived: derived, manual: items.length - derived,
+      cableMeters: Object.keys(cables).reduce(function (a, k) { return a + cables[k].withTails; }, 0),
+      /* A total is only ever as good as the costs entered into it. Built from
+         entered unit costs and labelled as such — never presented as a price. */
+      costed: items.some(function (i) { return i.unitCost > 0; }),
+      total: items.reduce(function (a, i) { return a + (i.unitCost || 0) * i.qty; }, 0)
+    };
+  }
+
 /* ======================================================== revision tracking ===
      A load schedule is a controlled document. Somebody approves it, it goes out
      for construction, and then it changes — and the question that gets asked
@@ -4607,6 +4810,7 @@ function selectivityBand(s) {
     clearingTimeAt, selectivity, selectivityMessage, selectivityBand, selectivityLadder, reactive,
     arcTimeAt, arcDistanceFactor, arcAssessment,
     COINCIDENCE_BANDS, demandMethods, boardDemandKva,
+    EQUIPMENT_GROUPS, billOfMaterials,
     REVISION_FIELDS, snapshotForDiff, diffProjects, stable,
     voltageProfile, voltageProfileWorst, loadBelow, panelsBelow,
     pfCorrection, capResonance, impedanceBase, puImpedance, pathImpedance, faultLevel,

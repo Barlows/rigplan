@@ -1366,6 +1366,7 @@
     else if (tab === 'audit') host.innerHTML = viewAudit();
     else if (tab === 'map') { host.innerHTML = viewMap(); wireMapPanel(); }
     else if (tab === 'revisions') { host.innerHTML = viewRevisions(); wireRevisions(); }
+    else if (tab === 'bom') { host.innerHTML = viewBom(); wireBom(); }
     else host.innerHTML = viewNotes();
     if (tab === 'loads') wireLoadsTable();
   }
@@ -1713,6 +1714,146 @@
     return h;
   }
   function btn2(a, label) { return '<button class="btn sm" data-global="' + a + '">' + label + '</button>'; }
+
+  /* ============================================================== BOM tab ----
+     Counts are derived from the design, so they cannot go stale. What is not
+     derivable is added by hand, and the two are counted separately — a bill
+     that is entirely derived is a different document from one that is half
+     catalogue knowledge, and the reader should know which they are looking at. */
+  function viewBom() {
+    var b = LC.billOfMaterials(S);
+    var h = '<div class="btn-row">' +
+      '<button class="btn" data-global="bom-csv">Export bill (CSV)</button>' +
+      '<button class="btn" data-global="bom-add">Add a line</button>' +
+      '<span style="margin-left:auto;font-size:10px;color:var(--fg-mute)">' +
+      b.items.length + ' lines &middot; ' + Math.round(b.cableMeters) + ' m of cable</span></div>';
+
+    /* The gap, stated first, because a bill that looks complete and is short of
+       several hundred metres of cable is the failure that costs money. */
+    if (b.unmeasured.length) {
+      var refs = b.unmeasuredRefs;
+      h += '<div class="fieldset"><h4>' + refs.length + ' circuit' +
+        (refs.length === 1 ? '' : 's') + ' with no route length</h4>' +
+        '<div class="hint" style="margin-bottom:6px">No cable has been ordered for these, because a ' +
+        'missing length is a gap in the data rather than a zero-metre run. Affected: <b>' +
+        esc(refs.slice(0, 20).join(', ')) + '</b>' + (refs.length > 20 ? ' and ' + (refs.length - 20) + ' more' : '') +
+        '. Entering the lengths completes the bill.</div>' +
+        '<table class="tbl"><thead><tr><th>Conductor</th><th class="c">Circuits</th></tr></thead><tbody>' +
+        b.unmeasured.map(function (c) {
+          return '<tr><td>' + c.csa + ' mm² ' + (c.runs > 1 ? c.runs + ' × ' : '') + c.cores +
+            '-core ' + esc(c.method) + '</td><td class="c">' + c.refs.length + '</td></tr>';
+        }).join('') + '</tbody></table></div>';
+    }
+
+    var order = ['tx', 'pdb', 'pdp', 'db', 'enclosure', 'mccb', 'mcb', 'cable', 'gland', 'accessories'];
+    var seen = {};
+    var body = '';
+    order.forEach(function (g) {
+      var rows = b.items.filter(function (i) { return i.group === g; });
+      if (!rows.length) return;
+      seen[g] = true;
+      body += '<tr><th colspan="4" style="background:var(--bg2);text-align:left;padding:5px 8px">' +
+        esc(b.groups[g]) + ' <span style="color:var(--fg-mute);font-weight:400">— ' + rows.length +
+        ' line' + (rows.length === 1 ? '' : 's') + '</span></th></tr>';
+      body += rows.map(function (i) {
+        return '<tr><td class="c" style="text-align:right;white-space:nowrap"><b>' + i.qty + '</b>' +
+          (i.each > 1 ? ' <span style="color:var(--fg-mute)">× ' + i.each.toFixed(0) + ' m</span>' : '') +
+          '</td><td>' + esc(i.desc) +
+          (i.ref ? ' <span style="color:var(--fg-mute)">[' + esc(i.ref) + ']</span>' : '') +
+          (i.source === 'manual' ? ' <span style="color:var(--warn)">added by hand</span>' : '') +
+          '</td>' +
+          '<td class="c" style="text-align:right;white-space:nowrap">' +
+          (i.unitCost ? i.unitCost.toFixed(2) : '<span style="color:var(--fg-mute)">—</span>') + '</td>' +
+          '<td class="c" style="text-align:right;white-space:nowrap">' +
+          (i.unitCost ? (i.unitCost * i.qty).toFixed(2) : '<span style="color:var(--fg-mute)">—</span>') + '</td></tr>';
+      }).join('');
+    });
+    h += '<table class="tbl"><thead><tr><th class="c">Qty</th><th>Item</th>' +
+      '<th class="c">Unit cost</th><th class="c">Total</th></tr></thead><tbody>' + body + '</tbody></table>';
+
+    /* A total built from entered costs, labelled as such. Never presented as a
+       price — a price is commercial, it moves, and a figure nobody can trace is
+       worse than no figure. */
+    if (b.costed) {
+      h += '<div style="text-align:right;padding:8px 0;font-size:12px">' +
+        'Total of entered unit costs: <b>' + b.total.toFixed(2) + '</b></div>';
+    }
+    h += '<div class="hint">' + b.derived + ' of these ' + (b.derived === 1 ? 'line is' : 'lines are') +
+      ' read straight off the design and cannot go stale; ' + b.manual +
+      ' ' + (b.manual === 1 ? 'was' : 'were') + ' added by hand. Cable lengths include ' +
+      num(S.design.cableTailsPerEnd, 1.5).toFixed(2) + ' m of tail at each end and are rounded up to a ' +
+      num(S.design.cableDrumM, 100).toFixed(0) + ' m drum, with the offcut stated — without the tails every drum ' +
+      'is short. <b>No prices are in the design.</b> Costs, where entered, are a record of what was quoted; ' +
+      'the total is arithmetic on those entries and not a quotation.</div>';
+
+    return h;
+  }
+  function wireBom() {
+    var x = el('bomExtra');
+    if (x) x.onclick = bomAddModal;
+  }
+  /* Manual lines: the things a design cannot know — a gland plate, a label
+     printer, an enclosure the standard range does not cover. */
+  function bomAddModal() {
+    var groups = Object.keys(LC.EQUIPMENT_GROUPS).map(function (k) {
+      return [k, LC.EQUIPMENT_GROUPS[k]];
+    });
+    modal('Add a line to the bill',
+      '<div style="max-width:520px">' +
+      fRow('Item', '<input class="inp" id="bmDesc" placeholder="e.g. M20 gland plate for PDP7">') +
+      fRow('Group', '<select class="sel" id="bmGroup">' +
+        groups.map(function (g) { return '<option value="' + g[0] + '"' +
+          (g[0] === 'accessories' ? ' selected' : '') + '>' + esc(g[1]) + '</option>'; }).join('') +
+        '</select>') +
+      fRow('Quantity', '<span class="unit"><input class="inp" type="number" id="bmQty" value="1" min="1" step="1"></span>') +
+      fRow('Catalogue ref', '<input class="inp" id="bmRef" placeholder="optional">') +
+      fRow('Unit cost', '<span class="unit"><input class="inp" type="number" id="bmCost" value="" min="0" step="0.01" placeholder="optional"></span>') +
+      '</div>' +
+      '<div class="hint" style="margin-top:10px">Everything the design can derive is derived already, and ' +
+      'shows on this page without being entered. This is for what it cannot know.</div>',
+      [{ label: 'Add', cls: 'primary', fn: function () {
+          var desc = (el('bmDesc').value || '').trim();
+          if (!desc) { toast('Give the item a name', ''); return; }
+          S.bomExtra = S.bomExtra || [];
+          S.bomExtra.push({
+            desc: desc, group: el('bmGroup').value,
+            qty: Math.max(1, num(el('bmQty').value, 1)),
+            ref: (el('bmRef').value || '').trim(),
+            unitCost: num(el('bmCost').value, 0)
+          });
+          save(); renderTab();
+          toast('Added to the bill', 'good');
+        } },
+       { label: 'Cancel' }]);
+  }
+  function exportBom() {
+    var b = LC.billOfMaterials(S);
+    var L = [];
+    L.push(csvRow([S.name || 'Project', 'BILL OF MATERIALS']));
+    L.push(csvRow(['Client', S.client, 'Project', S.ref, 'Date', S.date]));
+    L.push('');
+    var order = ['tx', 'pdb', 'pdp', 'db', 'enclosure', 'mccb', 'mcb', 'cable', 'gland', 'accessories'];
+    order.forEach(function (g) {
+      var rows = b.items.filter(function (i) { return i.group === g; });
+      if (!rows.length) return;
+      L.push(csvRow([b.groups[g].toUpperCase()]));
+      rows.forEach(function (i) {
+        L.push(csvRow([i.qty, i.each > 1 ? i.each : '', i.desc, i.ref, i.unitCost || '',
+          i.unitCost ? (i.unitCost * i.qty).toFixed(2) : '', i.source]));
+      });
+      L.push('');
+    });
+    if (b.unmeasured.length) {
+      L.push(csvRow(['ROUTE LENGTHS NOT STATED — NO CABLE ORDERED FOR THESE']));
+      b.unmeasured.forEach(function (c) {
+        L.push(csvRow([c.refs.length, '', c.csa + ' mm² ' + (c.runs > 1 ? c.runs + ' × ' : '') +
+          c.cores + '-core ' + c.method, c.refs.join(' '), '', '', 'not stated']));
+      });
+    }
+    download((S.name || 'project').replace(/[^\w\-]+/g, '_') + '-bill-of-materials.csv',
+      L.join('\n'), 'text/csv');
+    toast('Bill exported — ' + b.items.length + ' lines', 'good');
+  }
 
   /* =========================================================== revisions tab ---
      The history is read, not written, from here. Taking a revision is a
@@ -3897,6 +4038,8 @@
     if (changed) saveTree();
   }
   function globalAction(a) {
+    if (a === 'bom-csv') return exportBom();
+    if (a === 'bom-add') return bomAddModal();
     if (a === 'rev-take') { return revNoteModal(); }
     if (a === 'rev-export') return exportRevisions();
     if (a === 'csv') return exportCsv();

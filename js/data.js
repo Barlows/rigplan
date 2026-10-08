@@ -257,6 +257,22 @@ var LS = (function () {
        chosen for availability, which is the opposite trade. */
     motorClassDefault: 10,
 
+    /* ------------------------------------------------------- bill of materials
+       The quantities are derived from the design on every render, so they cannot
+       go stale. The tails and drum length are the two settings that turn a
+       cutting list into something orderable. */
+    /* Slack at each end of a run, in metres. A panel in a plant room wants far
+       more than one in a field cabinet, so this is a setting rather than a
+       constant — and the bill shows both the route length and the length with
+       tails, so the assumption is visible rather than buried. */
+    cableTailsPerEnd: 1.5,
+    /* Standard drum length. A circuit rarely divides into one, and the offcut
+       is the next termination rather than waste — so both are reported. */
+    cableDrumM: 100,
+    /* Lines the design cannot know about: a gland plate, a label printer, an
+       enclosure the standard range does not cover. */
+    bomExtra: [],
+
     /* --------------------------------------------- demand and coincidence ---
        Two ways from connected load to the load a supply carries, and they are
        alternatives rather than layers. `per-circuit` sums each circuit's own

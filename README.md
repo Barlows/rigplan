@@ -758,6 +758,42 @@ that is what fails capacitors.
 The 7% reactor costs about 7% of output and is normally in the bank price rather
 than an accessory.
 
+### Bill of materials
+
+A bill of quantities needs counts. The design already knows what everything is, so
+the count is arithmetic — and it is **derived on every render**, which means it
+cannot go stale. Three 160 A MCBs are three 160 A MCBs whether or not anybody
+remembered to add them.
+
+On the real project, **60 lines, 2,039 m of cable**, with the 97 circuits'
+devices collapsed into 20 catalogue lines — which is the line the contractor
+actually prices.
+
+What is derived: transformers, every board with its rating and ways, protective
+devices grouped by kind/rating/curve/poles/breaking capacity, and cable.
+
+What is not, and is added by hand: a gland plate, a label printer, an enclosure
+the standard range does not cover. The two counts are reported separately,
+because a bill that is entirely derived is a different document from one that is
+half catalogue knowledge.
+
+**Cable is where this earns its keep.** Cable lengths include a tail at each end
+(1.5 m, a declared setting — a plant room wants far more than a field cabinet)
+and are rounded up to whole drums with the offcut stated, because the offcut is
+the next termination rather than waste. Without the tails **every drum is short**,
+and that is the difference between a cable schedule and a cutting list.
+
+**A run with no stated length orders nothing.** It is a gap in the data, not a
+zero-metre run. Eight on this project, listed by circuit, with a total that
+excludes them — because a bill that looked complete and was short of several
+hundred metres of cable is the failure that costs money.
+
+**No prices.** A price is commercial, it changes, it depends on the supplier and
+the day, and a figure in a design tool that nobody can trace is worse than no
+figure. There is a unit-cost field because somebody will want it, and a total
+built from entered costs, explicitly labelled as arithmetic on those entries and
+not a quotation.
+
 ### Revision tracking
 
 A load schedule is a controlled document. The question asked later is not "what
@@ -1220,7 +1256,7 @@ test/numbering-test.html  58 checks on the board numbering scheme
 test/db-test.html         46 checks on sub-board sizing and the 63 A rule
 test/sld-test.html        36 checks on the single line diagram layout and symbols
 test/mainboard-test.html  24 checks on circuits fed straight from a main board
-test/protection-test.html 463 checks on fault levels, device proposals, cable
+test/protection-test.html 490 checks on fault levels, device proposals, cable
                           thermal withstand, selectivity from trip curves, earth
                           fault looping, the neutral conductor on 3P+N feeders,
                           the earthing arrangement, reactive power, harmonics,

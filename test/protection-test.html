@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=289"></script>
-<script src="../js/calc.js?v=289"></script>
+<script src="../js/data.js?v=296"></script>
+<script src="../js/calc.js?v=296"></script>
 <script>
 (function () {
   var results = [];
@@ -1547,6 +1547,104 @@
   var atSix = LC.clearingTimeAt(slowProt, 1.0);
   check('a curve C device at exactly its own rating is slow enough to matter',
     atSix !== null && atSix > 10, true);
+
+  /* ------------------------------------------------------- bill of materials ---
+     Counts are derived from the design, so the first thing to prove is that the
+     bill cannot drift from the design: change the design, change the bill. */
+  var bo = site({ kva: 2500 });
+  var b1 = load(bo.p, bo.pdp, 100, 0.85);
+  b1.cable = { csa: 95, runs: 1, cores: 4, len: 100, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  b1.prot = LS.newProt({ kind: 'mcb', ir: 250, frame: 250, icu: 36, trip: 'C', poles: 4 });
+  /* A different conductor size, so the two runs group as two cable lines rather
+     than one: a zero-length run and a measured run of the same cable is not a
+     case that can arise, because they would share a single line. */
+  var b2 = load(bo.p, bo.pdp, 100, 0.85);
+  b2.cable = { csa: 50, runs: 1, cores: 4, len: 50, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  b2.prot = LS.newProt({ kind: 'mcb', ir: 250, frame: 250, icu: 36, trip: 'C', poles: 4 });
+  LC.applyNumbering(bo.p);
+  var bom = LC.billOfMaterials(bo.p);
+
+  check('one transformer line', bom.items.filter(function (i) { return i.group === 'tx'; }).length, 1);
+  check('two 250 A curve C devices, grouped as one catalogue line',
+    bom.items.filter(function (i) { return i.group === 'mcb'; }).length, 1);
+  var mcbLine = bom.items.filter(function (i) { return i.group === 'mcb'; })[0];
+  check('with the right quantity', mcbLine.qty, 2);
+  check('and a description a buyer could search for',
+    /250 A/.test(mcbLine.desc) && /curve C/.test(mcbLine.desc) && /36 kA/.test(mcbLine.desc), true);
+
+  /* The tails. This is the whole point of the cable line: without them every
+     drum is short, and a bill that understates the cable is a bill somebody has
+     to fix before they can order anything. */
+  /* Selected by conductor size rather than by position: the bill sorts by rating
+     within a group, and which line comes first is a presentation detail this test
+     has no business depending on. */
+  function cab(item, csa) {
+    return bom.items.filter(function (i) { return i.group === 'cable' && i.csa === csa; })[0];
+  }
+  var cabLine = cab(b1, 95);
+  check('a 100 m route plus a tail at each end is 103 m',
+    /103 m with tails/.test(cabLine.desc), true);
+  check('and the route length is stated separately, so the assumption is visible',
+    /100 m route/.test(cabLine.desc), true);
+  check('which needs two drums of 100 m',
+    /2 × 100 m drum/.test(cabLine.desc), true);
+  check('with the offcut stated rather than assumed to be waste',
+    /97 m offcut/.test(cabLine.desc), true);
+  check('and a 50 m run of a different conductor size is its own line',
+    /53 m with tails/.test(cab(b2, 50).desc), true);
+  check('with the two kept separate rather than merged',
+    bom.items.filter(function (i) { return i.group === 'cable'; }).length, 2);
+
+  /* Change the design and the bill must follow. */
+  b1.cable.len = 200;
+  var bom2 = LC.billOfMaterials(bo.p);
+  var cab2 = bom2.items.filter(function (i) { return i.group === 'cable' && i.csa === 95; })[0];
+  check('lengthening a route lengthens the bill line', /203 m with tails/.test(cab2.desc), true);
+  check('and adds a drum', /3 × 100 m drum/.test(cab2.desc), true);
+  check('with the offcut still stated', /97 m offcut/.test(cab2.desc), true);
+
+  /* A run with no stated length is a gap in the data, not a zero-metre run, and
+     it must not become a hundred metres of cable on a bill. */
+  b1.cable.len = 0;
+  var bom3 = LC.billOfMaterials(bo.p);
+  check('a run with no length is named rather than silently included',
+    bom3.unmeasured.length > 0, true);
+  check('and is kept off the bill entirely, not ordered on a tail allowance',
+    bom3.items.filter(function (i) { return i.group === 'cable'; })
+      .every(function (i) { return !/NOT STATED/.test(i.desc); }), true);
+  check('the tails alone are not enough to justify a drum',
+    bom3.unmeasured.every(function (c) { return c.bare === 0; }), true);
+  check('and says which circuits are affected',
+    bom3.unmeasuredRefs.length > 0, true);
+  check('while the measured runs are still on the bill',
+    bom3.items.filter(function (i) { return i.group === 'cable'; }).length, 1);
+
+  /* Manual lines are kept separate from derived ones, because a bill that is
+     entirely derived is a different document from one that is half catalogue
+     knowledge. */
+  bo.p.bomExtra = [{ desc: 'M20 gland plate', group: 'accessories', qty: 4, ref: '', unitCost: 12.5 }];
+  var bom4 = LC.billOfMaterials(bo.p);
+  check('a manual line is counted as manual, not derived',
+    bom4.manual, 1);
+  check('and derived is unchanged by it', bom4.derived, bom3.derived);
+  var plate = bom4.items.filter(function (i) { return i.desc === 'M20 gland plate'; })[0];
+  check('with its quantity', plate.qty, 4);
+  check('and its entered unit cost', plate.unitCost, 12.5);
+
+  /* A total is built from entered costs and is labelled as such. A price is
+     commercial and moves; a figure nobody can trace is worse than none. */
+  check('a bill with no costs reports no total',
+    bom3.costed, false);
+  check('and one with a cost does', bom4.costed, true);
+  check('and the total is that cost times the quantity',
+    bom4.total >= 4 * 12.5, true);
+  /* Every line says where it came from, which is what makes "derived" and
+     "manual" different documents rather than one document with a confidence
+     level. */
+  check('every line says whether it came from the design or a person',
+    bom4.items.every(function (i) { return i.source === 'design' || i.source === 'manual'; }), true);
+  check('and the total is exactly the entered costs times their quantities',
+    bom4.total, bom4.items.reduce(function (a, i) { return a + (i.unitCost || 0) * i.qty; }, 0));
 
   /* ------------------------------------------------------ revision tracking ---
      A revision records a diff, not a copy, and the diff must be keyed on the
