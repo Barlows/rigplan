@@ -592,6 +592,40 @@ var LC = (function () {
     return out;
   }
 
+  /* Which fault level a question is about.
+
+     Two different numbers, and asking one question with the other is how a
+     10 mm² feeder gets reported as facing 61 kA on one line and 8.8 kA on the
+     next.
+
+     **The device** is tested against the fault at its OWN terminals. A circuit's
+     device sits on the distribution board, so the level that matters for its
+     breaking capacity and for selectivity with what is below it is the board's,
+     not the far end of the feeder it protects.
+
+     **The conductor** is tested against the fault at its OWN far end. That is
+     the fault the conductor has to survive, and on a thin feeder the conductor is
+     what limits it: 1.5 mm² thirteen metres from a 3,150 kVA transformer carries
+     226 mΩ against a source of 3 mΩ, so the fault at its far end is about 1 kA
+     and not the 70 kA the board can produce. That is why a small control circuit
+     is self-protecting, and it is invisible unless the conductor's impedance is
+     in the sum.
+
+     `faultAt` was the per-stage approximation and neither of those. The board
+     gets `faultLevel` at itself and the conductor `faultLevel` at itself. */
+  function deviceFaultKA(p, item, kind) {
+    if (kind === 'panel') {
+      /* The device is at the distribution board, not at the load. */
+      var up = (item.dbId && get(p, 'db', item.dbId)) || get(p, 'pdp', item.pdpId) || get(p, 'pdb', item.pdbId);
+      if (up) {
+        var f = faultLevel(p, up, up.__kind || 'pdp');
+        if (f) return f.kA;
+      }
+    }
+    var self = faultLevel(p, item, kind);
+    return self ? self.kA : faultAt(p, item, kind);
+  }
+
   function pdpMaxA(p) {
     return num(p && p.design && p.design.pdpMaxIncomer, 1600);
   }
@@ -1752,8 +1786,9 @@ var LC = (function () {
     p.pdbs.forEach(function (b) {
       var st = boardStats(p, b, 'pdb');
       var cab = b.cable && b.cable.csa ? cableRating(b.cable) : null;
-      checkProt(p, b, 'pdb', st.amp, cab && cab.derated, st.faultKA);
-      if (!isBusbar(b)) checkWithstandFinding(p, b, 'pdb', st.faultKA);
+      var fB = faultLevel(p, b, 'pdb');
+      checkProt(p, b, 'pdb', st.amp, cab && cab.derated, fB ? fB.kA : st.faultKA);
+      if (!isBusbar(b)) checkWithstandFinding(p, b, 'pdb', fB ? fB.kA : st.faultKA);
       checkReactive(p, b, 'pdb', st);
       checkEarthFault(p, b, 'pdb');
       checkNeutral(p, b, 'pdb', st);
@@ -1761,8 +1796,9 @@ var LC = (function () {
     p.pdps.forEach(function (d) {
       var st = boardStats(p, d, 'pdp');
       var cab = d.cable && d.cable.csa ? cableRating(d.cable) : null;
-      checkProt(p, d, 'pdp', st.amp, cab && cab.derated, st.faultKA);
-      if (!isBusbar(d)) checkWithstandFinding(p, d, 'pdp', st.faultKA);
+      var fD = faultLevel(p, d, 'pdp');
+      checkProt(p, d, 'pdp', st.amp, cab && cab.derated, fD ? fD.kA : st.faultKA);
+      if (!isBusbar(d)) checkWithstandFinding(p, d, 'pdp', fD ? fD.kA : st.faultKA);
       checkReactive(p, d, 'pdp', st);
       checkEarthFault(p, d, 'pdp');
       checkNeutral(p, d, 'pdp', st);
@@ -1770,8 +1806,9 @@ var LC = (function () {
     p.dbs.forEach(function (b) {
       var st = boardStats(p, b, 'db');
       var cab = b.cable && b.cable.csa ? cableRating(b.cable) : null;
-      checkProt(p, b, 'db', st.amp, cab && cab.derated, st.faultKA);
-      if (!isBusbar(b)) checkWithstandFinding(p, b, 'db', st.faultKA);
+      var fB2 = faultLevel(p, b, 'db');
+      checkProt(p, b, 'db', st.amp, cab && cab.derated, fB2 ? fB2.kA : st.faultKA);
+      if (!isBusbar(b)) checkWithstandFinding(p, b, 'db', fB2 ? fB2.kA : st.faultKA);
       checkReactive(p, b, 'db', st);
       checkEarthFault(p, b, 'db');
     });
@@ -1788,13 +1825,17 @@ var LC = (function () {
          Skipping the whole item instead was wrong and lost a real check: it is
          the one thing a spare breaker still has to get right. */
       if (isSpare(pn)) {
-        checkProt(p, pn, 'panel', 0, null, faultAt(p, pn, 'panel'), true);
+        checkProt(p, pn, 'panel', 0, null, deviceFaultKA(p, pn, 'panel'), true);
         return;
       }
       var cab = pn.cable && pn.cable.csa ? cableRating(pn.cable) : null;
-      var f = faultAt(p, pn, 'panel');
-      checkProt(p, pn, 'panel', d.ampHarm, cab && cab.derated, f);
-      checkWithstandFinding(p, pn, 'panel', f);
+      /* Two levels, deliberately. The device sits on the board above, so its
+         breaking capacity and its grading are about the fault there. The feeder
+         is tested against the fault at its own far end, which its own impedance
+         largely determines. */
+      var fAtLoad = faultLevel(p, pn, 'panel');
+      checkProt(p, pn, 'panel', d.ampHarm, cab && cab.derated, deviceFaultKA(p, pn, 'panel'));
+      checkWithstandFinding(p, pn, 'panel', fAtLoad ? fAtLoad.kA : faultAt(p, pn, 'panel'));
       checkHarmonics(p, pn, 'panel');
       checkImpossiblePf(p, pn);
       checkEarthFault(p, pn, 'panel');
@@ -4110,13 +4151,26 @@ function clearingTimeAt(prot, multiple) {
     if (!(sn > 0)) return null;
     var v = num(volt, 400) || 400;
     var ib = (sn * 1000) / (Math.sqrt(3) * v);
+    /* Z_base = V²/S, with S in VA. Written from the base current so that the
+       kVA/VA conversion happens once, visibly, in one place.
+         Z_base = V / (√3 · Ib) = V / (√3 · S/√3V) = V²/S
+
+       Every cable impedance is divided by this to become per-unit, so a mistake
+       here is a mistake in every fault level on the project. It was made twice,
+       below, by writing V²/S with S in kVA — which is 1000× too large, so every
+       cable looked 1000× more conductive than it is. A 16 mm² feeder 11 m from a
+       3,150 kVA transformer has 0.0157 Ω against a source of 0.0030 Ω: it is
+       five times the source and limits the fault at its own far end to about
+       12 kA. The app reported 75 kA there, which is the prospective fault at the
+       board and not the fault in that cable — and every thermal withstand finding
+       downstream was computed against a current the conductor cannot actually
+       carry. */
+    var zBase = v / (Math.sqrt(3) * ib);
     return {
       snKva: sn, volt: v,
       /* base current — the per-unit reference for everything below */
       ibA: ib,
-      /* Z_base = V²/S for three-phase, which is what a cable's ohms are
-         divided by to become per-unit */
-      zBase: v / (Math.sqrt(3) * ib),
+      zBase: zBase,
       /* the transformer, referred to this base rather than to its own */
       puTransformer: (function () {
         var zpu = num(tx.impZ, 6);
@@ -4137,7 +4191,10 @@ function clearingTimeAt(prot, multiple) {
     /* Ohms in series with the load, referred to the source base by the standard
        Z_base = V²/S three-phase. */
     var zOhm = Math.sqrt(z.r * z.r + z.x * z.x) * km / runs;
-    var zBaseOhm = base.volt ? (base.volt * base.volt / base.snKva) : 0;
+    /* The base from the one place it is computed, not recomputed. See the note
+       in impedanceBase(): writing V²/S with S in kVA made every feeder look
+       1000× more conductive than it is. */
+    var zBaseOhm = base.zBase;
     if (!(zBaseOhm > 0)) return 0;
     return zOhm / zBaseOhm;
   }
@@ -4163,7 +4220,7 @@ function clearingTimeAt(prot, multiple) {
     if (tx && base.puTransformer > 0) {
       add(tx.tag + ' at ' + (base.puTransformer * 100).toFixed(1) + '%', base.puTransformer);
     }
-    var zBaseOhm = base && base.volt ? (base.volt * base.volt / base.snKva) : 0;
+    var zBaseOhm = base ? base.zBase : 0;
     if (zBaseOhm > 0) {
       /* The busbar run at each board between it and its parent, and the cable. */
       /* A board's own incoming feeder. The parent lookup that used to guard this
@@ -6088,7 +6145,7 @@ function selectivityBand(s) {
     peNeededCsa,
     startMethod, startingCurrentA, startingCheck, sourceImpedanceAt, curveInstantaneousMultiple, torqueNeeded,
     isMotorLoad, isSpare, minimumCsa, cableShortfalls, csaForFault, pdpMaxA, usableA,
-    isBusbar, busbarCheck, impedanceSensitivity,
+    isBusbar, busbarCheck, impedanceSensitivity, deviceFaultKA,
     SELECTIVITY_STEPS,
     choosePdp, assignPanel, createPdpFor, feederLen, syncLen,
     sizeCablesFor, sizeCablesForPdb, sizeCablesForDb, suggestDbFeeder, sizeCableForPanel, sizeAll, feederAmp, needsSizing,

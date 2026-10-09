@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=421"></script>
-<script src="../js/calc.js?v=421"></script>
+<script src="../js/data.js?v=426"></script>
+<script src="../js/calc.js?v=426"></script>
 <script>
 (function () {
   var results = [];
@@ -317,9 +317,14 @@
      to change together — the device AND the core — because at a 24 kA source even
      a 25 mm² core on a 50 ms TM clears with 8× margin.
 
-     1.5 mm² reaches its limit in about 0.1 ms against a 50 ms trip, which fails
-     by a factor no real conductor survives. */
-  fp.cable = { csa: 1.5, runs: 1, cores: 4, len: 25, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
+     The core is 1.5 mm² on a SHORT run, and the length is the whole point. A thin
+     core twenty-five metres out is self-protecting — 0.65 Ω of conductor against a
+     0.01 Ω source, so the fault at its far end is about 350 A and it survives
+     whatever is upstream. Half a metre out it sees ten times that and does not.
+     The app reported both as facing the board's whole fault current, which is how
+     twenty-five metres of 1.5 mm² came to be reported as failing by a factor of
+     204 when it could not fail at all. */
+  fp.cable = { csa: 1.5, runs: 1, cores: 4, len: 0.5, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
   fp.prot = { kind: 'mccb', ir: 200, frame: 250, icu: 80, trip: 'TM', poles: 4 };
   /* Matched on the finding's own phrase, not on the word "withstand" anywhere:
      the let-through finding says "cannot survive the fault" and was matching too,
@@ -330,6 +335,46 @@
   check('and names the core it is about', /1\.5 mm²/.test(fnd[0].title), true);
   check('and carries both figures in the detail', /ms/.test(fnd[0].detail) && /kA/.test(fnd[0].detail), true);
   check('and says the figures are indicative', /indicative/.test(fnd[0].detail), true);
+
+  /* The other side, and the one the old model got wrong in the other direction:
+     the same 1.5 mm² core, twenty-five metres out, is protected by its own
+     impedance and needs no protection from its size at all. This is why small
+     control circuits work at all. */
+  var lp = site();
+  var lpC = load(lp.p, lp.pdp, 60, 0.9);
+  LC.protAll(lp.p, {});
+  lpC.cable = { csa: 1.5, runs: 1, cores: 4, len: 25, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
+  lpC.prot = { kind: 'mccb', ir: 200, frame: 250, icu: 80, trip: 'TM', poles: 4 };
+  LC.applyNumbering(lp.p);
+  var farEnd = LC.faultLevel(lp.p, lpC, 'panel');
+  check('a long thin feeder limits the fault to a fraction of the board\'s',
+    farEnd.kA < LC.faultLevel(lp.p, lp.pdp, 'pdp').kA / 10, true);
+  check('which is what makes it self-protecting',
+    LC.audit(lp.p).filter(function (f) { return /thermal withstand under fault/.test(f.title); }).length, 0);
+  check('and the fault at its far end is small enough for a 1.5 mm² core to take',
+    LC.checkWithstand(lpC, farEnd.kA).ratio <= 1, true);
+
+  /* The other side, and the case the old model got wrong in the opposite
+     direction: the same 1.5 mm² core twenty-five metres out is protected by its
+     own impedance and needs no protection from its size. This is why small
+     control circuits are usable at all. */
+  var lp = site();
+  var lpC = load(lp.p, lp.pdp, 60, 0.9);
+  LC.protAll(lp.p, {});
+  lpC.cable = { csa: 1.5, runs: 1, cores: 4, len: 25, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
+  lpC.prot = { kind: 'mccb', ir: 200, frame: 250, icu: 80, trip: 'TM', poles: 4 };
+  LC.applyNumbering(lp.p);
+  var farEnd = LC.faultLevel(lp.p, lpC, 'panel');
+  check('a long thin feeder limits the fault to a fraction of the board\'s',
+    farEnd.kA < LC.faultLevel(lp.p, lp.pdp, 'pdp').kA / 10, true);
+  check('and is protected by its own impedance, so no finding is raised',
+    LC.audit(lp.p).filter(function (f) { return /thermal withstand under fault/.test(f.title); }).length, 0);
+  check('which is the check the short run above has to fail and this one passes',
+    LC.checkWithstand(lpC, farEnd.kA).ratio <= 1, true);
+  /* The device is a different question: it sits on the board above, so it is
+     tested against the fault there, not at the end of the feeder. */
+  check('while the device is tested against the fault at its own terminals',
+    LC.deviceFaultKA(lp.p, lpC, 'panel') > farEnd.kA * 5, true);
 
   /* A core that survives is not reported. Every board is checked, so a passing
      line for each one would bury the failures. */
@@ -2170,7 +2215,14 @@
   var sCircuit = load(sz.p, sz.pdp, 60, 0.9);
   LC.protAll(sz.p, {});
   sCircuit.prot = { kind: 'mccb', ir: 200, frame: 250, icu: 50, trip: 'TM', poles: 4 };
-  sCircuit.cable = { csa: 95, runs: 1, cores: 4, len: 25, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
+  /* A SHORT run, and that is what makes the fault constraint bind at all.
+
+     On a long run the conductor limits its own fault — 95 mm² over 25 m from a
+     3,150 kVA transformer carries 1.4 mΩ against a source of 3 mΩ, so the far
+     end sees about 52 kA rather than 73, and 95 mm² is comfortably enough. The
+     fault case that bites is a core close to the board: 95 mm² over a metre sees
+     the whole fault and needs more than it has. */
+  sCircuit.cable = { csa: 95, runs: 1, cores: 4, len: 1, method: 'XL-A1', group: 1, ambient: 40, sheathed: true };
   var mm = LC.minimumCsa(sz.p, sCircuit);
   check('minimumCsa returns both constraints, not one number',
     mm.byLoad !== null && mm.byFault !== null, true);
@@ -2180,6 +2232,13 @@
     mm.governed, 'fault');
   check('and the answer is the larger of the two',
     mm.csa, Math.max(mm.byLoad, mm.byFault));
+  /* The same conductor, far enough away that it protects itself. */
+  sCircuit.cable.len = 25;
+  var mmLong = LC.minimumCsa(sz.p, sCircuit);
+  check('and the same conductor twenty-five metres out is governed by the load instead',
+    mmLong.governed, 'load');
+  check('because its own impedance brings the fault down to what it can take',
+    mmLong.byFault <= 95, true);
 
   /* The same feeder on a weak supply: the fault constraint stops binding, which
      is what makes this a real calculation rather than a constant. */
