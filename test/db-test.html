@@ -26,8 +26,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=431"></script>
-<script src="../js/calc.js?v=431"></script>
+<script src="../js/data.js?v=439"></script>
+<script src="../js/calc.js?v=439"></script>
 <script>
 (function () {
   var results = [];
@@ -155,14 +155,31 @@
   /* One finding for one condition. "Is spare" and "has no outgoing circuits"
      were the same fact reported twice, and six spare sub-boards in a switchgear
      schedule turned into twelve rows saying it. */
+  /* An empty sub-board is reported once, not twice. "Is spare" and "has no
+     outgoing circuits" were the same fact reported twice, and six spare
+     sub-boards in a switchgear schedule turned into twelve rows saying it.
+
+     What makes it worth reporting at all is the gap, not the emptiness: newDb
+     gives every board twelve spare ways out of thirty-six, so an empty board
+     proves nothing on its own. A board that claims twenty-four ways in use and
+     lists none of them is either missing circuits or carrying a default nobody
+     chose, and that is a question worth asking before a schedule is issued. */
   check('an empty sub-board is reported once, not twice',
-    auditTitles(p4, /DB1-1-1 (is spare|has no outgoing)/),
-    ['info: DB1-1-1 has no outgoing circuits']);
-  /* ...and the merged row still carries the half that mattered: whether the board
-     has any spare ways left on it. */
-  check('and it says whether the board has spare ways',
-    LC.audit(p4).filter(function (f) { return /no outgoing circuits/.test(f.title); })
-      .every(function (f) { return /spare way/.test(f.detail); }), true);
+    auditTitles(p4, /DB1-1-1 (is spare|claims ways in use)/),
+    ['info: DB1-1-1 claims ways in use but carries no circuits']);
+  /* ...and the row carries the half that mattered: how many ways it says are
+     taken, and how many it declares spare. */
+  check('and it says how many ways it claims are in use',
+    LC.audit(p4).filter(function (f) { return /claims ways in use/.test(f.title); })
+      .every(function (f) { return /24 are in use/.test(f.detail); }), true);
+  /* A board that declares every one of its ways spare is provided capacity and
+     needs no decision, so it raises nothing at all. */
+  var p5 = site();
+  var db5 = addDb(p5, p5.pdps[0], null, 125);
+  db5.spareWays = db5.ways;
+  LC.applyNumbering(p5);
+  check('a board with every way declared spare is not raised at all',
+    LC.audit(p5).filter(function (f) { return /claims ways in use/.test(f.title); }), []);
 
   /* 6. auto-assignment never lands a circuit on a sub-board */
   var p5 = site();

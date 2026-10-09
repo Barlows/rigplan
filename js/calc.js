@@ -592,6 +592,103 @@ var LC = (function () {
     return out;
   }
 
+  /* The tap. A distribution transformer has an on-load tap selector and the one
+     thing it exists for is to cancel the transformer's own voltage drop, so that
+     the far end of the installation sits at nominal when it is carrying its
+     design load.
+
+     That makes it a SETTING and not a design, which is why this project has two
+     tap findings and neither of them is a defect: the cables are inside every
+     limit everywhere — the wiring drop here is 0.54% to 1.86% against a 5% limit
+     — and what sits outside is the transformer, which the tap is there to remove.
+
+     So the finding was reporting the wrong thing. It counted circuits finishing
+     outside the limit end to end and said so, without noticing that on TX7 a tap
+     of +5% puts all thirty-four of them inside, and on TX8 +2.5% puts all
+     sixty-three. That is not a defect spread over thirty-four circuits; it is one
+     selector position per transformer, and an engineer reading the old finding
+     would have gone looking for thirty-four separate cable problems.
+
+     tapAdvice sweeps the positions the selector actually offers and reports what
+     each one does. Two figures matter and they are in tension: the far end wants
+     the tap to cancel the transformer drop, while the supply terminals rise by
+     the tap itself and must stay inside what the installation may be fed at.
+     Reported together, because a tap advice that only quoted one of them would
+     be recommending the high-voltage end of the problem. */
+
+  function tapPositions(p) {
+    var d = (p && p.design) || {};
+    var range = num(d.tapRange, 7.5);
+    var step = num(d.tapStep, 2.5);
+    if (!(step > 0)) step = 2.5;
+    var out = [];
+    for (var t = -range; t <= range + step * 1e-6; t += step) {
+      out.push(Math.round(t * 1000) / 1000);
+    }
+    return out;
+  }
+
+  /* What one tap position does to every circuit on one transformer. */
+  function tapAt(p, tx, tap) {
+    var all = voltageProfileWorst(p).profiles;
+    var mine = all.filter(function (v) {
+      return v.steps.some(function (st) { return st.kind === 'tx' && st.id === tx.id; });
+    });
+    if (!mine.length) return null;
+    var over = 0, worst = null, lo = Infinity, hi = -Infinity;
+    var txLo = Infinity, txHi = -Infinity, overList = [];
+    mine.forEach(function (v) {
+      /* The tap is a setting on the supply, so it lifts every voltage downstream
+         of it by the same percentage — the far end, the boards and the terminals
+         all move together. */
+      var total = v.pct - tap;
+      if (total > v.limit + 1e-9) {
+        over++;
+        if (v.pn) overList.push(v.pn.tag || v.pn.name);
+      }
+      if (total < lo) lo = total;
+      if (total > hi) hi = total;
+      if (v.transformer.pct < txLo) txLo = v.transformer.pct;
+      if (v.transformer.pct > txHi) txHi = v.transformer.pct;
+    });
+    return {
+      tap: tap, over: over, of: mine.length, overList: overList,
+      /* the voltage drop to the far end, after the tap has been applied */
+      farLo: lo, farHi: hi,
+      /* what the tap asks of this transformer on its own */
+      txLo: txLo, txHi: txHi, meanTx: (txLo + txHi) / 2,
+      /* and what the supply terminals are left running at, which is the tap
+         less the transformer drop the tap was set to cancel */
+      termLo: 100 + tap - txHi, termHi: 100 + tap - txLo
+    };
+  }
+
+  function tapAdvice(p, tx) {
+    var rows = tapPositions(p).map(function (t) { return tapAt(p, tx, t); })
+      .filter(Boolean);
+    if (!rows.length) return null;
+    var best = rows[0];
+    rows.forEach(function (r) {
+      /* Fewest circuits outside first. Then the position that over-corrects least,
+         which is the one that leaves the supply terminals nearest nominal — a tap
+         two steps beyond what is needed holds the far end up rather than at
+         nominal, and pays for it in the voltage every board on the installation
+         is fed at. */
+      if (r.over < best.over) { best = r; return; }
+      if (r.over > best.over) return;
+      if (Math.abs(r.tap - r.meanTx) < Math.abs(best.tap - best.meanTx)) best = r;
+    });
+    var clears = rows.filter(function (r) { return r.over === 0; });
+    /* How close the recommendation is to cancelling the transformer's own drop,
+       which is the textbook rule and is what the sweep should agree with. */
+    var ideal = best.meanTx;
+    return {
+      tx: tx, rows: rows, best: best, clears: clears.length,
+      ideal: ideal, set: tx.tap === undefined || tx.tap === null ? null : num(tx.tap, 0),
+      now: tx.tap === undefined || tx.tap === null ? null : tapAt(p, tx, num(tx.tap, 0))
+    };
+  }
+
   /* Which fault level a question is about.
 
      Two different numbers, and asking one question with the other is how a
@@ -1118,13 +1215,35 @@ var LC = (function () {
          the board is the interesting half — a board with nothing on it is
          ordinary while a project is being built, but a board with no circuits and
          no spare ways left is a design decision nobody made. */
-      if (st.panels.length === 0) add('info', 'db', b.id, b.tag + ' has no outgoing circuits',
-        'Nothing is fed from this sub-board and it has ' + st.spare + ' spare way(s) spare. That is ' +
-        'ordinary while a project is still being built and worth checking before it is issued: a ' +
-        'sub-board in the switchgear schedule with no circuits and no spare capacity is a board that ' +
-        'was paid for and has nothing to do. Either put the small loads it was intended for on it, ' +
-        'or remove it from the schedule.',
-        'board-empty');
+      /* An empty sub-board is only an omission if the schedule says ways are in
+         use. newDb() gives every board twelve spare ways out of thirty-six by
+         default, so "no circuits" on its own cannot mean anything — the test for
+         it has to be the gap, and the gap is what is provable: a board that says
+         it has ways taken up and lists none of them.
+
+         On this project six sub-boards each claimed thirty-six ways of which
+         twelve were spare, so twenty-four ways in use, and carried no circuits at
+         all. They had not been designed in: the import writes dbs: [] and the
+         vendor sheet puts all ninety-seven circuits off distribution boards. They
+         had been created by the convention, one beside every PDP, with the
+         application own defaults — the same descriptor, "lighting, small power",
+         and the same way count on all six, which is what gives them away.
+
+         So they came off the schedule, and this is the check that would have
+         said so. A board with no circuits and no ways claimed spare is provided
+         capacity and needs no decision; one that claims ways in use has either
+         lost circuits or is carrying a default it never meant. */
+      if (st.panels.length === 0 && st.ways !== null &&
+          st.ways - num(b.spareWays, 0) > 0)
+        add('info', 'db', b.id, b.tag + ' claims ways in use but carries no circuits',
+          'This sub-board states ' + st.ways + ' ways of which ' + num(b.spareWays, 0) +
+          ' are spare, so ' + (st.ways - num(b.spareWays, 0)) + ' are in use — and no ' +
+          'circuits are assigned to it. Either circuits are missing from it, or the ' +
+          'way count is a default this board was created with rather than something ' +
+          'that was decided. Check it before the schedule is issued: a sub-board with ' +
+          'nothing on it and nothing spare is a board that was paid for and has ' +
+          'nothing to do.',
+          'board-empty');
       if (st.spareUsed > st.spare) add('warn', 'db', b.id, b.tag + ' more circuits than ways',
         st.spareUsed + ' circuits on a ' + st.spare + '-way board. The enclosure will not take them.');
       if (st.dev > D.num(p.design.imbalanceBad, 25)) add('bad', 'db', b.id, b.tag + ' phase imbalance ' + st.dev.toFixed(0) + '%',
@@ -1136,13 +1255,21 @@ var LC = (function () {
       if (cab) add(cab.level, 'db', b.id, cab.title, cab.detail);
     });
 
-    /* A distribution board usually gets a sub-board for its lighting and small
-       power. Not having one is a choice worth surfacing, not an error — the
-       plant may be fed entirely from the board itself. */
-    p.pdps.forEach(function (d) {
-      if (!dbOfPdp(p, d.id).length) add('info', 'pdp', d.id, d.tag + ' has no sub-board',
-        'A distribution board usually carries one for lighting and small power, and you would have use for it later.');
-    });
+    /* Nothing here about a board with no sub-board.
+
+       There used to be a finding saying that a distribution board "usually
+       carries one for lighting and small power, and you would have use for it
+       later". That was the application's own house style reported back as if it
+       were an expectation, and it fired on every board in any design that put
+       its circuits straight onto the board — which is a perfectly ordinary
+       design, and on this project the stated convention is exactly that: circuits
+       land on distribution boards, not on sub-boards. Removing six vestigial
+       sub-boards from the schedule created it on all six boards at once, which is
+       what showed it up: a change that made the design more honest produced six
+       findings saying the honest design was incomplete.
+
+       There is no rule that a distribution board must carry a sub-board. If
+       nothing is fed from one, there is nothing to report. */
 
     /* ---------------------------------------------------- the board size limit --
        A distribution board is capped at 1,600 A of incomer. Above that the
@@ -1780,15 +1907,24 @@ var LC = (function () {
             'Set to ' + ir + ' A on a cable rated ' + cableA.toFixed(0) +
             ' A. The cable will overheat before the device trips. The device must not exceed the cable rating.');
         }
-      } else if (!isBusbar(item) && cableA && ir > cableA * 0.95) {
-        /* Keyed, because on a real project this fired on ten boards and ten
-           circuits and the ten rows said the same thing in ten places: the
-           cable is right, and the headroom on it is under 5%. Worth knowing,
-           not worth ten lines. */
-        add('info', kind, item.id, item.tag + ' device only just matched to its cable',
-          ir + ' A device on a ' + cableA.toFixed(0) + ' A cable — ' +
-          ((1 - ir / cableA) * 100).toFixed(0) + '% headroom.', 'just-matched');
       }
+      /* There is deliberately nothing here for a device that FITS its cable.
+
+         BS 7671 433.1 asks for the protective device not to exceed the current
+         carrying capacity of the cable it protects, and the check above enforces
+         exactly that: a device over the cable rating is an error and says so. So
+         a device sitting between 95% and 100% of the cable is not a near miss —
+         it is the requirement being met with nothing to spare, which is what a
+         correctly matched device looks like. On this project it reported a
+         1,000 A device on a 1,022 A cable at 2% and an 800 A on an 802 A at 0%,
+         and both of those are the design working: the cable will not overheat
+         before the device trips, which is the whole point of choosing the two
+         together.
+
+         It used to be reported as information on the reasoning that tight
+         matching was worth knowing about. It is not, and reporting it teaches the
+         reader that findings are noise — which is how the real ones above get
+         missed. A finding has to be something a person would change. */
     }
 
     p.pdbs.forEach(function (b) {
@@ -2215,54 +2351,95 @@ var LC = (function () {
         'vdrop-incomplete', vgaps.length, 'circuits');
     }
 
-    /* The tap. Not a design fault and not judged as one — the wiring drop is
-       what the design controls, and a transformer is expected to be tapped to
-       cancel its own share. But the app now computes the transformer drop for
-       every circuit and then throws it away, and on this project it is 4.2–4.9%,
-       which is larger than every other drop on the site combined.
+    /* The tap. See tapAdvice() for why this is a selector position rather than a
+       defect.
 
-       So the number that matters for commissioning is the one nobody can get
-       without doing this walk: with the tap at nominal, how far below nominal
-       voltage does the far end of the installation sit? On this project 57 of 97
-       circuits finish above the 5% limit end to end while the wiring is inside
-       it at every point — which is not a defect in the cables, it is a tap
-       setting that has not been made.
+       The old finding counted circuits finishing outside the limit end to end and
+       reported the count. On this project that read as thirty-four faults on TX7
+       and twenty-three on TX8, and every one of them was the same single thing:
+       a transformer running at nominal tap while dropping four to five per cent
+       across its own impedance. The cables are inside every limit — the wiring
+       drop is 0.54% to 1.86% against a 5% limit — and no cable was ever going to
+       fix it, because the drop being counted was not in a cable.
 
-       Reported as one finding per transformer, because that is the object the
-       remedy is on, and at warn rather than bad: the wiring passes, and the
-       remedy is a commissioning decision rather than a design change. */
+       So it is reported as what it is. A transformer that nobody has decided the
+       tap on is one open item, and the answer is a number. A transformer with the
+       tap set and the far end inside is one closed item, and worth stating because
+       the number has to go in the commissioning instructions. A transformer with
+       the tap set and the far end still outside is a real finding, and the advice
+       says which position would settle it. */
     p.txs.forEach(function (tx) {
-      var mine = vprof.profiles.filter(function (v) {
-        /* Matched on the path's own transformer hop rather than a tx field the
-           profile may not carry, so the test is against something the walk
-           actually recorded. */
-        return v.steps.some(function (st) { return st.kind === 'tx' && st.id === tx.id; });
-      });
-      if (!mine.length) return;
-      var over = mine.filter(function (v) { return v.overIncludingTransformer; });
-      var worst = mine.slice().sort(function (a, b) { return b.pct - a.pct; })[0];
-      var best = mine.slice().sort(function (a, b) { return a.pct - b.pct; })[0];
-      var txDrops = mine.map(function (v) { return v.transformer.pct; });
-      var lo = Math.min.apply(null, txDrops), hi = Math.max.apply(null, txDrops);
-      if (!over.length) return;
-      /* What the tap has to give up for the worst end to arrive at its limit. */
-      var need = worst.limit - (worst.pct - worst.transformer.pct);
+      var adv = tapAdvice(p, tx);
+      if (!adv) return;
+      var best = adv.best;
+      var pos = (best.tap > 0 ? '+' : '') + best.tap.toFixed(1) + '%';
+      var supply = 'supply terminals ' + best.termLo.toFixed(1) + '-' + best.termHi.toFixed(1) + '%';
+
+      if (adv.set === null) {
+        if (!adv.clears) {
+          /* No position on the selector brings the far end inside. That is not a
+             tap problem — it means the wiring drop alone exceeds the limit
+             somewhere, and the cables are the answer. */
+          add('warn', 'tx', tx.id,
+            tx.tag + ' tap — no position brings the far end inside the limit',
+            'The far end of this installation drops ' + (best.farHi).toFixed(2) +
+            '% below nominal before any tap is applied, against a ' +
+            'limit that the wiring drop of ' + best.txLo.toFixed(2) + '-' +
+            best.txHi.toFixed(2) + '% transformer contribution has to sit inside. ' +
+            'The selector offers +/-' + num((p.design || {}).tapRange, 7.5).toFixed(1) +
+            '% in ' + num((p.design || {}).tapStep, 2.5).toFixed(1) +
+            '% steps and no combination of them closes a gap of this size, so the ' +
+            'cables are what has to change. Raising the tap as far as ' + pos +
+            'still leaves ' + best.over + ' of ' + best.of + ' outside.',
+            'tap-setting', best.over, 'circuits');
+          return;
+        }
+        add('warn', 'tx', tx.id,
+          tx.tag + ' tap not set — ' + best.over + ' of ' + best.of +
+          ' circuit(s) finish outside the limit end to end',
+          'Nothing is wrong with the cables: the wiring drop on this transformer ' +
+          'is ' + best.farLo.toFixed(2) + '% to ' + best.farHi.toFixed(2) +
+          '% depending on circuit, inside every limit. What sits outside is the ' +
+          'transformer, which contributes ' + best.txLo.toFixed(2) + '-' +
+          best.txHi.toFixed(2) + '% at the loading on this project and has a tap ' +
+          'selector there to cancel exactly that. This is one open item, not ' +
+          best.over + '. The selector offers +/-' +
+          num((p.design || {}).tapRange, 7.5).toFixed(1) + '% in ' +
+          num((p.design || {}).tapStep, 2.5).toFixed(1) + '% steps; on ' + pos +
+          ' every circuit finishes inside the limit and the ' + supply +
+          ', which is what the tap is for. The textbook rule is to cancel the ' +
+          'transformer own drop at design load, which here is about ' +
+          adv.ideal.toFixed(1) + '% and gives the same answer. Set against ' +
+          'measured voltage at the far end rather than by calculation alone.',
+          'tap-setting', best.over, 'circuits');
+        return;
+      }
+
+      var was = adv.set > 0 ? '+' : '';
+      if (adv.now.over === 0) {
+        add('info', 'tx', tx.id,
+          tx.tag + ' tap set to ' + was + adv.set.toFixed(1) + '% — far end ' +
+          adv.now.farLo.toFixed(2) + '-' + adv.now.farHi.toFixed(2) +
+          '% below nominal, ' + supply,
+          'All ' + adv.now.of + ' circuits finish inside the limit and the supply ' +
+          'terminals sit at ' + adv.now.termLo.toFixed(1) + '-' +
+          adv.now.termHi.toFixed(1) + '% of nominal, so nothing runs high at the ' +
+          'boards either. Goes in the commissioning instructions; if the tap is ' +
+          'moved at any stage, the far end moves with it.',
+          'tap-setting', adv.now.of, 'circuits');
+        return;
+      }
       add('warn', 'tx', tx.id,
-        tx.tag + ' tap — ' + over.length + ' circuit(s) finish outside the limit end to end',
-        'The transformer contributes ' + lo.toFixed(2) + '–' + hi.toFixed(2) +
-        '% at the loading on this project, against a wiring drop of ' +
-        best.wiring.pct.toFixed(2) + '–' + worst.wiring.pct.toFixed(2) +
-        '% which is inside every limit. The cables are not the problem: with the ' +
-        'transformer at nominal tap the far end of this installation sits ' +
-        best.pct.toFixed(2) + '–' + worst.pct.toFixed(2) + '% below nominal, and ' +
-        over.length + ' of ' + mine.length + ' circuits finish above the ' +
-        worst.limit + '% limit at the supply terminals. Setting the tap to ' +
-        (need > 0 ? '+' : '') + need.toFixed(1) + '% brings the worst of them to ' +
-        worst.limit + '%; the near end then runs high, which is why the tap is set ' +
-        'against measured voltage at the far end rather than by calculation alone. ' +
-        'This figure rests on the ' + num(tx.impZ, 6).toFixed(1) +
-        '% impedance assumed for this transformer, so it moves with that assumption.',
-        'tap-setting', over.length, 'circuits');
+        tx.tag + ' tap set to ' + was + adv.set.toFixed(1) + '% — ' +
+        adv.now.over + ' of ' + adv.now.of + ' circuit(s) still outside the limit',
+        'This transformer still finishes outside the limit on ' +
+        adv.now.over + ' circuit(s) with the tap where it is. On ' + pos +
+        ' all ' + adv.of + ' are inside and the ' + supply +
+        '. Verify against measured voltage at the far end before moving it, ' +
+        'because the transformer own contribution of ' + adv.now.txLo.toFixed(2) +
+        '-' + adv.now.txHi.toFixed(2) + '% is itself computed from an assumed ' +
+        'impedance.',
+        'tap-setting', adv.now.over, 'circuits');
     });
 
     /* Motor overload relay class, and the let-through a device permits.
@@ -6154,6 +6331,7 @@ function selectivityBand(s) {
     startMethod, startingCurrentA, startingCheck, sourceImpedanceAt, curveInstantaneousMultiple, torqueNeeded,
     isMotorLoad, isSpare, minimumCsa, cableShortfalls, csaForFault, pdpMaxA, usableA,
     isBusbar, busbarCheck, impedanceSensitivity, deviceFaultKA,
+    tapPositions, tapAt, tapAdvice,
     SELECTIVITY_STEPS,
     choosePdp, assignPanel, createPdpFor, feederLen, syncLen,
     sizeCablesFor, sizeCablesForPdb, sizeCablesForDb, suggestDbFeeder, sizeCableForPanel, sizeAll, feederAmp, needsSizing,

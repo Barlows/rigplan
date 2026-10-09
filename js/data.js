@@ -257,6 +257,12 @@ var LS = (function () {
        constant — some contracts set it lower, and a small transformer makes a
        1,600 A board pointless whatever the rule says. */
     pdpMaxIncomer  : 1600,
+    /* The tap range a distribution transformer's selector offers. +/-3 x 2.5% is
+       the usual complement on a transformer of this size, seven positions in all.
+       It is declared rather than assumed because a tap advice that offers a
+       position the transformer does not have is worse than no advice. */
+    tapRange       : 7.5,
+    tapStep        : 2.5,
     designMargin   : 1.15,   // board sizing / loading design factor
     vdropLimitLv   : 3.0,    // % for LV distribution
     vdropLimitFinal: 5.0,    // % lighting final circuit
@@ -529,6 +535,14 @@ var LS = (function () {
       ref: p.ref === undefined || p.ref === null ? '' : p.ref,
       kva: num(p.kva, 1000), kvIn: num(p.kvIn, 11), kvOut: num(p.kvOut, 0.415),
       phases: '3', pf: 0.9,
+      /* Tap position as a percentage of nominal, or null while it is undecided.
+
+         It is the transformer's own setting and it exists on the transformer, not
+         on the project, because two transformers on one site are very often on
+         different taps — which on this project they are, and there is no way to
+         know that from anywhere else. Null means nobody has decided yet, which is
+         not the same as 0 and must not be read as it. */
+      tap: p.tap === undefined || p.tap === null || p.tap === '' ? null : num(p.tap, 0),
       /* Percent impedance, and whether it is KNOWN.
 
          This is the single most consequential number in the app and it is
