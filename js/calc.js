@@ -1697,8 +1697,27 @@ var LC = (function () {
          the achieved time is a large fraction of the time allowed, because then
          the conductor has to be at its limit temperature, the joints have to be
          good and the route must not be extended. */
+      /* How close this circuit is to FAILING, not how much time it used.
+
+         The rule used to fire when the achieved disconnection time was over 40% of
+         the time allowed, which sounds cautious and is not. A circuit that clears
+         in 50 ms against a 100 ms limit has used half the time available whether
+         its loop impedance is 14% of the permitted value or 90% of it — the time
+         saturates at the device's own floor, so the further the circuit is from
+         failing the less the ratio moves. Five control circuits on this project
+         were reported at 50% while carrying R1 + R2 of 0.11 to 0.16 Ω against
+         0.81 Ω permitted, which is a fifth of the limit and not a finding at all.
+
+         So the measure is proximity to the limit on the impedance, which is what
+         actually decides whether it passes. A circuit within a quarter of its
+         permitted loop impedance is worth a second look, because then the
+         conductor has to be at its limit temperature, the joints have to be good
+         and the route cannot be extended without another calculation. The
+         disconnection time is still checked, and still fails a circuit that does
+         not disconnect in time — this only governs the advisory note. */
+      var room = e.maxLoop ? 1 - e.loop.total / e.maxLoop : null;
       var ratio = e.tActual === null ? null : e.tActual / e.tMax;
-      if (ratio !== null && ratio > 0.4) {
+      if (room !== null && room < 0.25) {
         if (!isSpare(item)) add('info', kind, item.id, what + ' earth fault loop leaves little margin',
           'The loop carries ' + e.ia.toFixed(0) + ' A against a ' + e.ir +
           ' A setting, which clears in ' + LC_ms(e.tActual) + ' against a ' +
@@ -1771,10 +1790,16 @@ var LC = (function () {
           'start-unstated', r.sc.flc, 'A full load');
         return;
       }
-      if (pn.startInferred && pn.start) {
+      /* Only when the method is NOT declared. The flag records where a value
+         originally came from, and once somebody has declared one it is declared
+         however it was arrived at first — reporting it as inferred afterwards was
+         reporting the provenance instead of the state. Seven circuits on this
+         project carried an explicit VFD with this note against them, which reads
+         as "we do not know" about something the schedule does state. */
+      if (pn.startInferred && !pn.startInferredOverridden && pn.start) {
         add('info', kind, pn.id, what + ' starting method inferred from the machine name',
-          'Taken as ' + pn.start + ' because the name implies a drive, not because a sheet says so. ' +
-          'Worth confirming — it moves the starting current from about ' +
+          'Recorded as ' + pn.start + ', originally taken from the machine name rather ' +
+          'than from a sheet. Worth confirming — it moves the starting current from about ' +
           r.sc.amps.toFixed(0) + ' A down to ' +
           (r.sc.amps / D.START_METHODS.DOL.multiple * D.START_METHODS[pn.start].multiple).toFixed(0) +
           ' A, and that is the difference between keeping the board and tripping it.',
