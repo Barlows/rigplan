@@ -207,8 +207,23 @@
       else if (!num(o.prot.icu, 0)) blank++;
     });
     if (!blank) return 0;
+    /* Same order as afterLoad, for the same reason: the breaking capacity comes
+       from the fault level, and the fault level at a board is the transformer's
+       impedance in series with the cables feeding it. Propose before sizing and
+       every device is chosen against a fault level with no cable data in it —
+       a per-stage figure rather than the real one — and the audit then finds the
+       device short. Sizing first makes the two agree by construction. */
+    LC.sizeAll(S);
     LC.protAll(S, { replace: false });
     LC.sizeAll(S);
+    /* And protection last. Sizing moves the fault level — a larger cable is less
+       impedance, so the level at the board below it rises — and a device whose
+       breaking capacity was chosen against the level before that is one catalogue
+       step short of the level after it. Proposing last closes that: a board with
+       no device yet is built against the settled figure. Circuits already carrying
+       the schedule's own device are left alone, so nothing the engineer supplied
+       is overwritten. */
+    LC.protAll(S, { replace: false });
     save();
     return blank;
   }
@@ -3541,11 +3556,24 @@
     /* afterLoad only runs on a project the engineer has just asked for — the
        built-in sample, the Sample button, or an explicit import — so filling an
        empty protection schedule outright is right here. */
-    var filled = fillProtection(true);
+    /* Cables first, then protection — and the order is load-bearing.
+
+       A device's breaking capacity is chosen from the fault level, and the fault
+       level at a board is the transformer's impedance in series with the cables
+       feeding it. Filling protection before the lengths and sizes are known sizes
+       every device against a fault level that does not exist yet, and the audit
+       then checks it against the real one: on this project that left six
+       sub-boards at 6 kA against a 33.5 kA fault — six errors — and put
+       nineteen devices into "breaking capacity marginal" for a margin they would
+       have been given had the order been the other way round.
+
+       Nothing above depends on the devices being present, so the swap costs
+       nothing and makes the two figures agree by construction. */
     S.panels.forEach(autoLen);
     S.pdps.forEach(autoLen);
     S.pdbs.forEach(autoLen);
     LC.sizeAll(S);
+    var filled = fillProtection(true);
     renumber(true);
     var bits = [];
     if (added) bits.push(added + ' unassigned panel(s) placed' + (made.length ? ' — new board(s) ' + made.join(', ') + ' created' : ''));

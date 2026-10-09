@@ -719,7 +719,15 @@ var LC = (function () {
       var d = panelDemand(p, item); rating = 0; amp = d.amp;
     }
     var loadA = amp === undefined ? (st ? st.amp : 0) : amp;
-    fKA = faultAt(p, item, kind);
+    /* The same basis the check will use. Choosing the breaking capacity from the
+       per-stage estimate and then testing it against the computed path gave
+       thirty-one devices a marginal warning on a project where nothing had
+       changed — the device was specified against one number and audited against
+       another, and the two differ by whatever the real cable data adds.
+
+       deviceFaultKA() is the fault at the device's own terminals, which is what
+       Icu has to survive: a circuit's device sits on the board above. */
+    fKA = deviceFaultKA(p, item, kind);
 
     var margin = num(p.design.spreadMargin, 1.25);
     var out = { device: null, why: '', faultKA: fKA, amp: loadA, rating: rating };
@@ -817,7 +825,7 @@ var LC = (function () {
     var hasReal = existing && num(existing.ir, 0) > 0;
 
     if (hasReal && !replace) {
-      var fKA2 = faultAt(p, item, kind);
+      var fKA2 = deviceFaultKA(p, item, kind);
       if (!num(existing.icu, 0) && fKA2) existing.icu = icuFor(fKA2);
       if (existing.kind === 'mccb' && !num(existing.frame, 0) && num(existing.ir, 0)) {
         existing.frame = mccbFrameFor(existing.ir);
