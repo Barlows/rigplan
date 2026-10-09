@@ -1,0 +1,18 @@
+[Unit]
+Description=Check for updates to the electrical load schedule every minute
+Requires=elschedule-update.service
+
+[Timer]
+# One minute. A push is visible on the site within a minute of landing, which is
+# fast enough to read as automatic and slow enough that nobody is waiting on it.
+OnBootSec=30s
+OnUnitActiveSec=60s
+# Spread the start so this does not land on the same second as every other timer
+# on the machine, which is how a home lab ends up with everything happening at
+# the top of the hour.
+AccuracySec=15s
+RandomizedDelaySec=20s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

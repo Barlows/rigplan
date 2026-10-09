@@ -1,0 +1,18 @@
+[Unit]
+Description=Update the electrical load schedule from GitHub
+Documentation=file:///var/www/electrical-load-schedule/repo/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# GitHub over HTTPS as the read-only deploy user. No shell is needed to fetch
+# and this service only ever reads, so an interactive login is not required.
+User=deploy
+Group=deploy
+WorkingDirectory=/var/www/electrical-load-schedule/repo
+ExecStart=/var/www/electrical-load-schedule/repo/deploy/update.sh
+# A failed update leaves the previous version serving, so a failure here should
+# be visible but must not stop anything. The site carries on.
+SuccessExitStatus=0
+TimeoutStartSec=300

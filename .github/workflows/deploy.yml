@@ -1,0 +1,52 @@
+# Deploy to a VM, on every push to main.
+#
+# OPTIONAL. The recommended way to run this is the systemd timer on the VM itself
+# (deploy/README.md, section 1), which needs nothing exposed and works on a
+# machine the internet cannot reach. This workflow is here for a VM that IS
+# reachable — over a public address or a tunnel — and it is a deliberate
+# trade: in exchange for deploying the instant a push lands, you are giving SSH
+# access to a hosted runner.
+#
+# It calls the same update.sh as the timer, including the refusal to deploy code
+# that does not parse, so a broken push leaves the previous version serving
+# rather than taking the site down with nobody watching.
+#
+# To use it: add repository secrets DEPLOY_HOST, DEPLOY_USER, DEPLOY_KEY, and
+# uncomment the deploy job below.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Two workflows on the same push is a race for the runner queue, not for the
+# site — but there is no reason to have both on by default. The tests job is the
+# gate; this one runs only when you have asked for it.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: false          # enable deliberately — see deploy/README.md section 2
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          cat > ~/.ssh/id_ed25519 <<KEY
+          ${{ secrets.DEPLOY_KEY }}
+          KEY
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+          # Same script the VM timer runs, so the two paths cannot diverge in
+          # what they will and will not deploy.
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            '/var/www/electrical-load-schedule/update.sh'
