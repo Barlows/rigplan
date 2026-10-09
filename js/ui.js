@@ -2487,6 +2487,155 @@
      it is a few hundred SVG nodes, which is cheaper than keeping it in sync.
      Zoom is held in `sldZoom` so switching tabs does not lose the view. */
   var sldZoom = 1, sldFit = true;
+/* ---------------------------------------------------------------- the pack --
+     Three tables that the printed report was missing, all of them things this
+     project actually has to hand over.
+
+     PROTECTION AND COORDINATION is the device schedule and the grading in one
+     place. A load schedule says what a circuit draws; it does not say what
+     protects it, which is the other half of the drawing and the half a
+     switchgear supplier needs. Every device is shown as it would be ordered from
+     the NSX range, part by part, with the settings that came out of the
+     coordination rather than a bare rating — and the grading ladder beside it,
+     because a device is only meaningful against the one above it.
+
+     COMMISSIONING is the short list of things that have to be written down when
+     the installation is switched on: where the taps go, what has to be measured
+     before they do, which nameplate figures are still missing, and which
+     certificates turn assumptions into facts. None of that belongs in a warning
+     list, and all of it is needed on the day.
+
+     CONTENTS is at the end because it is assembled from the sections as they are
+     written, which means it cannot fall out of step with the document. */
+
+  function viewProtection() {
+    var rows = LC.nsxSchedule(S);
+    if (!rows.length) return '<p class="hint">No MCCBs on this project.</p>';
+    var out = '<p class="hint">Devices selected from the Schneider NSX range: the frame ' +
+      'from the rating, the trip unit from what the coordination needs, the settings ' +
+      'from the coordination worked out, and the interrupting rating from the fault ' +
+      'level with the design margin. Quoted part by part so each can be checked ' +
+      'against the catalogue; the commercial reference is assembled from them. The ' +
+      'interrupting rating rests on an assumed transformer impedance — see the ' +
+      'transformer specification.</p>';
+    out += '<table class="tbl"><tr><th>Board</th><th>Frame</th><th>Micrologic</th>' +
+      '<th>Provides</th><th>Long-time A</th><th>Short-time</th><th>In</th><th>Icu kA</th></tr>';
+    rows.forEach(function (r) {
+      if (!r.frame) {
+        out += '<tr><td>' + esc(r.item.tag) + '</td><td colspan="7"><b>No NSX frame</b> — ' +
+          esc(r.why || '') + '</td></tr>';
+        return;
+      }
+      out += '<tr' + (r.ok ? '' : ' style="background:#fee"') + '><td>' + esc(r.item.tag) +
+        '</td><td>' + esc(r.frame.size) + '</td><td>' + esc(r.mic) + '</td><td>' +
+        esc((r.funcs || {}).label || '') + '</td><td>' + Math.round(r.ir || 0) + '</td><td>' +
+        (r.ss ? r.ss.toFixed(1) + '× (' + Math.round(r.ss * r.ir) + ' A) holding ' +
+               Math.round(r.sd * 1000) + ' ms' : '—') + '</td><td>' + Math.round(r.ir || 0) + '</td><td>' +
+        (r.icu || '—') + '</td></tr>';
+    });
+    out += '</table>';
+
+    /* The grading ladder, because a delay only means something against what is
+       above and below it. */
+    var plan = LC.selectivityPlan(S);
+    var boards = plan.filter(function (r) { return r.kind !== 'panel'; });
+    if (boards.length) {
+      out += '<h3 style="font-size:12px;margin:10px 0 3px">Coordination settings</h3>';
+      out += '<table class="tbl"><tr><th>Board</th><th>Unit</th><th>Long-time A</th>' +
+        '<th>Hold from</th><th>Hold</th><th>What it separates from</th></tr>';
+      boards.forEach(function (r) {
+        out += '<tr><td>' + esc(r.item.tag) + '</td><td>' + esc(r.item.prot.trip || '') +
+          '</td><td>' + (r.ir || Math.round(r.item.prot.ir || 0)) + '</td><td>' +
+          (r.pickup ? r.pickup.toFixed(1) + '×' : '—') + '</td><td>' +
+          (r.delay ? LC.msOrS(r.delay) : '—') + '</td><td>' +
+          (r.reason === 'graded' ? 'everything below it'
+            : r.reason === 'nothing-below' ? 'nothing below it'
+            : '— not separated; see the warnings') + '</td></tr>';
+      });
+      out += '</table>';
+    }
+    return out;
+  }
+
+  function viewCommissioning() {
+    var out = '<p class="hint">What has to be written down when this is switched on. ' +
+      'None of it is a design fault and none of it appears in the warnings.</p>';
+
+    /* Taps, with what to measure before setting them. */
+    var txs = (S.txs || []).filter(function (tx) { return tx.tap !== null && tx.tap !== undefined; });
+    if (txs.length) {
+      out += '<h3 style="font-size:12px;margin:10px 0 3px">Transformer tap positions</h3>';
+      out += '<table class="tbl"><tr><th>Transformer</th><th>Set to</th><th>Tap range</th>' +
+        '<th>Measured at the far end before setting</th></tr>';
+      txs.forEach(function (tx) {
+        out += '<tr><td>' + esc(tx.tag) + '</td><td>' + (tx.tap > 0 ? '+' : '') +
+          num(tx.tap, 0).toFixed(1) + '%</td><td>±' +
+          num((S.design || {}).tapRange, 7.5).toFixed(1) + '% in ' +
+          num((S.design || {}).tapStep, 2.5).toFixed(1) + '% steps</td><td>________ V</td></tr>';
+      });
+      out += '</table><p class="hint">Set against measured voltage at the far end, not ' +
+        'by calculation alone — the transformer\'s own contribution is computed from an ' +
+        'impedance that is not yet confirmed.</p>';
+    }
+
+    /* Nameplate figures still missing, gathered from the findings that asked. */
+    var need = [];
+    S.panels.forEach(function (pn) {
+      if (pn.isStandby && !(num(pn.kw, 0) > 0)) {
+        need.push({ what: pn.tag + ' — stand-by machine, nameplate rated current', why: 'contributes nothing to the load, but draws full inrush on start' });
+      }
+    });
+    (S.pdbs || []).concat(S.pdps || []).forEach(function (b) {
+      if (LC.isBusbar(b) && !num(b.busbarIcw, 0)) {
+        need.push({ what: b.tag + ' — busbar short-time withstand from the certificate', why: 'required value is stated in the warnings' });
+      }
+    });
+    (S.pdbs || []).concat(S.pdps || []).forEach(function (b) {
+      if (b.prot && b.prot.trip && !num(b.prot.sd, 0) && !num(b.prot.ss, 0)) {
+        // only worth listing where something below it exists
+      }
+    });
+    if (need.length) {
+      out += '<h3 style="font-size:12px;margin:10px 0 3px">To be recorded</h3>';
+      out += '<table class="tbl"><tr><th>Item</th><th>Why</th><th>Recorded</th></tr>';
+      need.forEach(function (n) {
+        out += '<tr><td>' + esc(n.what) + '</td><td>' + esc(n.why) + '</td><td>________</td></tr>';
+      });
+      out += '</table>';
+    }
+
+    /* Certificates that turn assumptions into facts. */
+    var certs = [];
+    S.txs.forEach(function (tx) {
+      if (num(tx.impZStated, 0) !== true) {
+        certs.push(tx.tag + ' — measured percent impedance (assumed ' + num(tx.impZ, 6).toFixed(1) +
+          '%). Every fault level on this project is computed from it.');
+      }
+    });
+    if (certs.length) {
+      out += '<h3 style="font-size:12px;margin:10px 0 3px">Test certificates to obtain</h3><ul>';
+      certs.forEach(function (c) { out += '<li>' + esc(c) + '</li>'; });
+      out += '</ul>';
+    }
+    if (!need.length && !certs.length && !txs.length) {
+      out += '<p class="hint">Nothing outstanding.</p>';
+    }
+    return out;
+  }
+
+  /* Built from the finished document rather than maintained by hand, so it cannot
+     fall out of step with the sections it lists. */
+  function contentsBlock() {
+    var host = document.getElementById('printReport');
+    if (!host) return '';
+    var heads = host.querySelectorAll('h2');
+    if (!heads.length) return '';
+    var out = '<h2 style="font-size:13px;margin:14px 0 4px">Contents</h2><ol style="font-size:11px">';
+    heads.forEach(function (n) {
+      out += '<li>' + esc(String(n.textContent).replace(/^\\d+\\s*·\\s*/, '')) + '</li>';
+    });
+    return out + '</ol>';
+  }
   function viewSld() {
     var r = SLD.render(S);
     sldLast = r;
@@ -4491,7 +4640,11 @@
     h += '<h2 style="font-size:13px;margin:12px 0 4px">3 · Load schedule</h2>' + viewLoads();
     h += '<h2 style="font-size:13px;margin:12px 0 4px">4 · Cable and volt drop schedule</h2>' + viewCables();
     h += '<h2 style="font-size:13px;margin:12px 0 4px">5 · Design warnings</h2>' + viewAudit();
-    h += '<h2 style="font-size:13px;margin:12px 0 4px">6 · Basis and limitations</h2>' + viewNotes();
+    h += '<h2 style="font-size:13px;margin:12px 0 4px">6 · Bill of materials</h2>' + viewBom();
+    h += '<h2 style="font-size:13px;margin:12px 0 4px">7 · Protection and coordination</h2>' + viewProtection();
+    h += '<h2 style="font-size:13px;margin:12px 0 4px">8 · Commissioning sheet</h2>' + viewCommissioning();
+    h += '<h2 style="font-size:13px;margin:12px 0 4px">9 · Basis and limitations</h2>' + viewNotes();
+    h += contentsBlock();
     host.innerHTML = h;
     document.body.appendChild(host);
     /* form controls do not print their values — swap them for text */
