@@ -3030,7 +3030,7 @@
      stage is a procurement decision, not a setting. */
   function gradeForSelectivity() {
     var plan = LC.selectivityPlan(S);
-    var set = plan.filter(function (r) { return r.delay !== null; });
+    var set = plan.filter(function (r) { return r.delay !== null || r.pickup !== null; });
     var blocked = plan.filter(function (r) {
       return r.kind !== 'panel' && r.delay === null && r.reason &&
              r.reason !== 'nothing-below' && r.reason !== 'final-circuit';
@@ -3075,7 +3075,16 @@
       actions.unshift({ label: 'Set ' + changing.length + ' delay(s)', cls: 'primary', fn: function () {
         closeModal();
         pushUndo('grade for selectivity');
-        set.forEach(function (r) { r.item.prot.sd = r.delay; });
+        /* Three settings, not one. The long-time pickup decides where the hold
+           band sits, the short-time pickup where the hold begins, and the delay
+           how long it lasts — and on this installation the long-time pickup is
+           the one that does the work, because the overlaps sit on the boards
+           long-time bands rather than in the region a delay acts in. */
+        set.forEach(function (r) {
+          if (r.ir && r.ir !== num(r.item.prot.ir, 0)) r.item.prot.ir = r.ir;
+          if (r.pickup) r.item.prot.ss = r.pickup;
+          r.item.prot.sd = r.delay;
+        });
         renumber();
         commit(true);
         toast(changing.length + ' short-time delay(s) set · press <b>Audit</b> to re-check', 'good');

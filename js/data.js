@@ -155,10 +155,46 @@ var LS = (function () {
     return TRIP_STAGES[trip || 'TM'] || TRIP_STAGES.TM;
   }
 
+  /* A device's stages with its own settings folded in. tripStages() answers what
+     the TYPE can do; this answers what THIS unit is set to do, which is the only
+     question selectivity can be answered from. Blank settings fall back to the
+     type, and a thermal-magnetic device ignores a pickup that is not adjustable
+     on it rather than pretending one is. */
+  function stageSettings(prot) {
+    var stg = tripStages(prot && prot.trip);
+    var adjustable = stg.shortTime || prot && (prot.trip === 'eLSI' || prot.trip === 'LSI');
+    var out = {
+      shortTime: stg.shortTime,
+      instantaneous: stg.instantaneous,
+      /* where the hold starts, in multiples of the long-time setting */
+      ss: num(prot && prot.ss, 0) > 0 ? num(prot.ss) : null,
+      /* adjustable at all? a TM device's instantaneous is fixed by its bimetal */
+      ssAdjustable: !!stg.shortTime,
+      iiAdjustable: prot && (prot.trip === 'eLSI' || prot.trip === 'LSI')
+    };
+    if (out.ss === null && out.ssAdjustable) out.ss = 2;
+    var ii = num(prot && prot.ii, 0) > 0 ? num(prot.ii) : null;
+    if (ii !== null && out.iiAdjustable) out.instantaneous = ii;
+    return out;
+  }
+
   /* The standard short-time delays an electronic trip unit offers. A delay is
      only useful if it is one the manufacturer makes, so the search is over this
      list rather than over arithmetic. */
   var SHORT_TIME_DELAYS = [0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0];
+
+  /* Where the short-time stage starts, as a multiple of the long-time setting.
+     IEC 60947-2 gives Isd from 1.1 to 10 times In; electronic units commonly
+     reach below 1, and that is where the selectivity on this project lives, so
+     the list starts where the standard does rather than where it is convenient.
+     Listed in the order a person would scan it — smallest first, because lowering
+     it is what buys selectivity. */
+  var SHORT_TIME_PICKUPS = [1.1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+
+  /* Where the instantaneous stage starts. Fixed on thermal-magnetic and LI
+     units, which is why those appear at the top of the range only; an electronic
+     unit will pick up well below its own setting. */
+  var INSTANT_PICKUPS = [0.4, 0.6, 0.8, 1, 1.5, 2, 3, 4, 5, 6, 8, 10];
 
   var TRIP_CURVES = {
     /* IEC 60898-1 for the thermal band: 1.13 In shall not clear within an hour,
@@ -990,6 +1026,27 @@ var LS = (function () {
          nobody chose. Blank means the family envelope applies and the app says
          so when it reports the pair as non-selective. */
       sd: o.sd === undefined || o.sd === null ? null : num(o.sd),
+      /* Short-time PICKUP, as a multiple of the long-time setting. This is the
+         other half of the same thing and it was a constant, which is how thirteen
+         pairs of devices came to be reported as impossible to grade.
+
+         A short-time stage does two separate jobs and they were being done by one
+         number. It decides WHERE the deliberate hold starts, and it decides HOW
+         LONG it lasts. Only the second is a delay. The first is the current at
+         which the device stops following its long-time band and starts holding —
+         and on every LS, LSI and electronic unit it is adjustable, 1.1 to 10
+         times the setting, precisely so that a board can enter its hold band low
+         enough to clear the things below it.
+
+         Held at 2 times by default, which is a reasonable mid-range figure and
+         the value everything published so far used. */
+      ss: o.ss === undefined || o.ss === null ? null : num(o.ss),
+      /* Instantaneous PICKUP, as a multiple of the long-time setting. Fixed on a
+         thermal-magnetic device, adjustable on an electronic one over roughly
+         0.4 to 10 times, which is the range that lets a unit be set to clear a
+         short circuit in tens of milliseconds at currents where its frame is far
+         larger than its setting. Blank means the type's own figure applies. */
+      ii: o.ii === undefined || o.ii === null ? null : num(o.ii),
       /* frame rating — the largest the device is built for */
       frame: o.frame === undefined || o.frame === null ? null : num(o.frame),
       /* the rating it actually protects at */
@@ -1199,7 +1256,8 @@ var LS = (function () {
     CSA, METHODS, TEMP_FACTORS, GROUP_FACTORS, WITHSTAND, MAX_CABLE_RUNS,
     SIZES_A, SIZES_KVA, SIZES_KW, PHASES, VOLT_LV, VOLT_HV,
     maxDisconnectionTime, peMinCsa, PE_MIN_CSA, PE_MIN, DISC_TN, DISC_TT,
-    TRIP_STAGES, tripStages, SHORT_TIME_DELAYS,
+    TRIP_STAGES, tripStages, stageSettings, SHORT_TIME_DELAYS,
+    SHORT_TIME_PICKUPS, INSTANT_PICKUPS,
     VECTOR_GROUPS, blocksTriplen, lvNeutralEarthed, VEC_LV_DELTA,
     START_METHODS, LOAD_TORQUES,
     HARMONIC_SPECTRUMS, triplenFractionOf, defaultThd, MOTOR_CLASSES,

@@ -2033,7 +2033,13 @@ var LC = (function () {
       /* The largest fault this pair can see, at the lower device's busbar. A
          fault beyond that never reaches the lower device and is a breaking
          capacity question, not a grading one. */
-      var fKA = faultAt(p, item, kind === 'panel' ? 'panel' : kind);
+      /* The fault this pair can see, at the lower device own terminals.
+         deviceFaultKA() rather than the per-stage estimate: this is the last
+         place the old approximation survived, and it was the reason the grading
+         search and the grading check could disagree — the search verified a
+         setting against one figure and the check then tested it against another,
+         so a plan that had genuinely solved a pair still reported it. */
+      var fKA = deviceFaultKA(p, item, kind === 'panel' ? 'panel' : kind);
       var s = selectivity(item, kind, up, upKind, fKA ? fKA * 1000 : null);
       if (!s || s.pass) return;
 
@@ -5019,6 +5025,30 @@ function selectivityPlan(p) {
   /* Deepest boards first, so a board has already been told what everything
      below it presents before its own delay is chosen. */
   var seq = [];
+  /* Every device this pass touches, snapshotted, and put back at the end.
+
+     The search has to apply a candidate to score it, and the board above has to
+     see the winner while the board below is still being worked out — that cascade
+     is the whole reason the plan exists. But it is a PLAN, and a plan that quietly
+     leaves the design changed is a trap: it ran once here, found a candidate for
+     one board, wrote it onto the project, and the next load came up with a long-time
+     pickup the user had never chosen and could not see. One board's pickup drifted
+     from 1,250 A to 1,188 A and nothing on the screen said so.
+
+     So the candidates are applied and withdrawn, and the chosen settings are
+     returned for whoever asked to grade. Nothing survives this function unless the
+     caller applies it. */
+  var snapshot = [];
+  var remember = function (it) {
+    if (!snapshot.some(function (r) { return r.item === it; })) {
+      snapshot.push({ item: it, prot: it.prot ? Object.assign({}, it.prot) : null });
+    }
+  };
+  var restoreAll = function () {
+    snapshot.forEach(function (r) { r.item.prot = r.prot; });
+    snapshot.length = 0;
+  };
+
   p.dbs.forEach(function (b) { seq.push({ item: b, kind: 'db' }); });
   p.pdps.forEach(function (d) { seq.push({ item: d, kind: 'pdp' }); });
   p.pdbs.forEach(function (b) { seq.push({ item: b, kind: 'pdb' }); });
@@ -5026,6 +5056,7 @@ function selectivityPlan(p) {
   seq.forEach(function (node) {
     var it = node.item;
     if (!it.prot || it.prot.kind !== 'mccb') return;
+    remember(it);
     var parent = node.kind === 'db' ? get(p, 'pdp', it.pdpId)
              : node.kind === 'pdp' ? get(p, 'pdb', it.pdbId)
              : null;
@@ -5058,26 +5089,195 @@ function selectivityPlan(p) {
         'instantaneous at every fault current above ' + stg.instantaneous +
         ' × its own setting and cannot be made to hold at all.';
     } else {
-      var need = slowest * 1.25;
-      var pick = null;
-      for (var i = 0; i < D.SHORT_TIME_DELAYS.length; i++) {
-        if (D.SHORT_TIME_DELAYS[i] >= need) { pick = D.SHORT_TIME_DELAYS[i]; break; }
+      /* Search the settings this unit can actually be given, and check every
+         candidate with the same calculation the audit uses — not a rule of thumb
+         about what ought to separate. Two settings are in play, not one, and
+         they do different jobs: the PICKUP is where the deliberate hold begins
+         and the DELAY is how long it lasts. Only the second was ever searched,
+         which is why thirteen pairs came back saying they could not be graded
+         when on this project a setting change separates them.
+
+         The hold band has to start above the load the board really carries. Set
+         it below and the board trips on its own sustained overload inside the
+         short-time delay, which is a fault-protection device doing a load's job
+         — so that is a hard constraint and not a preference, and it is the reason
+         the pickup cannot simply be wound down to its lowest step.
+
+         Lowest pickup first, then lowest delay: the least intrusion into the
+         board's own behaviour that still works. Applying the winner as it goes,
+         because a board is graded against what is below it and the board below
+         has to be holding its chosen value while this one searches. */
+      var loadA = boardStats(p, it, node.kind).amp;
+
+      /* Everything below this board, and not only the boards.
+
+         A first attempt at this searched for the shortest delay that separates a
+         board from the board under it, and that is the wrong objective. On this
+         project it solved all three board pairs and turned ten circuit pairs into
+         fourteen: the boards were given 250 and 400 ms where they had held 800,
+         every board pair passed, and ten circuits underneath lost the margin they
+         had been getting from a longer hold. Thirteen pairs became fourteen. The
+         search was answering a question nobody had asked.
+
+         So the objective is what the settings actually achieve for everything
+         below, final circuits included — the largest number of things that clear
+         before this board does — and if no combination beats leaving the device
+         alone, it is left alone. A shorter delay that helps three boards and
+         hurts ten circuits is not a shorter delay, it is a worse board. */
+      var belowAll = kids.slice();
+      kids.forEach(function (k) {
+        if (k.kind === 'pdp') {
+          p.dbs.forEach(function (b3) { if (b3.pdpId === k.item.id) belowAll.push({ item: b3, kind: 'db' }); });
+          p.panels.forEach(function (pn) { if (pn.pdpId === k.item.id && !pn.dbId) belowAll.push({ item: pn, kind: 'panel' }); });
+        } else if (k.kind === 'db') {
+          p.panels.forEach(function (pn) { if (pn.dbId === k.item.id) belowAll.push({ item: pn, kind: 'panel' }); });
+        }
+      });
+      /* Two kinds of thing below a board, and they do not count the same.
+
+         Discrimination between a MAIN incomer and the board under it is a
+         requirement: a fault on one sub-board must not open the incomer feeding
+         the others. Discrimination between a board and its final circuits is
+         not required to be complete — BS 7671 and IEC 60364 ask for disconnection
+         within a stated time, and every installation on earth has partial
+         discrimination somewhere. Treating them as the same objective is what
+         made the search refuse to grade the main incomers: on this project doing
+         so costs about ten final circuits, and a flat count called that a loss.
+
+         So the score is weighted to put board separation first and circuits
+         second. The 1000 is only there to say "never in exchange", and there are
+         never a thousand sub-boards. */
+      /* Each child's own fault current does not depend on this board's settings,
+         so it is worked out once instead of on every candidate. Recomputing it
+         inside the search made a sweep of a couple of thousand combinations take
+         long enough to look like a hang. */
+      var ampsFor = belowAll.map(function (k) {
+        if (!k.item.prot) return null;
+        var fk = deviceFaultKA(p, k.item, k.kind);
+        return fk ? fk * 1000 : null;
+      });
+      function scoreWith(cand) {
+        var was = it.prot;
+        it.prot = cand;
+        var boardsOk = 0, circuitsOk = 0;
+        belowAll.forEach(function (k, ci2) {
+          if (!k.item.prot) return;
+          /* The same call the audit makes, with the same fault current, so a
+             candidate that scores here scores there by construction. */
+          var res = selectivity(k.item, k.kind, it, node.kind, ampsFor[ci2]);
+          if (res === null || res.pass) {
+            if (k.kind === 'panel') circuitsOk++; else boardsOk++;
+          }
+        });
+        it.prot = was;
+        return { score: boardsOk * 1000 + circuitsOk, boardsOk: boardsOk, circuitsOk: circuitsOk };
       }
-      if (pick === null) {
+      var base = scoreWith(it.prot);
+      var chosen = null, best = base, tried = 0;
+      /* The long-time pickup is adjustable on every unit of this kind, and it is
+         the setting the overlap actually turns on.
+
+         Every device on this project was proposed with the pickup at its frame
+         rating, which is the least selective setting there is: the higher the
+         pickup, the further out along the long-time band the board is when a
+         fault arrives, and the faster it is — and a board that is faster than
+         what it protects is the whole failure. The overlap on PDB8 sits at 7.8 kA,
+         which is 1.95 × its own pickup; set the pickup to 3,000 A instead, still
+         comfortably above the 2,788 A the board carries, and the same current is
+         2.6 × — above where the short-time stage starts, so the board is holding
+         its deliberate delay when the sub-board is not.
+
+         So the search runs over the pickup as well, within the only limits that
+         are not negotiable: it may not go below the load the board carries, or
+         the board trips on its own running current, and it may not go above the
+         frame, because that is the device. Both bounds are the manufacturer's.
+         Everything between them is a dial the engineer turns, and on this project
+         turning it is what grades the installation. */
+      var wantAll = base.boardsOk + belowAll.filter(function (k) { return k.kind !== 'panel'; }).length;
+      var stop = false;
+      var irSteps = [];
+      var frameA = num(it.prot.frame, 0) || num(it.prot.ir, 0);
+      if (frameA > 0) {
+        [1, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.5, 0.4].forEach(function (f) {
+          var v = Math.round(frameA * f);
+          if (v >= loadA && v <= frameA && irSteps.indexOf(v) < 0) irSteps.push(v);
+        });
+      }
+      if (!irSteps.length) irSteps = [num(it.prot.ir, 0)];
+      /* Three settings decide whether a pair separates: the long-time pickup,
+         where the hold begins, and how long it lasts. Every combination of those
+         is searched, but the pickup is swept coarsely — it changes the multiple
+         by a factor, and a quarter-turn of a dial is a different answer from a
+         whole one — and the search stops at the first that solves it, running
+         from the highest long-time pickup downwards so the answer is the least
+         change that works. */
+      for (var ir2 = 0; ir2 < irSteps.length && !stop; ir2++) {
+      for (var a = 0; a < D.SHORT_TIME_PICKUPS.length && !stop; a++) {
+        var ssA = D.SHORT_TIME_PICKUPS[a];
+        if (a > 0 && D.SHORT_TIME_PICKUPS[a] > 3) break;
+        if (!(ssA * irSteps[ir2] > loadA)) continue;
+        for (var b = 0; b < D.SHORT_TIME_DELAYS.length; b++) {
+          var sdA = D.SHORT_TIME_DELAYS[b];
+          tried++;
+          var cand = Object.assign({}, it.prot, { ss: ssA, sd: sdA, ir: irSteps[ir2] });
+          /* Strictly better, so ties keep the earlier candidate and the search
+             ends on the least intrusive setting that works. */
+          var got = scoreWith(cand);
+          if (got.score > best.score) {
+            best = got;
+            chosen = { ss: ssA, sd: sdA, ir: irSteps[ir2] };
+            /* Stop on the first pickup that solves it: the search runs from the
+               frame downwards, so the first one to work is the highest pickup
+               that works — the least change to the device's behaviour, and the
+               one that keeps the board protecting its own load with most margin. */
+            if (got.boardsOk === wantAll) { stop = true; break; }
+          }
+        }
+      }
+      }
+      if (!chosen) {
         rec.reason = 'insufficient-delay';
-        rec.detail = it.tag + ' would need a short-time delay longer than the ' +
-          D.SHORT_TIME_DELAYS[D.SHORT_TIME_DELAYS.length - 1] +
-          ' s largest a unit offers, because something below it presents ' +
-          msOrS(slowest) + '. A longer hold above is not the answer — the device ' +
-          'below is the slow one — and past about a second the hold is a fault ' +
-          'clearing risk in its own right.';
-      } else {
-        rec.delay = pick;
+        rec.detail = it.tag + ' holds nothing, and no combination of short-time ' +
+          'pickup and delay improves on that. Everything below it that cannot be ' +
+          'graded needs something other than a longer hold above — see the ' +
+          'selectivity findings, which say which device is wanted. The delay and ' +
+          'the pickup are both left as they are rather than changed for its own sake.';
+      }
+      if (chosen) {
+        rec.pickup = chosen.ss;
+        rec.delay = chosen.sd;
+        rec.ir = chosen.ir;
+        remember(it);
+        if (chosen.ir && chosen.ir !== num(it.prot.ir, 0)) it.prot.ir = chosen.ir;
+        /* Applied here rather than left for the caller, so the board above this
+           one searches against the value this board is actually holding. */
+        it.prot.ss = chosen.ss;
+        it.prot.sd = chosen.sd;
+        rec.reason = 'graded';
+        rec.detail = it.tag + ' set to ' + chosen.ir + ' A — above the ' +
+          loadA.toFixed(0) + ' A it carries — holding from ' + chosen.ss.toFixed(1) +
+          ' × that (' + Math.round(chosen.ss * chosen.ir) +
+          ' A, against ' + loadA.toFixed(0) + ' A of load) for ' +
+          msOrS(chosen.sd) + '. The hold band starts above the load so the board ' +
+          'does not trip on its own overload, and the delay is the shortest that ' +
+          'clears the sub-boards below it first, which is the pair that has to be ' +
+          'separated. ' + tried + ' setting combinations tried.' +
+          (best.boardsOk >= base.boardsOk && best.circuitsOk < base.circuitsOk
+            ? ' The trade is stated because it is real: this leaves ' +
+              (base.circuitsOk - best.circuitsOk) + ' final circuit(s) below this ' +
+              'board less discriminated than they would otherwise be. Complete ' +
+              'discrimination to a final circuit is not a requirement — the ' +
+              'disconnection time is, and it is checked separately — so the main ' +
+              'incomer is separated in exchange and the circuits are recorded as ' +
+              'partial. Say so if that is not what was wanted.'
+            : '');
       }
     }
     byItem[it.id] = rec;
     plan.push(rec);
   });
+
+  restoreAll();
 
   /* The final circuits, listed so the plan accounts for the whole installation.
      They are never given a delay: a device out at the end of a feeder is what it

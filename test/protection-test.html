@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=443"></script>
-<script src="../js/calc.js?v=443"></script>
+<script src="../js/data.js?v=459"></script>
+<script src="../js/calc.js?v=459"></script>
 <script>
 (function () {
   var results = [];
@@ -2623,8 +2623,38 @@
   var afterGraded = LC.audit(gSite.p).filter(function (f) {
     return /not selectively graded/.test(f.title);
   }).length;
-  check('and applying it removes the pairs it was built to fix',
-    afterGraded < beforeGraded, true);
+  /* The old assertion here was that applying the plan must reduce the number of
+     findings. It held while the search looked only for the shortest delay that
+     separated one board from the board under it, and it stopped holding when the
+     objective became what the settings achieve for everything below — because on
+     this project that search solved three board pairs and turned ten circuit
+     pairs into fourteen, and a plan that does that is not a plan.
+
+     So the property is the one that is actually wanted: the plan never leaves the
+     installation worse than it found it, and every board it CLAIMS to have graded
+     is graded when the audit — a different code path — is asked. A plan that
+     reports success the check does not agree with has verified nothing. */
+  check('and applying it never leaves the installation worse than it found it',
+    afterGraded <= beforeGraded, true);
+  var claimed = gp.filter(function (r) { return r.reason === 'graded'; });
+  check('and every board it claims to have graded is graded, by the audit and not by the plan',
+    claimed.length > 0 && claimed.every(function (r) {
+      return !LC.audit(gSite.p).some(function (f) {
+        return /not selectively graded/.test(f.title) && f.scope === r.kind && f.id === r.item.id;
+      });
+    }), true);
+  /* The pickup and the delay do different jobs, and the search has to respect
+     the constraint that separates them: a hold band below the load the board
+     carries would trip the board on its own sustained overload. */
+  check('the hold band starts above the load the board really carries',
+    claimed.every(function (r) {
+      return !r.pickup || r.pickup * r.item.prot.ir > LC.boardStats(gSite.p, r.item, r.kind).amp;
+    }), true);
+  check('and both are settings a unit actually offers',
+    claimed.every(function (r) {
+      return LS.SHORT_TIME_PICKUPS.indexOf(r.pickup) >= 0 &&
+        LS.SHORT_TIME_DELAYS.indexOf(r.delay) >= 0;
+    }), true);
   /* ...and the remaining ones are the ones no delay can reach, not leftovers. */
   var left = LC.audit(gSite.p).filter(function (f) { return /not selectively graded/.test(f.title); });
   check('every one left says a delay cannot reach it',
