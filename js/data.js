@@ -410,7 +410,16 @@ var LS = (function () {
       i = 0;
       for (var k = 0; k < CSA.length; k++) if (CSA[k] <= csa) i = k;
     }
-    return PE_MIN[i];
+    var v = PE_MIN[i];
+    /* A lookup table must not be able to hand back nothing. Past the last
+       listed size the rule is half the phase conductor, which is what the table
+       is doing at the top of its range anyway, snapped down to a size that
+       exists. Returning undefined here is what let a whole class of fault hide
+       behind an arithmetic fallback three functions away. */
+    if (v === undefined) {
+      v = CSA.filter(function (x) { return x <= csa / 2; }).pop() || CSA[CSA.length - 1];
+    }
+    return v;
   }
 
   /* ----------------------------------------------------------------------

@@ -1992,14 +1992,15 @@ var LC = (function () {
       var own = vp.steps.filter(function (s) { return s.kind === 'panel' && !s.unknown; })[0];
       var upstream = vp.wiring.volts - (own ? own.volts : 0);
       add('bad', 'panel', pn.id, pn.tag + ' volt drop from the transformer is ' +
-        vp.wiring.pct.toFixed(2) + '% — over the ' + vp.limit + '% limit',
+        vp.wiring.pct.toFixed(2) + '% — over the ' + vp.limit + '% limit' +
+        (vp.lighting ? ' for a lighting circuit' : ''),
         'Total from the transformer to this circuit is ' + vp.wiring.pct.toFixed(2) +
         '%, of which ' + (own ? own.volts.toFixed(2) + ' V' : 'nothing') + ' is this circuit’s own ' +
         (own && own.csa ? own.csa + ' mm² over ' + own.len + ' m' : 'feeder') +
         ' and ' + upstream.toFixed(2) + ' V is everything above it' +
         (vp.incomplete ? ' — and ' + vp.unknownCount + ' of the hops above it have no route data' : '') +
         '. The transformer’s own ' + vp.transformer.pct.toFixed(2) + '% is a tap setting rather than a ' +
-        'design limit and is not counted here. BS 7671 allows 3% for lighting and 5% for other uses. ' +
+        'design limit and is not counted here. The limit applied is ' + vp.limitWhy + '. ' +
         'Where the drop is mostly in the final leg, up-sizing it is the cheapest fix because it is ' +
         'usually the shortest; where it is mostly upstream, the fix belongs in the board feeder, and ' +
         'moving the circuit to a nearer board can be cheaper than either.',
@@ -2018,6 +2019,57 @@ var LC = (function () {
         'joints are not modelled at all, so these figures are a small under-estimate.',
         'vdrop-incomplete', vgaps.length, 'circuits');
     }
+
+    /* The tap. Not a design fault and not judged as one — the wiring drop is
+       what the design controls, and a transformer is expected to be tapped to
+       cancel its own share. But the app now computes the transformer drop for
+       every circuit and then throws it away, and on this project it is 4.2–4.9%,
+       which is larger than every other drop on the site combined.
+
+       So the number that matters for commissioning is the one nobody can get
+       without doing this walk: with the tap at nominal, how far below nominal
+       voltage does the far end of the installation sit? On this project 57 of 97
+       circuits finish above the 5% limit end to end while the wiring is inside
+       it at every point — which is not a defect in the cables, it is a tap
+       setting that has not been made.
+
+       Reported as one finding per transformer, because that is the object the
+       remedy is on, and at warn rather than bad: the wiring passes, and the
+       remedy is a commissioning decision rather than a design change. */
+    p.txs.forEach(function (tx) {
+      var mine = vprof.profiles.filter(function (v) {
+        /* Matched on the path's own transformer hop rather than a tx field the
+           profile may not carry, so the test is against something the walk
+           actually recorded. */
+        return v.steps.some(function (st) { return st.kind === 'tx' && st.id === tx.id; });
+      });
+      if (!mine.length) return;
+      var over = mine.filter(function (v) { return v.overIncludingTransformer; });
+      var worst = mine.slice().sort(function (a, b) { return b.pct - a.pct; })[0];
+      var best = mine.slice().sort(function (a, b) { return a.pct - b.pct; })[0];
+      var txDrops = mine.map(function (v) { return v.transformer.pct; });
+      var lo = Math.min.apply(null, txDrops), hi = Math.max.apply(null, txDrops);
+      if (!over.length) return;
+      /* What the tap has to give up for the worst end to arrive at its limit. */
+      var need = worst.limit - (worst.pct - worst.transformer.pct);
+      add('warn', 'tx', tx.id,
+        tx.tag + ' tap — ' + over.length + ' circuit(s) finish outside the limit end to end',
+        'The transformer contributes ' + lo.toFixed(2) + '–' + hi.toFixed(2) +
+        '% at the loading on this project, against a wiring drop of ' +
+        best.wiring.pct.toFixed(2) + '–' + worst.wiring.pct.toFixed(2) +
+        '% which is inside every limit. The cables are not the problem: with the ' +
+        'transformer at nominal tap the far end of this installation sits ' +
+        best.pct.toFixed(2) + '–' + worst.pct.toFixed(2) + '% below nominal, and ' +
+        over.length + ' of ' + mine.length + ' circuits finish above the ' +
+        worst.limit + '% limit at the supply terminals. Setting the tap to ' +
+        (need > 0 ? '+' : '') + need.toFixed(1) + '% brings the worst of them to ' +
+        worst.limit + '%; the near end then runs high, which is why the tap is set ' +
+        'against measured voltage at the far end rather than by calculation alone. ' +
+        'This figure rests on the ' + num(tx.impZ, 6).toFixed(1) +
+        '% impedance assumed for this transformer, so it moves with that assumption.',
+        'tap-setting', over.length, 'circuits');
+    });
+
     /* Motor overload relay class, and the let-through a device permits.
 
        Both are the same shape of problem: a cable is asked whether it survives
@@ -2623,6 +2675,11 @@ function clearingTimeAt(prot, multiple) {
        The temperature matters here and nowhere else in the app, because this is
        the only check where the resistance sets the current rather than merely
        reducing it. */
+    /* Dividing by a missing size is how a 500 mm² feeder ended up with an
+       earth fault loop of 0.29 Ω. The size is validated here rather than trusted,
+       because a silent fallback to 1 mm² is worse than no answer: it produces a
+       number, and the number goes in a report. */
+    if (!(peCsa > 0)) return null;
     var rPerKm = function (csa) { return (22.5 * 1.15) / num(csa, 1); };
     var r1 = rPerKm(cable.csa) * km / runs;
     var r2 = rPerKm(peCsa) * km / runs;
@@ -3550,6 +3607,10 @@ function clearingTimeAt(prot, multiple) {
         /* No cable stated. Not zero — unknown. The hop is recorded so the total
            is visibly incomplete rather than quietly optimistic. */
         steps.push({
+          /* The id as well as the tag: a tag is editable and a caller matching on
+             it silently matches nothing after a rename, which is how the tap
+             finding ended up finding no transformer at all. */
+          id: hop.item.id,
           tag: hop.item.tag || hop.item.ref || '—', kind: hop.kind,
           volts: 0, unknown: true, amp: below.amp,
           label: hop.cable && num(hop.cable.len, 0)
@@ -3560,6 +3621,7 @@ function clearingTimeAt(prot, multiple) {
       }
       volts += drop;
       steps.push({
+        id: hop.item.id,
         tag: hop.item.tag || hop.item.ref || '—', kind: hop.kind,
         volts: drop, amp: below.amp, pf: below.pf,
         loading: loading, overloaded: capped,
@@ -3589,10 +3651,39 @@ function clearingTimeAt(prot, multiple) {
       if (s.kind === 'tx') txVolts += s.volts; else wiringVolts += s.volts;
     });
 
-    var limit = opts.limit === undefined ? num(p.design.vdropLimitLv, 3) : opts.limit;
+    /* Which limit applies, and why.
+
+       There are two and they are not interchangeable. BS 7671 allows 3% of the
+       supply voltage for a lighting final circuit and 5% for any other final
+       circuit, and 3% for the distribution wiring between boards. Applying the
+       distribution figure to a final circuit judged every power circuit against
+       the wrong number — and the finding's own text said "3% for lighting and 5%
+       for other uses" while the arithmetic underneath it used 3% for both.
+
+       The project carries both settings; the final-circuit one was never read
+       anywhere in the app. Lighting is taken from the declared load type and the
+       reference, and where neither says so the more permissive figure is used:
+       a limit that cannot be justified from the data should not be the one that
+       fails a circuit. */
+    var lighting = /light/i.test((D.PANEL_TYPES[pn.type] || {}).name || '') ||
+                   /light/i.test(pn.name || '') || /light/i.test(pn.tag || '');
+    var limit, limitWhy;
+    if (opts.limit !== undefined) {
+      limit = opts.limit;
+      limitWhy = 'the figure supplied for this call';
+    } else if (lighting) {
+      limit = num(p.design.vdropLimitLv, 3);
+      limitWhy = '3% for a lighting final circuit';
+    } else if (pn.__kind === 'panel' || !pn.__kind) {
+      limit = num(p.design.vdropLimitFinal, 5);
+      limitWhy = '5% for a final circuit that is not lighting';
+    } else {
+      limit = num(p.design.vdropLimitLv, 3);
+      limitWhy = '3% for the distribution wiring between boards';
+    }
     return {
       volts: volts, pct: pct, steps: steps,
-      volt: v, limit: limit,
+      volt: v, limit: limit, limitWhy: limitWhy, lighting: lighting,
       /* the design figure: what the cables cost */
       wiring: { volts: wiringVolts, pct: (wiringVolts / v) * 100 },
       /* what the tap has to cancel */
@@ -4442,6 +4533,7 @@ function selectivityBand(s) {
     if (key === 'pdp-cap') return 'distribution board above the incomer limit';
     if (key === 'vdrop-path') return 'circuit whose total volt drop from the transformer exceeds the limit';
     if (key === 'vdrop-incomplete') return 'circuits whose voltage drop profile cannot be completed';
+    if (key === 'tap-setting') return 'transformer whose far end finishes outside the limit end to end';
     if (key === 'impz-assumed') return 'transformers whose impedance is assumed rather than stated';
     if (key === 'impz-stated') return 'transformer fault levels';
     if (key === 'spare-way') return 'unterminated spare ways';
@@ -4914,7 +5006,20 @@ function selectivityBand(s) {
   function feederLen(p, item) {
     if (!item || !item.pos) return 0;
     var parent = null, kind = item.__kind || kindOf(item);
-    if (kind === 'panel') parent = (item.dbId && get(p, 'db', item.dbId)) || get(p, 'pdp', item.pdpId);
+    /* A circuit sits on a sub-board, a distribution board or a main board, and
+       the main board case was missing. A panel fed straight off a main board
+       carries pdbId and no pdpId, so both of the original lookups returned
+       nothing, the parent stayed null and the length came back zero — with no
+       error, because a zero length is a valid answer to the question asked.
+
+       Eight circuits fed off the main boards got it, and a voltage drop profile
+       that cannot be completed because one hop's length is unknown is
+       optimistic by an unknown amount. The engineering answer on a panel is to
+       measure it; the app's job is to ask, and to offer the drawn distance as
+       the starting point rather than leave a blank that reads as zero. */
+    if (kind === 'panel') {
+      parent = (item.dbId && get(p, 'db', item.dbId)) || get(p, 'pdp', item.pdpId) || get(p, 'pdb', item.pdbId);
+    }
     else if (kind === 'db') parent = get(p, 'pdp', item.pdpId);
     else if (kind === 'pdp') parent = get(p, 'pdb', item.pdbId);
     else if (kind === 'pdb') parent = get(p, 'tx', item.txId);
