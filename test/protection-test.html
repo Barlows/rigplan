@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=408"></script>
-<script src="../js/calc.js?v=408"></script>
+<script src="../js/data.js?v=418"></script>
+<script src="../js/calc.js?v=418"></script>
 <script>
 (function () {
   var results = [];
@@ -2551,6 +2551,65 @@
     liRow && liRow.delay === null && liRow.reason === 'no-short-time', true);
   check('and the reason says what is needed instead',
     /LS or LSI/.test(liRow.detail || ''), true);
+
+  /* ------------------------------------------------------------- busbars ---
+     Above about 2,500 A a feeder is not a cable. Eight parallel 500 mm² cores
+     reach about 4,088 A and stop, so a transformer incomer above that is a busbar
+     section — as every one of them is actually built.
+
+     The app had a busbar rating field, stored it, exported it to the schedule and
+     the JSON, and never checked it. So a main board whose incomer really was a
+     busbar was reported as needing a cable that cannot exist, with no way to say
+     otherwise: an error the engineer could not close because the answer was a
+     field the app already had and ignored. */
+  var bb = site();
+  /* A circuit on the board, so there is a load for the busbar rating to be
+     measured against — with nothing on it, every rating passes and the check
+     would look right for the wrong reason. */
+  var bbCircuit = load(bb.p, bb.pdp, 60, 0.9);
+  bb.pdb.incomerA = 5000;
+  bb.pdb.prot = LS.newProt({ kind: 'mccb', ir: 5000, frame: 5000, icu: 80, trip: 'LS' });
+  bb.pdb.cable = { csa: 500, runs: 8, cores: 4, len: 7, method: 'XL-A1', group: 2, ambient: 40, sheathed: true };
+  LC.applyNumbering(bb.p);
+  var undeclared = LC.audit(bb.p).filter(function (f) { return /above what a cable can carry/.test(f.title); });
+  check('a cable incomer that no cable can carry is still reported', undeclared.length, 1);
+  check('and it says a busbar is the answer, and names the field',
+    /wants a busbar/.test(undeclared[0].detail) && /Busbar field/.test(undeclared[0].detail), true);
+
+  bb.pdb.busbarA = 5000;
+  check('and it stops once a busbar is declared',
+    LC.audit(bb.p).filter(function (f) { return /above what a cable can carry/.test(f.title); }).length, 0);
+  check('a declared busbar is recognised as one', LC.isBusbar(bb.pdb), true);
+  check('and one without it is not', LC.isBusbar({ busbarA: null }), false);
+  /* The cable checks stop; the busbar's own two questions are asked instead. */
+  check('the cable thermal withstand check does not apply to a busbar',
+    LC.audit(bb.p).filter(function (f) { return /busbar/.test(f.title) && /cannot survive/.test(f.title); }).length, 0);
+  check('but its short-time withstand is asked for, because nothing else answers it',
+    LC.audit(bb.p).some(function (f) { return /busbar short-time withstand not stated/.test(f.title); }), true);
+  /* A busbar rated below the load it carries is a fault in its own right. This
+     site's load is about 96 A, so the rating has to be under that rather than
+     merely "small". */
+  bb.pdb.busbarA = 10;
+  check('a busbar below the load it carries is reported',
+    LC.audit(bb.p).some(function (f) { return /busbar is below the load/.test(f.title); }), true);
+  /* The withstand is a certified figure, compared against the fault level. */
+  bb.pdb.busbarA = 5000;
+  var fl = LC.faultAt(bb.p, bb.pdb, 'pdb');
+  LC.applyNumbering(bb.p);
+  bb.pdb.busbarIcw = Math.max(1, Math.round(fl * 2));
+  bb.pdb.busbarIcwT = 1;
+  check('a busbar comfortably above the fault level is accepted',
+    LC.audit(bb.p).filter(function (f) { return /busbar short-time withstand/.test(f.title); }).length, 0);
+  bb.pdb.busbarIcw = Math.max(1, Math.round(fl * 0.5));
+  check('one below it is a fault, because the busbar would be destroyed first',
+    LC.audit(bb.p).some(function (f) {
+      return /busbar short-time withstand is below/.test(f.title) && f.level === 'bad';
+    }), true);
+  bb.pdb.busbarIcw = Math.max(1, Math.round(fl * 1.1));
+  check('one just above it is a warning, not a fault',
+    LC.audit(bb.p).some(function (f) {
+      return /busbar short-time withstand is marginal/.test(f.title) && f.level === 'warn';
+    }), true);
 
   /* ------------------------------------------------------- everything at once */
   var z = site();

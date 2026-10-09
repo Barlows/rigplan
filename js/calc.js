@@ -488,6 +488,81 @@ var LC = (function () {
      commercial and standards decision — some specifications set a lower figure,
      and a site with a 630 A transformer has no business with a 1,600 A board
      whatever the rule says. */
+  /* Is this supply's feeder a busbar rather than a cable?
+
+     Above about 2,500 A a feeder is not a cable at all. Eight parallel 500 mm²
+     cores reach about 4,088 A in this installation and stop, and a transformer
+     incomer above that is a busbar section from the transformer to the main
+     board — which is how every one of them is built.
+
+     The app had a busbar rating field, stored it, exported it to the schedule and
+     the JSON, and never checked it. So a main board whose incomer was genuinely
+     a busbar was reported as needing a cable that cannot exist, with no way to
+     say otherwise: an error the engineer could not resolve because the answer was
+     a field the app already had and ignored.
+
+     A busbar is a conductor, so it has its own two checks — its rating against
+     the load, and its short-time withstand against the fault level — and neither
+     of them is a cable-table lookup. The withstand is what matters: a busbar that
+     carries the current can still be destroyed by the fault it is supposed to
+     survive, and that is a specification rather than a calculation. */
+  function isBusbar(item) {
+    return !!(item && num(item.busbarA, 0) > 0);
+  }
+
+  /* The busbar's own two questions: can it carry the load, and can it survive
+     the fault. Returns null where there is nothing to check. */
+  function busbarCheck(p, item, kind, loadA, faultKA) {
+    if (!isBusbar(item)) return null;
+    var rating = num(item.busbarA, 0);
+    var icw = num(item.busbarIcw, 0);
+    var icwT = num(item.busbarIcwT, 1) || 1;
+    var problems = [];
+    if (loadA > 0 && loadA > rating) {
+      problems.push({
+        level: 'bad',
+        title: item.tag + ' busbar is below the load it carries',
+        detail: 'The busbar is rated ' + rating + ' A and carries ' + loadA.toFixed(0) +
+          ' A. A main board incomer busbar is chosen for the transformer rating, ' +
+          'not for the load it happens to carry today, so this is either a busbar ' +
+          'that is too small for the transformer or a load figure worth rechecking.'
+      });
+    }
+    if (faultKA && icw > 0 && icw < faultKA) {
+      problems.push({
+        level: 'bad',
+        title: item.tag + ' busbar short-time withstand is below the fault level',
+        detail: 'Rated ' + icw + ' kA for ' + (icwT * 1000).toFixed(0) +
+          ' ms against a calculated fault of ' + faultKA.toFixed(1) + ' kA. The busbar would be ' +
+          'destroyed before the device could open. This is the figure the switchgear ' +
+          'manufacturer certifies for the assembly — Icw, the permitted short-circuit current ' +
+          'for the stated time — and it is a specification rather than something derived, ' +
+          'so it has to come from the data for that busbar system rather than be assumed.'
+      });
+    } else if (faultKA && icw > 0 && icw < faultKA * 1.25) {
+      problems.push({
+        level: 'warn',
+        title: item.tag + ' busbar short-time withstand is marginal',
+        detail: icw + ' kA for ' + (icwT * 1000).toFixed(0) + ' ms against a calculated ' +
+          faultKA.toFixed(1) + ' kA. The fault level rests on an assumed transformer impedance, ' +
+          'so leave margin on it.'
+      });
+    } else if (faultKA && !(icw > 0)) {
+      problems.push({
+        level: 'info',
+        title: item.tag + ' busbar short-time withstand not stated',
+        detail: 'The busbar is declared at ' + rating + ' A, which answers whether it can ' +
+          'carry the load, but nothing says what fault current it is permitted to withstand. ' +
+          'That figure — Icw for a stated time — is what decides whether it survives a short ' +
+          'circuit, and it comes from the certification of the busbar system itself. ' +
+          'Set it and the ' +
+          'check becomes a real one; leave it blank and the most important question about ' +
+          'this conductor is unanswered.'
+      });
+    }
+    return problems.length ? { level: 'bad', problems: problems } : null;
+  }
+
   function pdpMaxA(p) {
     return num(p && p.design && p.design.pdpMaxIncomer, 1600);
   }
@@ -1603,10 +1678,19 @@ var LC = (function () {
          does not have. */
       if (deviceOnly) return;
 
+      /* A busbar feeder has no cable, so every comparison against a cable table
+         below is meaningless — and comparing a 5,000 A incomer with the biggest
+         cable in the schedule reports a fault that cannot be fixed, when the
+         feeder is a busbar and always was. Its own two questions are asked
+         instead: its rating against the load, and its withstand against the
+         fault. */
+      var bb = busbarCheck(p, item, kind, loadA, faultKA);
+      if (bb) bb.problems.forEach(function (pr) { add(pr.level, kind, item.id, pr.title, pr.detail); });
+
       /* The device protects the conductor as much as the load. A device set
          well above the cable's ampacity will let the cable reach its thermal
          limit before the device trips. */
-      if (cableA && ir > cableA) {
+      if (!isBusbar(item) && cableA && ir > cableA) {
         var ceiling = maxCableA(p, item.cable || {});
         if (ceiling && ir > ceiling) {
           /* Past what parallel copper can carry, a bigger core does not help.
@@ -1615,13 +1699,17 @@ var LC = (function () {
           add('bad', kind, item.id, item.tag + ' incomer is above what a cable can carry',
             'A ' + ir + ' A device needs a feeder rated ' + ir + ' A. The most ' + D.MAX_CABLE_RUNS +
             ' parallel ' + D.CSA[D.CSA.length - 1] + ' mm² cables give is about ' + Math.round(ceiling) +
-            ' A in this installation, so this incomer wants a busbar, not more copper.');
+            ' A in this installation, so this incomer wants a busbar, not more copper — above about ' +
+            '2,500 A it is one in practice, from the transformer to the main board. Declare it in the ' +
+            'Busbar field on this board: the cable checks then stop asking and the busbar\'s own rating ' +
+            'and short-time withstand are checked instead, which is the pair of questions that actually ' +
+            'decides whether the conductor survives.');
         } else {
           add('bad', kind, item.id, item.tag + ' device too large for its cable',
             'Set to ' + ir + ' A on a cable rated ' + cableA.toFixed(0) +
             ' A. The cable will overheat before the device trips. The device must not exceed the cable rating.');
         }
-      } else if (cableA && ir > cableA * 0.95) {
+      } else if (!isBusbar(item) && cableA && ir > cableA * 0.95) {
         /* Keyed, because on a real project this fired on ten boards and ten
            circuits and the ten rows said the same thing in ten places: the
            cable is right, and the headroom on it is under 5%. Worth knowing,
@@ -1636,7 +1724,7 @@ var LC = (function () {
       var st = boardStats(p, b, 'pdb');
       var cab = b.cable && b.cable.csa ? cableRating(b.cable) : null;
       checkProt(p, b, 'pdb', st.amp, cab && cab.derated, st.faultKA);
-      checkWithstandFinding(p, b, 'pdb', st.faultKA);
+      if (!isBusbar(b)) checkWithstandFinding(p, b, 'pdb', st.faultKA);
       checkReactive(p, b, 'pdb', st);
       checkEarthFault(p, b, 'pdb');
       checkNeutral(p, b, 'pdb', st);
@@ -1645,7 +1733,7 @@ var LC = (function () {
       var st = boardStats(p, d, 'pdp');
       var cab = d.cable && d.cable.csa ? cableRating(d.cable) : null;
       checkProt(p, d, 'pdp', st.amp, cab && cab.derated, st.faultKA);
-      checkWithstandFinding(p, d, 'pdp', st.faultKA);
+      if (!isBusbar(d)) checkWithstandFinding(p, d, 'pdp', st.faultKA);
       checkReactive(p, d, 'pdp', st);
       checkEarthFault(p, d, 'pdp');
       checkNeutral(p, d, 'pdp', st);
@@ -1654,7 +1742,7 @@ var LC = (function () {
       var st = boardStats(p, b, 'db');
       var cab = b.cable && b.cable.csa ? cableRating(b.cable) : null;
       checkProt(p, b, 'db', st.amp, cab && cab.derated, st.faultKA);
-      checkWithstandFinding(p, b, 'db', st.faultKA);
+      if (!isBusbar(b)) checkWithstandFinding(p, b, 'db', st.faultKA);
       checkReactive(p, b, 'db', st);
       checkEarthFault(p, b, 'db');
     });
@@ -5960,6 +6048,7 @@ function selectivityBand(s) {
     peNeededCsa,
     startMethod, startingCurrentA, startingCheck, sourceImpedanceAt, curveInstantaneousMultiple, torqueNeeded,
     isMotorLoad, isSpare, minimumCsa, cableShortfalls, csaForFault, pdpMaxA, usableA,
+    isBusbar, busbarCheck,
     SELECTIVITY_STEPS,
     choosePdp, assignPanel, createPdpFor, feederLen, syncLen,
     sizeCablesFor, sizeCablesForPdb, sizeCablesForDb, suggestDbFeeder, sizeCableForPanel, sizeAll, feederAmp, needsSizing,

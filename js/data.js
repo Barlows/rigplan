@@ -565,6 +565,16 @@ var LS = (function () {
       num: p.num === undefined ? null : p.num,
       ref: p.ref === undefined || p.ref === null ? '' : p.ref,
       txId: p.txId || null, incomerA: num(p.incomerA, 1600), phases: '3', spareWays: 0,
+      /* Busbar incomer. Above about 2,500 A a feeder is a busbar rather than a
+         cable, and a main board fed straight from a transformer is where that
+         happens. Blank means the incomer is cable, which is right for most boards
+         and impossible for a large one — so the audit asks rather than assumes.
+         busbarIcw is the permitted short-circuit current for busbarIcwT seconds:
+         a busbar that carries the load can still be destroyed by the fault it
+         exists to survive, and that figure is certified, not calculated. */
+      busbarA: p.busbarA === undefined ? null : num(p.busbarA),
+      busbarIcw: p.busbarIcw === undefined ? null : num(p.busbarIcw),
+      busbarIcwT: p.busbarIcwT === undefined || p.busbarIcwT === null ? null : num(p.busbarIcwT),
       pos: p.pos || { x: 10, y: 12 }, notes: '',
       /* Power factor correction connected at this board. A bank is specified by
          its output and its detuning, because the detuning is not an accessory —
@@ -580,7 +590,9 @@ var LS = (function () {
       id: uid('pdp'), tag: p.tag || 'PDP', name: p.name || 'Distribution board',
       num: p.num === undefined ? null : p.num,
       ref: p.ref === undefined || p.ref === null ? '' : p.ref,
-      pdbId: p.pdbId || null, incomerA: num(p.incomerA, 400), busbarA: null, phases: '3',
+      pdbId: p.pdbId || null, incomerA: num(p.incomerA, 400), busbarA: null,
+      busbarIcw: p.busbarIcw === undefined ? null : num(p.busbarIcw),
+      busbarIcwT: p.busbarIcwT === undefined || p.busbarIcwT === null ? null : num(p.busbarIcwT), phases: '3',
       spareWays: 4,
       /* total ways in the enclosure. Null means "not stated", in which case the
          audit cannot say whether the circuits fit and says nothing — better
@@ -813,6 +825,8 @@ var LS = (function () {
       num: p.num === undefined ? null : p.num,
       ref: p.ref === undefined || p.ref === null ? '' : p.ref,
       pdpId: p.pdpId || null, incomerA: num(p.incomerA, 125), busbarA: null,
+      busbarIcw: p.busbarIcw === undefined ? null : num(p.busbarIcw),
+      busbarIcwT: p.busbarIcwT === undefined || p.busbarIcwT === null ? null : num(p.busbarIcwT),
       phases: '3', spareWays: 12, enclosure: p.enclosure || 'Acti9', ways: num(p.ways, 36),
       serves: p.serves || 'lighting, small power',
       pos: p.pos || { x: 17, y: 12 }, notes: '',

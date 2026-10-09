@@ -836,6 +836,43 @@
       '<div class="hint">' + note + '</div>');
   }
 
+  /* The busbar's own two numbers, shown only where there is a busbar.
+
+     The rating answers whether it can carry the load. The withstand — Icw, the
+     permitted short-circuit current for a stated time — is what decides whether
+     it survives a fault, and it is a certified figure rather than something the
+     app can derive. Offering it only once a busbar is declared keeps the form
+     from asking a question about a conductor that is a cable.
+
+     Said so where it is asked, because a busbar declared with no withstand is the
+     case where the most important question about the conductor is unanswered and
+     nothing on the form would say so. */
+  function busbarFields(kind, o) {
+    if (!LC.isBusbar(o)) return '';
+    var icw = o.busbarIcw === null || o.busbarIcw === undefined ? '' : o.busbarIcw;
+    var icwT = o.busbarIcwT === null || o.busbarIcwT === undefined ? '' : o.busbarIcwT;
+    var fl = LC.faultAt(S, o, kind);
+    var note;
+    if (icw === '') {
+      note = 'Not stated. The rating above says the busbar can carry the load; nothing yet says ' +
+        'whether it survives the ' + (fl ? fl.toFixed(1) + ' kA' : 'full') +
+        ' fault. Icw is the figure the busbar system is certified for, at a stated time.';
+    } else if (fl && num(icw, 0) < fl) {
+      note = 'Rated ' + icw + ' kA for ' + (icwT === '' ? '1' : icwT) + ' s against a calculated ' +
+        fl.toFixed(1) + ' kA. The busbar would be destroyed before the device could open.';
+    } else if (fl) {
+      note = 'Rated ' + icw + ' kA for ' + (icwT === '' ? '1' : icwT) + ' s against a calculated ' +
+        fl.toFixed(1) + ' kA — ' + ((icw / fl - 1) * 100).toFixed(0) +
+        '% margin. The fault level rests on the transformer impedance on the main board.';
+    }
+    return fRow('Busbar Icw', '<span class="unit">' +
+        nIn(kind, o.id, 'busbarIcw', o.busbarIcw, { step: 5, min: 0, unit: 'kA' }) +
+        '<span class="u">kA</span></span> for <span class="unit">' +
+        nIn(kind, o.id, 'busbarIcwT', o.busbarIcwT === null || o.busbarIcwT === undefined ? 1 : o.busbarIcwT,
+            { step: 0.1, min: 0 }) + '<span class="u">s</span></span>') +
+      '<div class="hint">' + note + '</div>';
+  }
+
   function protFields(o, kind) {
     if (!o.prot) o.prot = LS.newProt({});
     var d = o.prot;
@@ -1140,6 +1177,7 @@
       '<div class="fieldset"><h4>Board rating</h4>' +
       fRow('Incomer', '<input class="inp" type="number" list="dlIncomer" data-bind="num" data-kind="pdb" data-id="' + o.id + '" data-f="incomerA" value="' + o.incomerA + '"> <span style="font-size:10px;color:var(--fg-mute)">A</span>') +
       fRow('Busbar', '<input class="inp" type="number" list="dlIncomer" data-bind="num" data-kind="pdb" data-id="' + o.id + '" data-f="busbarA" value="' + (o.busbarA || '') + '" placeholder="= incomer">') +
+      busbarFields(kind, o) +
       fRow('Phases', selIn('pdb', o.id, 'phases', o.phases, LS.PHASES, function (v) { return v + ' phase'; })) +
       '<div class="hint" style="margin-bottom:6px">Incomer should be sized with the design margin of ' + S.design.pdbMargin + '× on the running load.</div>' +
       '</div>' +
@@ -1182,6 +1220,7 @@
             ' and move circuits across, or press <b>Balance</b> to do it.') +
         '</div>' : '') +
       fRow('Busbar', '<input class="inp" type="number" list="dlIncomer" data-bind="num" data-kind="pdp" data-id="' + o.id + '" data-f="busbarA" value="' + (o.busbarA || '') + '" placeholder="= incomer">') +
+      busbarFields(kind, o) +
       fRow('Phases', selIn('pdp', o.id, 'phases', o.phases, LS.PHASES, function (v) { return v + ' phase'; })) +
       fRow('Ways', nIn('pdp', o.id, 'ways', o.ways, { step: 1, min: 0 }) +
         ' <span style="font-size:10px;color:var(--fg-mute)">of</span> ' +
@@ -1220,6 +1259,7 @@
       'The ' + LS.DB_LOAD_MAX_A + ' A limit is on the largest single piece of equipment fed from it, not on the board itself — ' +
       'anything bigger goes straight onto the distribution board.</div>' +
       fRow('Busbar', '<input class="inp" type="number" list="dlIncomer" data-bind="num" data-kind="db" data-id="' + o.id + '" data-f="busbarA" value="' + (o.busbarA || '') + '" placeholder="= incomer">') +
+      busbarFields(kind, o) +
       fRow('Phases', selIn('db', o.id, 'phases', o.phases, LS.PHASES, function (v) { return v + ' phase'; })) +
       fRow('Enclosure', '<input class="inp" data-bind="item" data-kind="db" data-id="' + o.id + '" data-f="enclosure" value="' + esc(o.enclosure || '') + '" placeholder="Acti9, Acti9P, etc.">') +
       fRow('Ways', nIn('db', o.id, 'ways', o.ways, { step: 1, min: 0 })) +
