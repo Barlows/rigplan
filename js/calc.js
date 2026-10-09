@@ -563,6 +563,35 @@ var LC = (function () {
     return problems.length ? { level: 'bad', problems: problems } : null;
   }
 
+  /* What a stated transformer impedance would be worth, so an unconfirmed figure
+     becomes a priced question rather than a blocker.
+
+     The instinct on seeing "impedance not stated" is to leave everything else
+     alone until the nameplate arrives. On this project that instinct is wrong,
+     and the reason is worth showing: at 6% the fault level is 69 kA and 42
+     feeders want 120 mm²; at 10% it is 41 kA and they want 70 mm². Confirming the
+     figure changes about 2,000 mm² of cable — real money — and changes nothing
+     about whether any of those feeders is undersized. Every row from 4% to 12%
+     leaves the design needing attention.
+
+     So the work does not wait for the nameplate; the order does. That is a very
+     different instruction from "cannot proceed", and it is the one an engineer
+     can act on this week.
+
+     Returned, not asserted: these are the same calculation the audit makes, run
+     at other impedances, so the table cannot disagree with the findings. */
+  function impedanceSensitivity(p, tx) {
+    var sn = num(tx.kva, 0);
+    if (!(sn > 0)) return [];
+    var v = Math.max(50, num(tx.kvOut, 0.415) * 1000);
+    var out = [];
+    [4, 5, 6, 7, 8, 10, 12].forEach(function (z) {
+      var kA = (sn * 1000 / (Math.sqrt(3) * v)) / (z / 100) / 1000;
+      out.push({ z: z, kA: kA, minCsa: csaForFault(kA, 0.04, 'XLPE', 'Cu') });
+    });
+    return out;
+  }
+
   function pdpMaxA(p) {
     return num(p && p.design && p.design.pdpMaxIncomer, 1600);
   }
@@ -1954,7 +1983,18 @@ var LC = (function () {
           'breaking capacity and coordination finding below is computed from this figure. ' +
           'It is on the transformer nameplate or in its test certificate — one number, and the whole ' +
           'protection case stops being an estimate. If the transformer is one of a pair on a common ' +
-          'LV board, the impedance has to be checked against the shared contribution as well.',
+          'LV board, the impedance has to be checked against the shared contribution as well.' +
+          (function () {
+            var rows = impedanceSensitivity(p, tx);
+            if (rows.length < 3) return '';
+            return ' What the figure is worth, computed the same way as the findings above: ' +
+              rows.map(function (r) {
+                return r.z + '% → ' + r.kA.toFixed(0) + ' kA and ' +
+                  (r.minCsa === null ? 'beyond the standard range' : r.minCsa + ' mm² minimum');
+              }).join('; ') + '. The answer changes how much copper the feeders want, and ' +
+              'does not change whether they want it — so the design work does not wait for the ' +
+              'nameplate, the cable order does.';
+          })(),
           'impz-assumed', num(tx.kva, 0), 'kVA');
       } else {
         add('info', 'tx', tx.id, tx.tag + ' impedance ' + zpu.toFixed(1) +
@@ -6048,7 +6088,7 @@ function selectivityBand(s) {
     peNeededCsa,
     startMethod, startingCurrentA, startingCheck, sourceImpedanceAt, curveInstantaneousMultiple, torqueNeeded,
     isMotorLoad, isSpare, minimumCsa, cableShortfalls, csaForFault, pdpMaxA, usableA,
-    isBusbar, busbarCheck,
+    isBusbar, busbarCheck, impedanceSensitivity,
     SELECTIVITY_STEPS,
     choosePdp, assignPanel, createPdpFor, feederLen, syncLen,
     sizeCablesFor, sizeCablesForPdb, sizeCablesForDb, suggestDbFeeder, sizeCableForPanel, sizeAll, feederAmp, needsSizing,

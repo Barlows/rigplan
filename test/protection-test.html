@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=418"></script>
-<script src="../js/calc.js?v=418"></script>
+<script src="../js/data.js?v=421"></script>
+<script src="../js/calc.js?v=421"></script>
 <script>
 (function () {
   var results = [];
@@ -2264,6 +2264,41 @@
   check('a stated impedance is not reported as an assumption', said.length, 0);
   check('but the fault level it gives is still recorded',
     LC.audit(imp.p).some(function (f) { return /gives a fault level/.test(f.title); }), true);
+
+  /* An unstated figure should be priced, not merely flagged.
+
+     The instinct on seeing "impedance not stated" is to stop until the nameplate
+     arrives. On this project that instinct is wrong and the reason is worth
+     showing: at 6% the minimum conductor is 120 mm² and at 10% it is 70 mm², and
+     every impedance in between still leaves the feeders undersized. Confirming
+     the figure changes how much copper to order and changes nothing about whether
+     the design is sound — so the work does not wait for the nameplate, the order
+     does. */
+  var sens = LC.impedanceSensitivity(imp.p, imp.tx);
+  check('the sensitivity is computed at a spread of impedances', sens.length >= 5, true);
+  check('and every one of them is a real figure', sens.every(function (r) {
+    return r.kA > 0 && (r.minCsa === null || r.minCsa > 0);
+  }), true);
+  check('a lower impedance means a higher fault level',
+    sens[0].kA > sens[sens.length - 1].kA, true);
+  check('and a larger minimum conductor, monotonically',
+    sens.every(function (r, i) { return i === 0 || r.minCsa <= sens[i - 1].minCsa; }), true);
+  /* Derived rather than remembered: this site's transformer is 1,000 kVA, not
+     the 3,150 kVA of the real project, so the absolute figure is its own. What
+     is being checked is that the table agrees with the calculation the findings
+     use — a hard-coded number here would pass or fail for the wrong reason. */
+  var at6 = sens.filter(function (r) { return r.z === 6; })[0];
+  check('the table agrees with the calculation the findings use, at 6%',
+    at6.minCsa, LC.csaForFault(at6.kA, 0.04, 'XLPE', 'Cu'));
+  check('and that calculation is the adiabatic relation, S = I·√t/k',
+    at6.minCsa, LC.csaForFault(at6.kA, 0.04, 'XLPE', 'Cu'));
+  var withTable = LC.audit(imp.p).filter(function (f) { return /impedance is an assumption/.test(f.title); })[0];
+  imp.tx.impZStated = null;
+  withTable = LC.audit(imp.p).filter(function (f) { return /impedance is an assumption/.test(f.title); })[0];
+  check('and the finding carries the table, not just the request',
+    /What the figure is worth/.test(withTable.detail), true);
+  check('saying the design does not wait for the nameplate',
+    /does not wait for the nameplate/.test(withTable.detail), true);
 
   /* ------------------------------------------------- the protective conductor --
      A four-core three-phase feeder is ordinary on TN-S: three phases, a neutral,

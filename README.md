@@ -1186,6 +1186,49 @@ Starting columns are in the load schedule and the CSV, suppressed where the
 method and the source impedance make them irrelevant. A board row carries one
 line for its motors: the worst dip and what they draw together.
 
+### Resolving a finding, and the two the app cannot
+
+An audit that only reports is a list to work through. Three things make findings
+resolvable instead, and two are deliberately left to the engineer.
+
+**Things the app can resolve:**
+
+- **The two constraints on a conductor, both of them.** Ampacity and short
+  circuit are separate and the second is invisible on a schedule that records
+  load current: at 76 kA cleared in 40 ms a feeder needs 106 mm², while 95 mm²
+  carries 240 A comfortably. `csaForFault()` is S = I·√t/k; `minimumCsa()`
+  judges both and says which governs. **Size for fault** applies it, and leads
+  with the impedance it rests on.
+- **A deliberate hold, where the trip unit has a stage to hold with.** A
+  time-current curve says how fast a device is; it cannot say whether the device
+  is able to hold, and holding is the whole of selectivity. A short-time delay is
+  a setting, blank until somebody sets it. **Grade** works out what each board
+  needs — cascading, because a delay has to beat everything beneath it — and
+  applies it.
+- **A feeder that is not a cable.** Above about 2,500 A it is a busbar, and the
+  busbar's own two questions are whether it carries the load and what fault
+  current it may withstand (Icw, a certified figure).
+
+**Things it will not resolve, and says so:**
+
+- **A pair no delay can reach.** If the overlap is below the short-time band of
+  the device above, the board has not reached its stage to be delayed. The
+  finding says that, and gives the two real answers: stagger the ratings, or fit
+  an adjustable long-time pickup (IˡLS). Twelve of the thirty-four selectivity
+  findings on this project are of that kind.
+- **A number nobody has supplied.** The transformer impedance is the one that
+  matters, and it is not invented. But it is *priced* rather than merely
+  requested:
+
+  > 4% → 110 kA and 185 mm² minimum; 5% → 88 kA and 150 mm²; 6% → 73 kA and
+  > 120 mm²; 7% → 63 kA and 95 mm²; 8% → 55 kA and 95 mm²; 10% → 44 kA and
+  > 70 mm²; 12% → 37 kA and 70 mm². The answer changes how much copper the
+  > feeders want, and does not change whether they want it — so the design work
+  > does not wait for the nameplate, the cable order does.
+
+  That is a different instruction from "cannot proceed", and it is the one that
+  can be acted on.
+
 ### Fault levels
 
 The fault level at a board comes from the transformer's **impedance**, not its
