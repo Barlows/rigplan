@@ -548,16 +548,38 @@ var LC = (function () {
           'so leave margin on it.'
       });
     } else if (faultKA && !(icw > 0)) {
+      /* An absent input is not the same as nothing to say.
+
+         The certified Icw comes off the busbar system own test certificate and
+         cannot be derived here — but the REQUIREMENT can, and it is the half that
+         actually goes on the enquiry. "What is the short-time withstand of this
+         busbar?" gets an answer to check. "It must withstand no less than 92 kA
+         for 1 s at this fault level, please confirm" gets one that can be
+         accepted or rejected on the spot, and turns a blank field into a
+         procurement item with a number against it.
+
+         One second is the short-time withstand IEC 61439-1 gives for the
+         reference design current, and the same 1.25 margin the check above uses
+         is applied, so the number quoted here and the number tested are one and
+         not two that can disagree. */
+      var needKA = faultKA * 1.25;
       problems.push({
         level: 'info',
-        title: item.tag + ' busbar short-time withstand not stated',
-        detail: 'The busbar is declared at ' + rating + ' A, which answers whether it can ' +
-          'carry the load, but nothing says what fault current it is permitted to withstand. ' +
-          'That figure — Icw for a stated time — is what decides whether it survives a short ' +
-          'circuit, and it comes from the certification of the busbar system itself. ' +
-          'Set it and the ' +
-          'check becomes a real one; leave it blank and the most important question about ' +
-          'this conductor is unanswered.'
+        title: item.tag + ' busbar short-time withstand not stated — ' +
+          needKA.toFixed(0) + ' kA for 1 s required',
+        detail: 'The busbar is declared at ' + rating + ' A, which answers whether it ' +
+          'can carry the load, but nothing says what fault current it is permitted to ' +
+          'withstand, and that is the figure which decides whether it survives a short ' +
+          'circuit. It cannot be derived here — it is a property of the busbar system and ' +
+          'comes off its own certification — but the requirement against it can. This ' +
+          'board sits at a calculated ' + faultKA.toFixed(1) + ' kA, so with the same 1.25 ' +
+          'margin the check above applies it needs Icw of at least ' +
+          needKA.toFixed(0) + ' kA for 1 s, which is the short-time withstand IEC 61439-1 ' +
+          'gives for the reference design current. Put that in the enquiry rather than ' +
+          'asking the question open-ended: a system certified at ' + needKA.toFixed(0) +
+          ' kA or above is acceptable, and one certified below it is not for this fault ' +
+          'level and wants either a higher withstand or a rated fuse at the transformer. ' +
+          'Set the figure when the certificate arrives and the check becomes a real one.'
       });
     }
     return problems.length ? { level: 'bad', problems: problems } : null;
@@ -2277,6 +2299,25 @@ var LC = (function () {
         var lowest = m.bands.slice().sort(function (a, b) { return a.kva - b.kva; })[0];
         var pn = boardStats(p, pdb, 'pdb').panels;
         var nLow = pn.filter(function (x) { return D.num(x.demand, 1) < 0.35; }).length;
+        /* What the assumption is actually worth.
+
+           The transformer order rests on this number, so the question is not
+           whether 0.30 is right — it is whether the ORDER would be different if
+           it were wrong. The two methods bracket the answer, and an order that
+           survives both ends of the bracket does not need the number settled
+           before it is placed. Saying so is the difference between this finding
+           holding up a purchase order and this finding being something to confirm
+           at commissioning. */
+        var installed = p.txs.reduce(function (a, t) { return a + num(t.kva, 0); }, 0);
+        var sitePer = 0, siteCoin = 0;
+        (p.pdbs || []).forEach(function (b2) {
+          if (!b2.txId) return;
+          var m2 = demandMethods(p, b2, 'pdb');
+          if (!(m2.connectedKva > 0)) return;
+          sitePer += m2.perCircuitKva;
+          siteCoin += m2.connectedKva * lowest.factor;
+        });
+        var bracket = installed > 0 && sitePer <= installed && siteCoin <= installed;
         add('warn', 'pdb', pdb.id, pdb.tag + ' runs at ' +
           (m.perCircuitRatio * 100).toFixed(0) + '% of its connected load',
           'The per-circuit demand factors on this board sum to ' +
@@ -2292,7 +2333,19 @@ var LC = (function () {
           lowest.factor.toFixed(2) + ' and give ' + lowest.kva.toFixed(0) + ' kVA; the two ' +
           'methods are alternatives and applying both would give ' +
           (lowest.kva * m.perCircuitRatio).toFixed(0) + ' kVA, which is ' +
-          ((1 - m.perCircuitRatio) * 100).toFixed(0) + '% below the honest answer.',
+          ((1 - m.perCircuitRatio) * 100).toFixed(0) + '% below the honest answer. ' +
+          'What the assumption is worth: applied across the whole site the ' +
+          'per-circuit factors give ' + sitePer.toFixed(0) + ' kVA and the same ' +
+          'diversity expressed as a coincidence factor gives ' + siteCoin.toFixed(0) +
+          ' kVA, against ' + installed.toFixed(0) + ' kVA of transformer installed. ' +
+          (bracket
+            ? 'Both ends of that bracket sit inside what is installed, so the ' +
+              'transformer order does not depend on which of them is right — the ' +
+              'assumption moves the running load, not the capacity. Confirm it ' +
+              'against measured data before commissioning; it does not hold up the order. '
+            : 'One end of that bracket is outside what is installed, so the ' +
+              'transformer order DOES depend on this number and it has to be settled ' +
+              'before the transformers are ordered. '),
           'demand-ratio', m.connectedKva, 'kVA');
       }
 
