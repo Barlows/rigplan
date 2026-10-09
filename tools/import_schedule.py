@@ -124,9 +124,32 @@ VSD_WORDS = ("vsd", "vfd", "inverter", "drive")
 
 
 def is_motor_name(machine, desc):
-    t = (machine or "") + " " + (desc or "")
-    t = t.lower()
-    return any(w in t for w in MOTOR_WORDS)
+    """True, False, or None — and None is the answer this returns most of the time.
+
+    The sheet names machines like "Bodymaker/Trimmer" and "Utility / Lighting
+    Panel", and a word list recognises some of those and none of the others. That
+    is not evidence that the unrecognised ones are not motors; it is absence of
+    evidence, and writing it as False is how every circuit on this project came
+    out marked "not a motor" when in fact all ninety-seven of them are drive fed
+    loads. One field then switched off the whole motor starting analysis for the
+    installation, silently, and nothing on the report said so.
+
+    So nothing is asserted that the sheet does not support. A name that positively
+    identifies rotating machinery gives True, a name that positively identifies
+    something else — lighting, a socket board — gives False, and everything else
+    gives None and gets asked about.
+    """
+    t = ((machine or "") + " " + (desc or "")).lower()
+    if any(w in t for w in MOTOR_WORDS):
+        return True
+    if any(w in t for w in NOT_MOTOR_WORDS):
+        return False
+    return None
+
+
+# Names that positively identify something that is not rotating machinery.
+NOT_MOTOR_WORDS = ("lighting", "luminaire", "socket", "small power", "receptacle",
+                   "emergency lighting", "clock", "it rack", "ups")
 
 
 def start_from_name(machine, desc):
@@ -398,6 +421,7 @@ def main():
             # raises this as a finding so the guess gets checked rather than
             # quietly relied on — which is how 89 circuits ended up carrying a
             # DOL nobody had confirmed.
+            # None where the sheet does not say, which is not the same as False.
             "isMotor": is_motor_name(r["machine"], r["desc"]),
             "start": start_from_name(r["machine"], r["desc"]) or "",
             "startInferred": True,

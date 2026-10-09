@@ -2167,6 +2167,32 @@ var LC = (function () {
       checkHarmonics(p, pn, 'panel');
       checkImpossiblePf(p, pn);
       checkEarthFault(p, pn, 'panel');
+      if (motorTypeUnstated(pn)) {
+        /* Not a fault. A gap, and the gap is that nobody can say whether this
+           panel starts a motor.
+
+           The whole starting analysis is keyed off the panel type, and a type this
+           list has never heard of falls straight through it — no inrush is
+           calculated and nothing is reported, which reads exactly like a machine
+           that does not exist. On this project that is eighteen circuits, and the
+           first version of this finding did not exist because every one of them
+           was silently excluded rather than reported.
+
+           The remedy is one field on the schedule. A panel that starts a motor
+           says so and gets its starting current checked against the board above;
+           one that does not says that too, and stops being a question. */
+        add('info', 'panel', pn.id,
+          pn.tag + ' — the load type does not say whether this panel starts a motor',
+          'Type "' + (pn.type || 'unset') + '" is not one the application recognises ' +
+          'as rotating machinery, and it is not one it can rule out either, so no ' +
+          'starting current has been calculated for this circuit and nothing has been ' +
+          'checked about whether the board above survives it. That is a gap in the ' +
+          'schedule rather than a fault in it: if this panel starts a motor, its ' +
+          'inrush is unexamined, and a drive-fed panel commonly draws several times ' +
+          'its running current for a second or two. Declare it on the Starting method ' +
+          'field — direct on start is the honest answer for most, and a soft-starter ' +
+          'or VFD feed changes the number materially.', 'motor-type');
+      }
       checkStarting(p, pn, 'panel');
       checkEarthing(p, pn);
     });
@@ -2676,8 +2702,30 @@ var LC = (function () {
       var fl = faultLevel(p, pn, 'panel');
       if (!fl || !(fl.kA > 0) || !pn.cable || !num(pn.cable.csa, 0)) return;
 
-      /* --- overload relay class, on a machine that has one --- */
-      if (isMotorLoad(pn) && pn.kw > 0) {
+      /* --- overload relay class, on a machine that has one ---
+
+         And a machine fed through a drive does not have one on this circuit.
+
+         IEC 60947-4-1 classes are a property of a thermal overload relay, and a
+         relay is fitted to a motor that is started across its terminals. Where the
+         motor is fed from a variable speed drive the drive does the overload
+         protection: it knows its own motor current, it has an adjustable class,
+         and it trips the motor rather than the feeder. There is no relay on this
+         circuit to have a class, and the feeder device above the drive is
+         protecting the drive's input — so asking whether it meets a class of 10 at
+         six times the motor current is asking about a device that is not doing that
+         job.
+
+         On this project every one of the ninety-seven circuits is drive fed, and
+         the check was reporting three of them as unable to meet a class they were
+         never going to be asked to meet. It had been dormant until the motor
+         recognition was fixed; what it then produced was a question with the wrong
+         subject rather than a fault.
+
+         The class still matters where it does apply, so the check is kept and
+         gated on the machine actually being started across its terminals. */
+      var fedFromDrive = startMethod(pn).multiple < 2;
+      if (isMotorLoad(pn) && pn.kw > 0 && !fedFromDrive) {
         var cls = pn.motorClass === null || pn.motorClass === undefined
           ? num(p.design.motorClassDefault, 10) : num(pn.motorClass, 10);
         var spec = D.MOTOR_CLASSES[cls] || D.MOTOR_CLASSES[10];
@@ -3098,8 +3146,27 @@ function clearingTimeAt(prot, multiple) {
      exclusive — a lighting board is never a motor, but an "Other" panel might
      be, which is why the declaration above can override this either way. */
   var MOTOR_PANEL_TYPES = {
-    mcc: true, ahu: true, pump: true, chiller: true, boiler: true, lift: true, gen: false
+    mcc: true, ahu: true, pump: true, chiller: true, boiler: true, lift: true,
+    gen: false, plant: true
   };
+
+  /* Panel types that say nothing either way. A lighting board and a socket board
+     are never rotating machinery, and the types above are nearly always it. What
+     is left is the honest remainder — "other", and anything this list has never
+     heard of — and those are not assumed either way, because assuming they are
+     not motors is exactly how a check goes missing without anybody noticing. */
+  var NON_MOTOR_PANEL_TYPES = { db_lg: true, db_sk: true, ups: true, ev: true };
+
+  function motorTypeUnstated(pn) {
+    var t = String(pn.type || '');
+    if (MOTOR_PANEL_TYPES[t] === true) return false;
+    if (NON_MOTOR_PANEL_TYPES[t] === true) return false;
+    /* A declaration on the panel itself beats the type, either way. */
+    if (pn.isMotor === true || pn.isMotor === 'yes' ||
+        pn.isMotor === false || pn.isMotor === 'no') return false;
+    if (pn.start || pn.loadTorque) return false;
+    return true;
+  }
 
   function startMethod(pn) {
     return D.START_METHODS[String(pn.start || 'DOL')] || D.START_METHODS.DOL;
@@ -5579,6 +5646,7 @@ function selectivityBand(s) {
   }
 
   function groupTitle(key, w) {
+    if (key === 'motor-type') return 'panel whose load type does not say whether it starts a motor';
     if (key === 'start-upstream') return 'motor whose starting current trips the board above';
     if (key === 'start-own') return 'motor whose starting current exceeds its own device';
     if (key === 'start-torque') return 'motor that will not accelerate through the dip';
