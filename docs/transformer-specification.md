@@ -41,15 +41,11 @@ it does change how hard each transformer runs.
 
 | | |
 |---|---|
-| HV | 11 kV — **assumed.** MVSB1's voltage was not given on the schedule. |
 | LV | 415 V, 3-phase, 4-wire |
 | Vector group | **Dyn11** |
 | System | TN-S |
 
-The 11 kV is an assumption and it matters more than it looks: it sets the HV
-neutral current, the transformer inrush and the MV earthing arrangement. **Get
-it from MVSB1's schedule before the order goes in.** Everything else in this
-document is unaffected by it.
+| HV | **11 kV — confirmed.** MVSB1 is the main switchboard supplying TX7 and TX8. |
 
 Dyn11 is confirmed by the site data. It is also the right choice and not a
 detail — a star winding on the HV gives a separate neutral for the earthing
@@ -170,7 +166,42 @@ stays indicative until it arrives.
 what makes the 100 kA incomers viable), the tap range and commissioning
 position (+5%), the vector group, cooling, and the protection.
 
-**Does not decide:** the MV voltage — that comes from MVSB1's schedule and is
-currently an 11 kV assumption. And the measured impedance, which is what the
-test certificate carries and which is the only thing that turns the fault levels
-from indicative into facts.
+**Does not decide:** the measured impedance on the test certificate, which is
+what turns the fault levels from indicative into facts.
+
+---
+
+## 9. Why the 6% does not need to be known before the order
+
+The 6% is the transformer's own percent impedance — its voltage drop at rated
+current with the secondary shorted. It is on the nameplate and on the test
+certificate. **It is not the whole impedance**, because the 11 kV network is in
+series with it, and that is worth saying plainly because it removes the urgency:
+
+| Network fault level at MVSB1 | Referred to 415 V | Total impedance | Fault level at the busbar |
+|---|---|---|---|
+| — (transformer alone) | — | 3.280 mΩ | **73.0 kA** |
+| 1,000 MVA | 0.172 mΩ | 3.453 mΩ | 69.4 kA |
+| 500 MVA | 0.344 mΩ | 3.625 mΩ | 66.1 kA |
+| **250 MVA** | 0.689 mΩ | 3.969 mΩ | **60.4 kA** |
+| 150 MVA | 1.148 mΩ | 4.429 mΩ | 54.1 kA |
+| 100 MVA | 1.722 mΩ | 5.003 mΩ | 47.9 kA |
+
+**Every one of those is below the 73 kA this design assumes.** The network can
+only add impedance, never remove it, so the transformer-only figure is the
+highest fault level consistent with a 6% transformer — and everything this
+project sizes against is therefore conservative in the safe direction. The
+100 kA incomers carry more margin than quoted, the busbar requirement of 92 kA
+is more demanding than the real fault, and the cables are sized for at least the
+current they must survive.
+
+It also makes the low-impedance case in section 3 much less likely to bite. With
+a 250 MVA network, a 4% transformer gives 83 kA rather than 110 kA — still
+inside 100 kA. Only a stiff network *and* a low impedance together put the
+switchgear in trouble, which is why specifying 6% ±10% is comfortable rather
+than merely conventional.
+
+**So the order does not wait for the impedance.** Ask MVSB1's owner for the
+network fault level at the outgoing way when convenient; it sharpens the numbers
+and it settles the busbar's short-time withstand, but nothing in this
+specification is provisional on it.
