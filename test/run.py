@@ -60,7 +60,18 @@ INSPECTION = {"underlay"}
 # so the budget can expire while a request is still in flight and the DOM gets
 # captured before the page has written anything. More budget is the fix; the
 # retry below is for the rest.
-BUDGET = {"underlay": 20000}
+# How long a page may take before it is judged not to have finished.
+#
+# Raised from 8s because a suite written for reading by eye can legitimately run
+# for ten seconds on a loaded machine, and an 8s budget turned that into a red
+# build. On a run where one suite took 19.4s against a normal 1.1s, the parser
+# passed only because it was retried, and the xlsx suite then failed outright
+# having been given 24s in total — which is not a defect in either page.
+#
+# A page that throws returns almost immediately, because it stops; only a page
+# that genuinely hangs consumes the budget. So a generous budget costs nothing on
+# the failure path except the time it takes to admit a hang.
+BUDGET = {"underlay": 40000}
 
 CHROME_CANDIDATES = [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -289,7 +300,7 @@ def run(chrome, port, names):
 
         url = "http://127.0.0.1:%d/test/%s" % (port, filename)
         started = time.time()
-        budget = BUDGET.get(name, 8000)
+        budget = BUDGET.get(name, 20000)
         try:
             dom = dump_dom(chrome, url, budget)
         except subprocess.TimeoutExpired:
@@ -356,10 +367,30 @@ def run(chrome, port, names):
             # The retry used to cover only pages carrying #state, so every suite
             # written in the other style failed outright whenever Chrome's virtual
             # clock ran out. That was intermittent by construction.
+            t_retry = time.time()
             dom = dump_dom(chrome, url, budget * 3)
+            waited = budget * 3
             body = strip_tags(dom)
             if "running…" in body:
-                print("  %-12s DID NOT FINISH — still a placeholder with 3x the budget, so the page threw" % name)
+                # Say what is known. The previous wording here was "so the page
+                # threw", which asserts a conclusion this code has not reached:
+                # a placeholder is equally what a page that has not finished in
+                # the time allowed looks like, and on a slow machine it is
+                # exactly what it looks like. A CI run where one suite took 19s
+                # where it normally takes 1s reported this, and the message named
+                # a crash that had not happened.
+                #
+                # A test gate that reports the wrong cause is worse than one that
+                # reports none, because it sends whoever is reading it to look in
+                # the wrong place — and a reader who is sent to the wrong place
+                # once stops reading the message at all.
+                print("  %-12s DID NOT FINISH — no result after %.1fs (%.0fx the budget)"
+                      % (name, waited, waited / budget))
+                print("  %-12s   no failing check was reported; the page simply had not"
+                      % "")
+                print("  %-12s   finished. A slow machine and a hang look identical from"
+                      % "")
+                print("  %-12s   here, so this is not being called either." % "")
                 failed_suites.append(name)
                 continue
             print("  %-12s retried — the first attempt ran out of budget, not patience" % name)
