@@ -797,6 +797,45 @@
       'right way round.</div>';
   }
 
+  /* The short-time delay row, and only where the trip unit has a stage to set.
+
+     Its own function rather than another nested ternary in a string chain: what
+     has to vary is three things at once — whether the unit has the stage, what
+     the setting currently is, and what to say about each — and expressing that
+     inline buried it four parentheses deep where a missing bracket silently
+     changed what the row said.
+
+     Not offered on an LI. Entering a delay there would look like it did
+     something when the app ignores it entirely, and a setting that is silently
+     ignored is worse than one that is not offered at all. */
+  function shortTimeRow(kind, o, d, isMcb) {
+    if (isMcb) return '';
+    var stg = LS.tripStages(d.trip);
+    if (!stg.shortTime) {
+      return '<div class="hint">A ' + LS.TRIP_UNITS[d.trip].name + ' unit has no short-time ' +
+        'stage, so it cannot be made to hold. Selective grading against everything below it ' +
+        'needs an LS or LSI unit: an LI is instantaneous at every fault current above ' +
+        stg.instantaneous + ' × its own setting.</div>';
+    }
+    var set = d.sd !== null && d.sd !== undefined;
+    var picker = selIn(kind, o.id, 'prot_sd', set ? String(d.sd) : '',
+      [''].concat(LS.SHORT_TIME_DELAYS.map(String)),
+      function (v) { return v === '' ? 'not set' : v + ' s'; });
+    var note;
+    if (!set) {
+      note = 'Not set. The device uses its family envelope, and the audit reports the pairs ' +
+        'that do not separate. A delay here is what makes it selective with everything below it.';
+    } else {
+      note = 'The device holds for ' + d.sd + ' s on any fault above 2 × its setting';
+      note += stg.instantaneous === null
+        ? '. It has no instantaneous element, so the hold applies at every fault current.'
+        : ', and gives way to its magnetic element above ' + stg.instantaneous + ' × its setting.';
+    }
+    return fRow('Short-time delay',
+      '<span class="unit">' + picker + '<span class="u">s</span></span>' +
+      '<div class="hint">' + note + '</div>');
+  }
+
   function protFields(o, kind) {
     if (!o.prot) o.prot = LS.newProt({});
     var d = o.prot;
@@ -816,6 +855,7 @@
       fRow(isMcb ? 'Curve' : 'Trip unit', '<select class="sel" data-bind="item" data-kind="' + kind + '" data-id="' + o.id + '" data-f="prot_trip">' +
         opts(trips, d.trip, function (v) { return isMcb ? LS.MCB_CURVES[v].name : LS.TRIP_UNITS[v].name; }) + '</select>') +
       fRow('Poles', selIn(kind, o.id, 'prot_poles', d.poles, [2, 3, 4], function (v) { return v + (v === 4 ? ' (3ph + N)' : ''); })) +
+      shortTimeRow(kind, o, d, isMcb) +
       '<div class="two">' +
       '<button class="btn primary" data-act="protpropose" data-id="' + o.id + '" data-kind="' + kind + '">Propose</button>' +
       '<button class="btn" data-act="protclear" data-id="' + o.id + '">Clear</button>' +
@@ -2923,6 +2963,74 @@
      project imported from a vendor's schedule arrives with every circuit's real
      device already on it, and quietly replacing those would throw away the only
      part of the data that came from the switchgear schedule. */
+  /* Set the short-time delays that make the installation selective.
+
+     The plan cascades: each board takes a delay that beats everything below it,
+     so the settings have to be applied together or the grading inverts. Applied
+     as one action with one undo entry for exactly that reason — setting them one
+     at a time, in any order, leaves the hierarchy transiently worse than it was.
+
+     Boards that no delay can grade are listed and not touched, with the reason.
+     They are the interesting part of the report: a trip unit with no short-time
+     stage is a procurement decision, not a setting. */
+  function gradeForSelectivity() {
+    var plan = LC.selectivityPlan(S);
+    var set = plan.filter(function (r) { return r.delay !== null; });
+    var blocked = plan.filter(function (r) {
+      return r.kind !== 'panel' && r.delay === null && r.reason &&
+             r.reason !== 'nothing-below' && r.reason !== 'final-circuit';
+    });
+    if (!set.length && !blocked.length) {
+      toast('Nothing to grade — every board with something below it already separates', 'good');
+      return;
+    }
+    var changing = set.filter(function (r) {
+      return !(r.item.prot && num(r.item.prot.sd, 0) === r.delay);
+    });
+
+    var body = '';
+    if (set.length) {
+      body += '<div><b>' + set.length + ' board(s) get a short-time delay</b>, each one longer than ' +
+        'everything beneath it, by the 1.25× margin the selectivity check itself uses:</div>' +
+        '<table class="tbl" style="margin-top:4px"><tr><th>Board</th><th>Unit</th><th>Now</th><th>→</th><th>Beats</th></tr>' +
+        set.map(function (r) {
+          return '<tr><td>' + esc(r.item.tag) + '</td><td>' + esc(r.item.prot.trip) + '</td><td>' +
+            (r.item.prot.sd === null || r.item.prot.sd === undefined ? 'not set' : r.item.prot.sd + ' s') +
+            '</td><td>' + r.delay + ' s</td><td>' + (r.beat ? (r.beat * 1000).toFixed(0) + ' ms' : '—') + '</td></tr>';
+        }).join('') + '</table>';
+    }
+    if (changing.length < set.length) {
+      body += '<div class="hint" style="margin-top:6px">' + (set.length - changing.length) +
+        ' already has the delay this plan wants.</div>';
+    }
+    if (blocked.length) {
+      body += '<div style="margin-top:12px"><b>' + blocked.length +
+        ' cannot be graded by a delay</b> and are left as they are:</div>';
+      blocked.forEach(function (r) {
+        body += '<div class="hint" style="margin-top:4px"><b>' + esc(r.item.tag) + '</b> — ' +
+          esc(r.detail || r.reason) + '</div>';
+      });
+    }
+    body += '<div class="hint" style="margin-top:10px">A short-time delay is a commissioning setting on ' +
+      'installed equipment. Write it against each device as well as entering it here — a trip unit whose ' +
+      'delays are not recorded is a trip unit nobody can prove is coordinated.</div>';
+
+    var actions = [{ label: 'Cancel', fn: closeModal }];
+    if (changing.length) {
+      actions.unshift({ label: 'Set ' + changing.length + ' delay(s)', cls: 'primary', fn: function () {
+        closeModal();
+        pushUndo('grade for selectivity');
+        set.forEach(function (r) { r.item.prot.sd = r.delay; });
+        renumber();
+        commit(true);
+        toast(changing.length + ' short-time delay(s) set · press <b>Audit</b> to re-check', 'good');
+      } });
+    } else if (blocked.length) {
+      actions.unshift({ label: 'Close', cls: 'primary', fn: closeModal });
+    }
+    modal('Grade the installation for selectivity?', body, actions, true);
+  }
+
   /* Bring the distribution boards inside the incomer limit, by whichever of the
      two remedies actually applies to each one.
 
@@ -4467,6 +4575,8 @@
     if (bf) bf.onclick = function () { sizeFeedersForFault(); };
     var bl = el('btnFitBoards');
     if (bl) bl.onclick = function () { fitBoardsToLimit(); };
+    var bg = el('btnGrade');
+    if (bg) bg.onclick = function () { gradeForSelectivity(); };
     el('btnCsv').onclick = exportCsv;
     el('btnJson').onclick = exportJson;
     el('btnPrint').onclick = printReport;
@@ -4574,6 +4684,7 @@
     if (a === 'protect') return proposeAllProt();
     if (a === 'size-fault') return sizeFeedersForFault();
     if (a === 'fit-boards') return fitBoardsToLimit();
+    if (a === 'grade') return gradeForSelectivity();
     if (a === 'protect-keep') return proposeAllProt(true);
     if (a === 'balance' || a === 'balance-tx') {
       var cross = a === 'balance-tx';

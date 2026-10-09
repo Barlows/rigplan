@@ -132,6 +132,34 @@ var LS = (function () {
      level if the lower one clears first *at that level*, and a pair can be
      selective over one range of currents and not another — which is the whole
      point, and is invisible without the curves. */
+  /* What each trip unit family has, as separate from how fast it is.
+
+     The curve says how long a device takes at a given multiple. It cannot say
+     whether the device is *able* to hold — and holding is the whole of
+     selectivity. An LS unit has no instantaneous element at all, so set its
+     short-time delay to 0.3 s and it will hold for 0.3 s on any fault above its
+     long-time pickup, however large, which is exactly what makes it selective
+     with the device below it. An LI has no short-time stage, so it cannot be made
+     to hold at all and its instantaneity is fixed.
+
+     Without this the app could report thirty-four pairs as non-selective and had
+     no way to make any of them selective, because there was nothing to change. */
+  var TRIP_STAGES = {
+    'TM':    { shortTime: false, instantaneous: 9.5,  name: 'thermal-magnetic' },
+    'LI':    { shortTime: false, instantaneous: 10,   name: 'long-time and instantaneous' },
+    'LS':    { shortTime: true,  instantaneous: null, name: 'long-time and short-time, no instantaneous' },
+    'LSI':   { shortTime: true,  instantaneous: 10,   name: 'long-time, short-time and instantaneous' },
+    'eLSI':  { shortTime: true,  instantaneous: 10,   name: 'electronic, long-time, short-time and instantaneous' }
+  };
+  function tripStages(trip) {
+    return TRIP_STAGES[trip || 'TM'] || TRIP_STAGES.TM;
+  }
+
+  /* The standard short-time delays an electronic trip unit offers. A delay is
+     only useful if it is one the manufacturer makes, so the search is over this
+     list rather than over arithmetic. */
+  var SHORT_TIME_DELAYS = [0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.8, 1.0];
+
   var TRIP_CURVES = {
     /* IEC 60898-1 for the thermal band: 1.13 In shall not clear within an hour,
        1.45 In shall clear within an hour, 1.61 In within 1800 s, and the
@@ -928,6 +956,12 @@ var LS = (function () {
     var isMcb = kind === 'mcb';
     return {
       kind: kind,
+      /* Short-time delay, seconds. The deliberate hold that selectivity is made
+         of, and blank until somebody sets it — the curve alone cannot express
+         it, and inventing a figure here would grade every device on a delay
+         nobody chose. Blank means the family envelope applies and the app says
+         so when it reports the pair as non-selective. */
+      sd: o.sd === undefined || o.sd === null ? null : num(o.sd),
       /* frame rating — the largest the device is built for */
       frame: o.frame === undefined || o.frame === null ? null : num(o.frame),
       /* the rating it actually protects at */
@@ -1137,6 +1171,7 @@ var LS = (function () {
     CSA, METHODS, TEMP_FACTORS, GROUP_FACTORS, WITHSTAND, MAX_CABLE_RUNS,
     SIZES_A, SIZES_KVA, SIZES_KW, PHASES, VOLT_LV, VOLT_HV,
     maxDisconnectionTime, peMinCsa, PE_MIN_CSA, PE_MIN, DISC_TN, DISC_TT,
+    TRIP_STAGES, tripStages, SHORT_TIME_DELAYS,
     VECTOR_GROUPS, blocksTriplen, lvNeutralEarthed, VEC_LV_DELTA,
     START_METHODS, LOAD_TORQUES,
     HARMONIC_SPECTRUMS, triplenFractionOf, defaultThd, MOTOR_CLASSES,

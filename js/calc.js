@@ -1723,10 +1723,28 @@ var LC = (function () {
          sits on is usually a deliberate compromise and is far more common. The
          key is what lets thirty-four instances of the second read as one row
          naming the boards, instead of thirty-four lines saying the same thing. */
+      /* The delay the grading plan wants on the device above, so the finding
+         carries a number instead of an idea — and where the plan has none,
+         carries the reason instead. */
+      var hint = (function () {
+        var chUp = chain(p, item);
+        var upKindFor = item.dbId ? 'db' : (chUp.pdp ? 'pdp' : 'pdb');
+        var d = delayFor(p, item, kind === 'panel' ? 'panel' : kind, up, upKindFor);
+        if (!d) return null;
+        if (d.delay !== null) {
+          return 'Set the ' + up.tag + ' short-time delay to ' + d.delay + ' s' +
+            (up.prot && num(up.prot.sd, 0) && Number(up.prot.sd) !== d.delay
+              ? ' — it is set to ' + up.prot.sd + ' s now, which grades the pairs ' +
+                'below but not this one'
+              : '') + '.';
+        }
+        if (d.reason === 'nothing-below' || d.reason === 'final-circuit') return null;
+        return d.detail ? 'Grading: ' + d.detail : null;
+      })();
       add('warn', kind, item.id,
         item.tag + ' not selectively graded against ' + up.tag +
         (s.regime === 'overload' ? ' (overload)' : ' (above ' + s.fromKA.toFixed(1) + ' kA)'),
-        selectivityMessage(s, item.tag) +
+        selectivityMessage(s, item.tag, hint) +
         ' The curves used are the conventional envelopes from IEC 60898 and IEC 60947-2, not the ' +
         'manufacturer\'s, so this says the two settings do not separate — check the actual curves before changing anything.',
         kind === 'panel' ? 'selectivity-circuit' : 'selectivity-board',
@@ -2200,6 +2218,33 @@ function clearingTimeAt(prot, multiple) {
  var pts = curve.points;
  var m = multiple;
  if (!(m > 0)) return null;
+
+ /* A stated short-time delay overrides the envelope. This is the one place
+    where a device's behaviour is a setting rather than a characteristic.
+
+    Above the long-time band the device leaves its thermal characteristic behind
+    and hands over to its short-time stage, which is a *definite* delay: it does
+    not shorten as the fault grows, it holds. Past the instantaneous pickup the
+    device is on its magnetic element and clears in tens of milliseconds whatever
+    the short-time stage says, because the instantaneity sits in parallel with it
+    and the faster of the two operates.
+
+    An LS unit has no instantaneous, so a stated delay on it applies the whole way
+    up — which is exactly why an LS is the device that makes a board selective and
+    an LI is not, since an LI has no stage to delay.
+
+    A blank delay means the family envelope stands, which is the state every
+    project is in until somebody sets one. Nothing changes unless a setting is
+    made, so this cannot silently alter a result that was already published. */
+ var sd = num(prot && prot.sd, 0);
+ var stg = D.tripStages(prot && prot.trip);
+ if (sd > 0 && stg.shortTime && m > SHORT_TIME_FROM) {
+  var ii = stg.instantaneous;
+  /* No instantaneous, or not yet onto it: the device holds for the set delay. */
+  if (ii === null || m < ii) return sd;
+  /* Otherwise fall through and let the curve give the magnetic time. */
+ }
+
  if (m < pts[0][0]) return null;
  if (m >= pts[pts.length - 1][0]) return pts[pts.length - 1][1];
  /* Return the published value where the multiple is one of the published
@@ -4377,9 +4422,25 @@ function selectivity(down, downKind, up, upKind, faultAmps) {
       A factor of 1.25 is the usual working figure and is what is used
       here; below it the pair is reported as partial, not as a pass. */
    if (tU / tD < 1.25) {
-     var overload = I < irD * 1.5;
+     /* Which regime, judged on the device that has to hold.
+
+        The obvious test looks only at the device below, and it is wrong. A fault
+        at 5.6 kA is 5.6 times the setting of a 1,000 A circuit device — well
+        into its short circuit — and 1.4 times the setting of the 4,000 A board
+        above it, which is still on that board's long-time characteristic. No
+        delay can help there, because the board has not reached its short-time
+        stage to be delayed. Reported as a short-circuit overlap it sends an
+        engineer looking for a trip setting that does not exist; the answer is to
+        stagger the ratings.
+
+        Both devices decide it: the pair only counts as a short-circuit overlap
+        when the current is high enough on the device ABOVE to be in its
+        short-time band. */
+     var upBelowS = I < SHORT_TIME_FROM * irU;
+     var overload = I < irD * 1.5 || upBelowS;
      return {
        pass: false, partial: true, regime: overload ? 'overload' : 'short circuit',
+       upBelowShortTime: upBelowS, upMultiple: I / irU, downMultiple: I / irD,
        fromA: I, fromKA: I / 1000,
        tDown: tD, tUp: tU, irDown: irD, irUp: irU,
        down: down, up: up, downKind: downKind, upKind: upKind
@@ -4390,23 +4451,240 @@ function selectivity(down, downKind, up, upKind, faultAmps) {
           irDown: irD, irUp: irU };
 }
 
-function selectivityMessage(s, unit) {
+function selectivityMessage(s, unit, delayHint) {
  var what = unit + ' on ' + s.down.tag + ' against ' + s.up.tag;
  if (s.regime === 'overload') {
-   return 'The curves overlap on overload. At ' + s.fromKA.toFixed(1) +
-     ' kA — only ' + (s.fromA / s.irDown).toFixed(1) + ' × its own setting — the ' +
+  /* The overlap is below the short-time band of the device above. Nothing that
+     can be set on that device changes it, and telling someone to set a short-time
+     delay here sends them to a setting that does not apply at this current. */
+  if (s.upBelowShortTime) {
+   return 'The curves overlap at ' + s.fromKA.toFixed(1) + ' kA, which is ' +
+     s.downMultiple.toFixed(1) + ' × the ' + s.down.tag + ' setting but only ' +
+     s.upMultiple.toFixed(1) + ' × the ' + s.up.tag + ' one — the ' +
      s.down.tag + ' device takes ' + msOrS(s.tDown) + ' and the ' + s.up.tag +
-     ' device above it takes ' + msOrS(s.tUp) + '. An overload on this circuit would ' +
-     'clear the wrong one. Raise the ' + s.up.tag + ' setting, or lower the ' +
-     s.down.tag + ' one, so the curves separate.';
+     ' device above it ' + msOrS(s.tUp) + '. That current is on ' +
+     'the long-time characteristic of the board above, where its short-time ' +
+     'stage has not taken over, so a delay cannot reach it and grading cannot ' +
+     'fix this pair. What is needed is spacing in the ratings: the ' + s.up.tag +
+     ' should sit well clear of the current at which the ' + s.down.tag +
+     ' acts, so that a fault on ' + s.down.tag + ' is unmistakably above the ' +
+     'board\'s long-time pickup. There are two ways to get there and the second ' +
+     'is usually the right one. Stagger the ratings — lower the ' + s.down.tag +
+     ' setting, or raise the ' + s.up.tag + ' one — which is limited, because ' +
+     'the ' + s.down.tag + ' device is already holding for ' + msOrS(s.tDown) +
+     ' and the ratings are fixed by the load. Or fit the ' + s.up.tag +
+     ' with a trip unit whose long-time pickup is adjustable — an IˡLS or IˡLSI — ' +
+     'and set it so the board is already inside its short-time band at the ' +
+     'currents below it see. That is the standard answer to exactly this ' +
+     'overlap: it separates the pair at every current rather than only above ' +
+     'the board\'s long-time knee, and it costs a trip unit rather than a ' +
+     'redesign. If the current here is one the board will seldom see, accepting ' +
+     'the overlap and saying so is defensible — what is not defensible is ' +
+     'leaving it undecided.';
+  }
+  return 'The curves overlap on overload. At ' + s.fromKA.toFixed(1) +
+    ' kA — only ' + (s.fromA / s.irDown).toFixed(1) + ' × its own setting — the ' +
+    s.down.tag + ' device takes ' + msOrS(s.tDown) + ' and the ' + s.up.tag +
+    ' device above it takes ' + msOrS(s.tUp) + '. An overload on this circuit would ' +
+    'clear the wrong one. Raise the ' + s.up.tag + ' setting, or lower the ' +
+    s.down.tag + ' one, so the curves separate.' +
+    (delayHint ? ' ' + delayHint : '');
  }
  return 'The curves overlap above ' + s.fromKA.toFixed(1) + ' kA. At that current the ' +
    s.down.tag + ' device takes ' + msOrS(s.tDown) + ' and the ' + s.up.tag +
    ' device above it ' + msOrS(s.tUp) + ', so a fault on this circuit clears both — ' +
-   'or the wrong one first. The usual fix is a short-time stage on the ' + s.up.tag +
-   ' device, which holds it back over exactly this range, or an instantaneous ' +
-   'setting on it above the fault level here.';
+   'or the wrong one first. The fix is a short-time delay on the ' + s.up.tag +
+   ' device, which holds it back over exactly this range' +
+   (delayHint ? ': ' + delayHint + '. The whole installation has to be graded ' +
+     'together, because a delay set on one board has to beat everything below it.' : '.');
 }
+
+/* ================================================== grading for selectivity ===
+   The finding says a pair does not separate. This works out what would make it
+   separate — for the whole installation at once, because grading is not a
+   property of a pair.
+
+   Solving each pair on its own gives an answer that inverts itself. On this
+   project PDB8 came out wanting 0.15 s while the board below it wanted 0.8 s,
+   and setting both leaves the main board opening before the distribution board
+   on a fault anywhere below it — the opposite of the intent, and a harder fault
+   than the one being fixed. The delay belongs to a device, and a device is
+   graded against everything beneath it, so the requirement propagates up from
+   the leaves and each board takes a delay longer than everything below it.
+
+   So one pass, deepest board first:
+
+     a device that is going to hold clears in its delay, above its long-time band
+     and below any instantaneous pickup;
+     a device that is not going to hold — a final circuit, or a trip unit with no
+     short-time stage — presents whatever its own curve gives across the range
+     where a delay could have acted;
+     a board's delay is then the smallest standard one that clears more than
+     1.25 times the slowest of those, which is the margin the selectivity check
+     itself applies.
+
+   The delay is searched over the manufacturer's standard values rather than over
+   arithmetic, because a delay is only useful if it is one the device can be set
+   to.
+
+   Boards a delay cannot fix are reported with the reason rather than with a
+   number that will not work:
+
+     an LI above                     nothing to delay. Selective grading needs an
+                                     LS or LSI unit.
+     the lower device is itself slow  a longer delay above is not the answer,
+                                     and past about a second the hold becomes a
+                                     risk in its own right.
+     nothing below it                nothing to grade against.
+
+   Final circuits are listed but never given a delay: a device out at the end of
+   a feeder is what it is, and holding it back would defeat the point of having
+   one.
+
+   Returned rather than applied. A trip unit setting is a commissioning action on
+   installed equipment and has to be written against the device as well as
+   entered here. */
+/* Where a short-time stage begins to act, as a multiple of the setting.
+
+   At 1.5 × In the device is still leaving its long-time band — the curves put
+   it near 0.9 s there, on the thermal characteristic, which is overload
+   territory and which no delay can improve. A short-time stage operates above
+   about 2 × In, and that is the range in which a deliberate hold is both
+   available and meaningful.
+
+   Including the knee made every board on the project report that no standard
+   delay could grade it, because the child appeared to present a second when it
+   was really presenting the transition between two characteristics. */
+var SHORT_TIME_FROM = 2;
+
+function selectivityPlan(p) {
+  var plan = [];
+  var byItem = {};
+
+  /* What a device presents across the range a delay could act in. For a device
+     that will hold it is the delay; for one that will not it is the slowest its
+     curve gives in that range, which is the number the parent has to beat. */
+  function presentedTime(item, kind, delay) {
+    if (delay !== null && delay !== undefined) return delay;
+    /* No device means nothing to grade against, and reaching into a missing
+       prot for its rating is how the audit came to depend on every circuit
+       having one. */
+    if (!item || !item.prot) return null;
+    var fKA = faultAt(p, item, kind);
+    var amps = fKA ? fKA * 1000 : null;
+    var ladder = amps ? selectivityLadder(item.prot, item.prot, amps) : null;
+    if (!ladder) return null;
+    var ir = num(item.prot.ir, 0);
+    if (!(ir > 0)) return null;
+    var stg = D.tripStages(item.prot.trip);
+    /* Only the range where a delay on the parent could have acted: above the
+       long-time band, and below the parent's own instantaneous pickup. Below
+       that range an overlap is an overload overlap and a delay changes nothing. */
+    var ceiling = stg.instantaneous === null ? Infinity : stg.instantaneous * ir;
+    var worst = 0;
+    for (var i = 0; i < ladder.length; i++) {
+      var m = ladder[i] / ir;
+      if (m <= SHORT_TIME_FROM) continue;
+      if (ladder[i] > ceiling) break;
+      var t = clearingTimeAt(item.prot, m);
+      if (t === null) continue;
+      if (t > worst) worst = t;
+    }
+    return worst > 0 ? worst : null;
+  }
+
+  /* Deepest boards first, so a board has already been told what everything
+     below it presents before its own delay is chosen. */
+  var seq = [];
+  p.dbs.forEach(function (b) { seq.push({ item: b, kind: 'db' }); });
+  p.pdps.forEach(function (d) { seq.push({ item: d, kind: 'pdp' }); });
+  p.pdbs.forEach(function (b) { seq.push({ item: b, kind: 'pdb' }); });
+
+  seq.forEach(function (node) {
+    var it = node.item;
+    if (!it.prot || it.prot.kind !== 'mccb') return;
+    var parent = node.kind === 'db' ? get(p, 'pdp', it.pdpId)
+             : node.kind === 'pdp' ? get(p, 'pdb', it.pdbId)
+             : null;
+    /* Everything directly below, and the slowest time any of them presents. */
+    var kids = [];
+    if (node.kind === 'pdb') {
+      p.pdps.forEach(function (d) { if (d.pdbId === it.id) kids.push({ item: d, kind: 'pdp' }); });
+    } else if (node.kind === 'pdp') {
+      p.dbs.forEach(function (b) { if (b.pdpId === it.id) kids.push({ item: b, kind: 'db' }); });
+      p.panels.forEach(function (pn) { if (pn.pdpId === it.id && !pn.dbId) kids.push({ item: pn, kind: 'panel' }); });
+    } else {
+      p.panels.forEach(function (pn) { if (pn.dbId === it.id) kids.push({ item: pn, kind: 'panel' }); });
+    }
+    var slowest = 0, hasChild = false;
+    kids.forEach(function (k) {
+      var t = presentedTime(k.item, k.kind, byItem[k.item.id] ? byItem[k.item.id].delay : null);
+      if (t !== null && t > slowest) { slowest = t; hasChild = true; }
+    });
+
+    var stg = D.tripStages(it.prot.trip);
+    var rec = { item: it, kind: node.kind, delay: null, kids: kids.length,
+                up: parent, reason: null, beat: slowest };
+    if (!hasChild) {
+      rec.reason = 'nothing-below';
+    } else if (!stg.shortTime) {
+      rec.reason = 'no-short-time';
+      rec.detail = it.tag + ' has a ' + stg.name + ' unit, which has no ' +
+        'short-time stage, so there is nothing to delay it with. Selective ' +
+        'grading against what is below it needs an LS or LSI trip unit: an LI is ' +
+        'instantaneous at every fault current above ' + stg.instantaneous +
+        ' × its own setting and cannot be made to hold at all.';
+    } else {
+      var need = slowest * 1.25;
+      var pick = null;
+      for (var i = 0; i < D.SHORT_TIME_DELAYS.length; i++) {
+        if (D.SHORT_TIME_DELAYS[i] >= need) { pick = D.SHORT_TIME_DELAYS[i]; break; }
+      }
+      if (pick === null) {
+        rec.reason = 'insufficient-delay';
+        rec.detail = it.tag + ' would need a short-time delay longer than the ' +
+          D.SHORT_TIME_DELAYS[D.SHORT_TIME_DELAYS.length - 1] +
+          ' s largest a unit offers, because something below it presents ' +
+          msOrS(slowest) + '. A longer hold above is not the answer — the device ' +
+          'below is the slow one — and past about a second the hold is a fault ' +
+          'clearing risk in its own right.';
+      } else {
+        rec.delay = pick;
+      }
+    }
+    byItem[it.id] = rec;
+    plan.push(rec);
+  });
+
+  /* The final circuits, listed so the plan accounts for the whole installation.
+     They are never given a delay: a device out at the end of a feeder is what it
+     is, and holding it back would defeat the point of having one. */
+  p.panels.forEach(function (pn) {
+    if (!pn.prot || pn.prot.kind !== 'mccb') return;
+    var up = pn.dbId ? get(p, 'db', pn.dbId) : (get(p, 'pdp', pn.pdpId) || get(p, 'pdb', pn.pdbId));
+    if (!up) return;
+    plan.push({ item: pn, kind: 'panel', delay: null, up: up,
+                reason: 'final-circuit', beat: presentedTime(pn, 'panel', null) });
+  });
+
+  /* Outer boards first, so the plan reads the way the installation does. */
+  plan.sort(function (a, b) {
+    var depth = { pdb: 0, pdp: 1, db: 2, panel: 3 };
+    return depth[a.kind] - depth[b.kind];
+  });
+  return plan;
+}
+
+/* What the plan says about the device above a given pair, for the finding. */
+function delayFor(p, down, downKind, up, upKind) {
+  if (!up || !up.prot) return null;
+  var plan = selectivityPlan(p);
+  for (var i = 0; i < plan.length; i++) {
+    if (plan[i].item.id === up.id) return plan[i];
+  }
+  return null;
+}
+
 
 /* Selective up to `fromKA`, and the useful number to quote. */
 function selectivityBand(s) {
@@ -5668,8 +5946,9 @@ function selectivityBand(s) {
     txFaultKA, faultAt, boardStats, phaseSplit, audit, cableCheck,
     mccbFrameFor, icuFor, mcbRatingFor, tripFor, deviceRatingFor, proposeProt, applyProt, protAll, hasDownstream,
     withstandI2t, letThrough, clearingTimeS, checkWithstand, msOrS, WITHSTAND_K,
+    selectivityPlan, delayFor, selectivityMessage,
     groupFindings, worstLevel, groupTitle, boardTagOf, MIN_GROUP, MAX_LIST,
-    clearingTimeAt, selectivity, selectivityMessage, selectivityBand, selectivityLadder, reactive,
+    clearingTimeAt, selectivity, selectivityBand, selectivityLadder, reactive,
     arcTimeAt, arcDistanceFactor, arcAssessment,
     COINCIDENCE_BANDS, demandMethods, boardDemandKva,
     EQUIPMENT_GROUPS, billOfMaterials, mergeBase, mergeProjects, applyMerge,

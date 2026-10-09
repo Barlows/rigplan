@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=374"></script>
-<script src="../js/calc.js?v=374"></script>
+<script src="../js/data.js?v=408"></script>
+<script src="../js/calc.js?v=408"></script>
 <script>
 (function () {
   var results = [];
@@ -429,16 +429,36 @@
   var sOver = LC.selectivity({ tag: 'CIRC-1', prot: mcbc(100, 'TM') }, 'panel',
                              { tag: 'PDP1-1', prot: mcbc(100, 'TM') }, 'pdp', 20000);
   var mOver = LC.selectivityMessage(sOver, 'CIRC-1');
-  check('an overload overlap says so', /overload/.test(mOver), true);
+  /* This pair is rated the same on both devices, so the overlap is at 1.0 × both
+     settings — squarely on the long-time characteristic of each, and below the
+     point where the board above has a short-time stage to be delayed at all.
+
+     That is the case the message has to get right, because the old wording said
+     "raise or lower a setting, so the curves separate" and left it there. The
+     useful answer is that grading cannot reach this pair, and why. */
+  check('an overlap below the board\'s short-time band says grading cannot reach it',
+    /delay cannot reach it/.test(mOver), true);
+  check('and says the pair cannot be fixed by grading',
+    /grading cannot fix this pair/.test(mOver), true);
   check('and names the circuit', /CIRC-1/.test(mOver), true);
   check('and the board above it', /PDP1-1/.test(mOver), true);
   check('and quotes a clearing time for each', /5\.\d s/.test(mOver), true);
+  check('and gives the actual answer — spacing in the ratings',
+    /spacing in the ratings/.test(mOver), true);
+  check('and says the overlap can be accepted deliberately if the current is rare',
+    /accepting the overlap/.test(mOver), true);
   var sSc = LC.selectivity({ tag: 'CIRC-2', prot: mcbc(250, 'TM') }, 'panel',
                            { tag: 'PDP1-1', prot: mcbc(400, 'TM') }, 'pdp', 30000);
   var mSc = LC.selectivityMessage(sSc, 'CIRC-2');
   check('a short-circuit overlap gives the current it starts at',
     new RegExp(sSc.fromKA.toFixed(1)).test(mSc), true);
-  check('and says what the usual fix is', /short-time/.test(mSc), true);
+  check('and names the remedy — a short-time delay on the device above',
+    /short-time delay on the PDP1-1/.test(mSc), true);
+  /* With a delay stated, the message says what to set it to. */
+  var withHint = LC.selectivityMessage(sSc, 'CIRC-2', 'Set the PDP1-1 short-time delay to 0.3 s.');
+  check('and gives the number when the plan knows it', /0\.3 s/.test(withHint), true);
+  check('and says the installation has to be graded together, not one pair at a time',
+    /graded together/.test(withHint), true);
 
   /* And it reaches the audit as a finding that names the board above. */
   var gz = site();
@@ -2422,6 +2442,115 @@
      count would have hidden. */
   check('and it leaves no board with nothing on it',
     bal.p.pdps.every(function (b) { return LC.boardStats(bal.p, b, 'pdp').amp > 0; }), true);
+
+  /* ----------------------------------------------- grading for selectivity --
+     A device's time-current curve says how fast it is. It cannot say whether the
+     device is able to hold, and holding is the whole of selectivity — so before
+     this, the app could report a pair as non-selective and had no way to make it
+     selective, because there was nothing on the device to change. */
+  check('a trip unit that has a short-time stage is the one that can hold',
+    LS.TRIP_STAGES.LS.shortTime, true);
+  check('an LI has none, so it cannot be delayed at all',
+    LS.TRIP_STAGES.LI.shortTime, false);
+  check('an LS has no instantaneous, so a delay on it applies at every fault current',
+    LS.TRIP_STAGES.LS.instantaneous, null);
+  check('an LSI has one at 10 × its setting', LS.TRIP_STAGES.LSI.instantaneous, 10);
+
+  /* A stated delay overrides the envelope above 2 × In, and not below it —
+     below that the device is still on its long-time characteristic. */
+  var lsPlain = { ir: 1000, trip: 'LS' };
+  var lsHeld = { ir: 1000, trip: 'LS', sd: 0.3 };
+  check('an LS with no delay set uses its envelope',
+    LC.clearingTimeAt(lsPlain, 6), LC.clearingTimeAt({ ir: 1000, trip: 'LS' }, 6));
+  check('and with a delay set it holds for it',
+    LC.clearingTimeAt(lsHeld, 6), 0.3);
+  check('at every current, because it has nothing faster',
+    LC.clearingTimeAt(lsHeld, 50), 0.3);
+  check('but not on its long-time band, where the delay cannot reach',
+    LC.clearingTimeAt(lsHeld, 1.5) < 1, true);
+  /* An LSI has a magnetic element in parallel with the short-time stage, and the
+     faster of the two operates. */
+  check('an LSI holds to its instantaneous pickup',
+    LC.clearingTimeAt({ ir: 1000, trip: 'LSI', sd: 0.3 }, 6), 0.3);
+  check('and gives way to its magnetic element above it',
+    LC.clearingTimeAt({ ir: 1000, trip: 'LSI', sd: 0.3 }, 12) < 0.1, true);
+  /* A delay on a unit that has no stage is ignored, not silently honoured. */
+  check('a delay on an LI is ignored, as it must be',
+    LC.clearingTimeAt({ ir: 1000, trip: 'LI', sd: 0.3 }, 6),
+    LC.clearingTimeAt({ ir: 1000, trip: 'LI' }, 6));
+  /* A blank delay changes nothing at all, so nothing already published moves. */
+  check('and a device with no delay stated is untouched',
+    LC.clearingTimeAt({ ir: 1000, trip: 'LS', sd: null }, 6),
+    LC.clearingTimeAt({ ir: 1000, trip: 'LS' }, 6));
+
+  /* The cascade. A delay belongs to a device and has to beat everything below it,
+     so the plan is computed for the whole installation at once. Solved pair by
+     pair it inverts: on this project the main board came out wanting 0.15 s
+     while the board under it wanted 0.8 s. */
+  /* Four levels: main board, distribution board, sub-board, circuit — because
+     the cascade has to be checked across more than two, or a plan that merely
+     reverses the pair order would pass. */
+  var gSite = site({ pdbA: 2500, pdpA: 1000, dbA: 250 });
+  /* Attached to the sub-board through dbId, not by pointing pdpId at it — the
+     latter leaves the circuit on no board at all, which is a different test. */
+  var gCircuit = load(gSite.p, gSite.pdp, 60, 0.9, { dbId: gSite.db.id });
+  LC.protAll(gSite.p, {});
+  gSite.pdb.prot  = LS.newProt({ kind: 'mccb', ir: 4000, frame: 4000, icu: 80, trip: 'LS' });
+  gSite.pdp.prot  = LS.newProt({ kind: 'mccb', ir: 1000, frame: 1000, icu: 80, trip: 'LS' });
+  gSite.db.prot   = LS.newProt({ kind: 'mccb', ir: 250, frame: 250, icu: 50, trip: 'LS' });
+  gCircuit.prot   = LS.newProt({ kind: 'mccb', ir: 100, frame: 100, icu: 50, trip: 'LS' });
+  LC.applyNumbering(gSite.p);
+  var gp = LC.selectivityPlan(gSite.p);
+  var boardsWithDelay = gp.filter(function (r) { return r.kind !== 'panel' && r.delay !== null; });
+  check('the plan gives every board with something below it a delay',
+    boardsWithDelay.length, 3);
+  /* The property that matters: each board's delay beats the one below it. */
+  var main = gp.filter(function (r) { return r.kind === 'pdb'; })[0];
+  var dist = gp.filter(function (r) { return r.kind === 'pdp'; })[0];
+  check('and the main board takes a delay longer than the board under it',
+    main && dist && main.delay !== null && dist.delay !== null && main.delay > dist.delay, true);
+  check('by the 1.25 margin the selectivity check itself uses',
+    main && dist ? main.delay >= dist.delay * 1.25 : false, true);
+  check('every delay is one the manufacturer offers',
+    gp.every(function (r) {
+      return r.delay === null || LS.SHORT_TIME_DELAYS.indexOf(r.delay) >= 0;
+    }), true);
+  /* A final circuit is listed but never given a delay: a device out at the end
+     of a feeder is what it is, and holding it back defeats the point. */
+  check('final circuits are listed so the plan accounts for the whole installation',
+    gp.filter(function (r) { return r.kind === 'panel'; }).length > 0, true);
+  check('and none of them is given a delay',
+    gp.filter(function (r) { return r.kind === 'panel' && r.delay !== null; }).length, 0);
+  /* Applying the plan must actually clear the findings, not merely look right. */
+  var beforeGraded = LC.audit(gSite.p).filter(function (f) {
+    return /not selectively graded/.test(f.title);
+  }).length;
+  gp.forEach(function (r) { if (r.delay !== null) r.item.prot.sd = r.delay; });
+  var afterGraded = LC.audit(gSite.p).filter(function (f) {
+    return /not selectively graded/.test(f.title);
+  }).length;
+  check('and applying it removes the pairs it was built to fix',
+    afterGraded < beforeGraded, true);
+  /* ...and the remaining ones are the ones no delay can reach, not leftovers. */
+  var left = LC.audit(gSite.p).filter(function (f) { return /not selectively graded/.test(f.title); });
+  check('every one left says a delay cannot reach it',
+    left.length === 0 || left.every(function (f) {
+      return /delay cannot reach it|cannot be fixed by grading/.test(f.detail);
+    }), true);
+
+  /* A board with no short-time stage cannot be graded, and the plan says why
+     rather than offering a setting that does nothing. */
+  var liSite = site();
+  liSite.pdp.prot = LS.newProt({ kind: 'mccb', ir: 1000, frame: 1000, icu: 80, trip: 'LI' });
+  var liCircuit = load(liSite.p, liSite.pdp, 60, 0.9);
+  liCircuit.prot = LS.newProt({ kind: 'mccb', ir: 100, frame: 100, icu: 50, trip: 'LI' });
+  LC.applyNumbering(liSite.p);
+  var liPlan = LC.selectivityPlan(liSite.p);
+  var liRow = liPlan.filter(function (r) { return r.kind === 'pdp'; })[0];
+  check('a board on an LI unit is reported as ungradable',
+    liRow && liRow.delay === null && liRow.reason === 'no-short-time', true);
+  check('and the reason says what is needed instead',
+    /LS or LSI/.test(liRow.detail || ''), true);
 
   /* ------------------------------------------------------- everything at once */
   var z = site();
