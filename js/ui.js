@@ -915,8 +915,46 @@
       (d.notes ? '<div class="hint" style="margin-top:6px">' + esc(d.notes) + '</div>' : '') +
       '<div id="dynProt" style="margin-top:8px">' + verdict + '</div>' +
       (fKA ? '<div class="hint">Calculated fault level here: ' + fKA.toFixed(1) + ' kA. Breaking capacity is chosen to exceed it with margin — this figure is indicative, since it rests on the assumed transformer impedance and fault MVA.</div>' : '') +
+      nsxPanel(S, o, kind) +
       '</div>';
   }
+  /* The device as it would be ordered from the Schneider NSX range.
+
+     Derived, never stored. The schedule is a function of the settings above it —
+     the pickup, Isd, tsd, Ii and the fault level — so writing it onto the device
+     would create a second copy that could disagree with the first, and a schedule
+     that disagrees with the settings it was computed from is worse than no
+     schedule. It changes the moment a setting moves, which is the point.
+
+     Quoted part by part rather than as one opaque reference, because each part is
+     checked against the catalogue separately and a single string can only be
+     checked as a whole. Where no frame reaches the fault level that is stated
+     rather than rounded up — an order for a device that will not interrupt is the
+     one mistake this panel exists to prevent. */
+  function nsxPanel(prj, o, kind) {
+    if (!o || !o.prot || o.prot.kind !== 'mccb') return '';
+    var sel;
+    try { sel = LC.nsxSelect(prj, o, kind); } catch (e) { return ''; }
+    if (!sel) return '';
+    if (!sel.frame) return '<div class="hint" style="margin-top:6px"><b>No NSX frame</b> ' + esc(sel.why || '') + '</div>';
+    var head = '<div class="hint" style="margin-top:8px"><b>Schneider NSX selection</b> — ';
+    if (!sel.ok && sel.why) {
+      return head + esc(sel.frame.size) + ' with Micrologic ' + esc(sel.mic) +
+        ' cannot be supplied: ' + esc(sel.why) + '</div>';
+    }
+    return head + esc(sel.ref) + '</div>' +
+      '<div class="hint">Frame ' + esc(sel.frame.size) + ' (' + sel.frame.lo + '–' + sel.frame.hi +
+      ' A adjustable) · Micrologic ' + esc(sel.mic) + ' (' + esc((sel.funcs || {}).label || '') + ')' +
+      ' · long-time ' + Math.round(sel.ir) + ' A' +
+      (sel.ss ? ' · short-time from ' + sel.ss.toFixed(1) + '× (' +
+        Math.round(sel.ss * sel.ir) + ' A)' : '') +
+      (sel.sd ? ' holding ' + Math.round(sel.sd * 1000) + ' ms' : '') +
+      (sel.ii ? ' · instantaneous ' + sel.ii + '×' : '') +
+      ' · Icu ' + sel.icu + ' kA at ' + (sel.faultKA ? sel.faultKA.toFixed(1) : '?') +
+      ' kA fault. Every part is quoted separately so it can be checked against ' +
+      'the Schneider catalogue; the commercial reference is assembled from them.</div>';
+  }
+
   /* the live check under the form, recomputed on every change */
   function protVerdict(o, kind, d, fKA) {
     if (!d || !num(d.ir, 0)) return '<div class="hint">Nothing set. Press <b>Propose</b> for a starting point, or type the device from the schedule.</div>';

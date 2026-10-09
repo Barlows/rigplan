@@ -28,8 +28,8 @@
 <div id="cases"></div>
 <div id="summary">running…</div>
 
-<script src="../js/data.js?v=464"></script>
-<script src="../js/calc.js?v=464"></script>
+<script src="../js/data.js?v=475"></script>
+<script src="../js/calc.js?v=475"></script>
 <script>
 (function () {
   var results = [];
@@ -375,6 +375,74 @@
      tested against the fault there, not at the end of the feeder. */
   check('while the device is tested against the fault at its own terminals',
     LC.deviceFaultKA(lp.p, lpC, 'panel') > farEnd.kA * 5, true);
+
+  /* ---- selecting a real device from the Schneider NSX range ----
+
+     The selection was wrong once, in the worst direction there is to be wrong:
+     it picked Micrologic 2.2, which is a long-time unit and nothing else, onto
+     forty-eight circuits — devices with no magnetic release and no electronic
+     instantaneous, which clear a sustained overload and will not clear a short
+     circuit. It was wrong because it took the first unit in the frame's list that
+     met the requirements it was checking, and 2.2 met all of them.
+
+     So the rule that is pinned here is not "it picks a frame" — it is that no
+     device is ever selected without a stage that interrupts a fault. */
+  /* site() returns { p, tx, pdb, pdp, db } — the project is under .p and the
+     board is .pdp. Neither is the array, which is the third time this has been
+     got wrong here. */
+  var nx = site();
+  var nLoad = load(nx.p, nx.pdp, 60, 0.9);
+  LC.protAll(nx.p, {});
+  /* Set the device rather than letting protAll propose one. A 60 kW circuit lands
+     on an MCB, and nsxSelect answers for MCCBs only — it returns nothing for an
+     MCB, which is right, but it means the test would be measuring the
+     MCB/MCCB threshold instead of the selection. */
+  nLoad.prot = { kind: 'mccb', frame: 250, ir: 250, icu: 36, trip: 'LI', poles: 4, ss: null, sd: null, ii: null };
+  LC.applyNumbering(nx.p);
+  var nSel = LC.nsxSelect(nx.p, nLoad, 'panel');
+  check('a final circuit is selected from the NSX range',
+    nSel && nSel.frame && /^NSX/.test(nSel.frame.size), true);
+  check('and it has an instantaneous stage, because a device that will not clear a short circuit is not a device',
+    nSel.funcs.instant, true);
+  check('and never the long-time-only Micrologic 2.2, whatever the frame offers',
+    nSel.mic === '2.2', false);
+  check('the frame covers the setting, so the pickup is inside its adjustable range',
+    nSel.ir >= nSel.frame.lo && nSel.ir <= nSel.frame.hi, true);
+  check('the interrupting rating clears the fault level with the design margin on it',
+    nSel.icu >= nSel.faultKA * 1.25 || nSel.icu === null, true);
+  check('and the reference quotes the parts separately so they can each be checked',
+    /NSX\d+/.test(nSel.ref) && /MIC \d\.\d/.test(nSel.ref) && /Icu/.test(nSel.ref), true);
+  /* A board with something below it must get a short-time stage, or it cannot be
+     graded at any setting — that is the whole of the grading work. */
+  var nb = LS.newDb({ name: 'sub', pdpId: nx.pdp.id, incomerA: 125, ways: 12, spareWays: 4 });
+  nb.__kind = 'db';
+  nx.p.dbs.push(nb);
+  nb.prot = { kind: 'mccb', frame: 160, ir: 160, icu: 36, trip: 'LI', poles: 4, ss: null, sd: null, ii: null };
+  /* And something on it, which is what makes it a board that has to be graded. */
+  var nUnder = LS.newPanel({ name: 'under', tag: 'U-1', kw: 30, pf: 0.9, dbId: nb.id, autoAssign: false });
+  nUnder.__kind = 'panel';
+  nUnder.prot = { kind: 'mccb', frame: 100, ir: 100, icu: 36, trip: 'LI', poles: 4, ss: null, sd: null, ii: null };
+  nx.p.panels.push(nUnder);
+  LC.applyNumbering(nx.p);
+  var nBoard = LC.nsxSelect(nx.p, nb, 'db');
+  check('a board with circuits below it gets a short-time stage, without which it cannot be graded',
+    nBoard.funcs.short, true);
+  /* Below 100 A the range offers no electronic unit at all. That is a limit of the
+     product and the answer has to say so rather than quietly fitting a unit that
+     cannot do the job — so the check is on the catalogue itself as well as on the
+     selection, because a frame gaining an electronic unit later must not go
+     unnoticed. */
+  var nCompact = LS.NSX.filter(function (f) { return f.compact; })[0];
+  check('the compact frame is thermal-magnetic throughout, and says so',
+    nCompact.trip.length > 0 && nCompact.trip.every(function (m) {
+      return !LS.MICLOGIC_FUNCTIONS[m].short;
+    }), true);
+  /* 2.2 has no instantaneous stage and never will, and that is exactly why the
+     selector is forbidden from choosing it — so the catalogue is asserted to
+     contain the offending unit, which is what makes the rule above a live
+     constraint rather than a comment. */
+  check('which is why one of them has no instantaneous stage at all, and is not selectable',
+    nCompact.trip.some(function (m) { return !LS.MICLOGIC_FUNCTIONS[m].instant; }), true);
 
   /* A core that survives is not reported. Every board is checked, so a passing
      line for each one would bury the failures. */

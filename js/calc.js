@@ -323,6 +323,21 @@ var LC = (function () {
          part that reaches a neutral. Zero for a drive; high for a single-phase
          switch-mode supply. */
       triplen: thd === null ? null : thd * D.triplenFractionOf(pn),
+      /* CONNECTED current — what the machine draws when it runs.
+
+         Distinct from amp below because a demand factor is a statement about how
+         many machines run at once, not a derating of any one of them. A 13.8 kW
+         circuit at a demand of 0.45 contributes 9.5 A to the board, but the motor
+         on it draws its full 21 A every time it starts, and anything that asks
+         about the MACHINE — its starting current, its overload relay setting,
+         whether it will trip the board above — has to ask about the 21 A.
+
+         Using the diversified figure for those questions understated every motor
+         by its demand factor. The overload class check on this project reported a
+         30 A device taking 349 seconds at "six times the motor current"; the
+         six was six times 9.5 A rather than six times 21 A, so it was not asking
+         the question it thought it was. */
+      ampConn: currentFor(kva, pf, pn.phases, pn.volt),
       amp: currentFor(kvaD, pf, pn.phases, pn.volt),
       /* what actually flows in the cable */
       ampHarm: currentFor(kvaD, pf, pn.phases, pn.volt) * harmF,
@@ -858,7 +873,9 @@ var LC = (function () {
     var iiSet = mf.instant ? num(prot.ii, 0) || null : null;
 
     /* 4. The interrupting rating. */
-    var f = faultLevel(p, item, kind === 'panel' ? 'pdb' : kind);
+    /* The device's own terminals, which for a circuit is the board it sits on.
+       A leftover 'kind === panel ? pdb' in the first draft of this asked a panel
+       for the main board's path and threw. */
     var fKA = deviceFaultKA(p, item, kind);
     var icu = D.nsxIcu(frame, fKA, p.design && p.design.spreadMargin);
 
@@ -2732,7 +2749,10 @@ var LC = (function () {
         var st = panelDemand(p, pn);
         /* The relay is set to the motor's rated current, so the multiple at which
            the class is quoted is 6 x that — by definition. */
-        var atSix = 6 * st.amp;
+        /* Six times the motor's RATED current — the relay is set to that, and
+           the class is quoted there. Six times its diversified share is a
+           different and much smaller number. */
+        var atSix = 6 * (num(st.ampConn, 0) > 0 ? st.ampConn : st.amp);
         var tAtSix = clearingTimeAt(prot, atSix / Math.max(1, num(prot.ir, 1)));
         if (tAtSix !== null && tAtSix > spec.seconds * 1.02) {
           add('warn', 'panel', pn.id, pn.tag + ' overload relay class ' + cls + ' cannot be met by its device',
@@ -3176,6 +3196,8 @@ function clearingTimeAt(prot, multiple) {
   function startingCurrentA(p, pn) {
     if (!isMotorLoad(pn)) return null;
     var d = panelDemand(p, pn);
+    /* The motor's own rated current, not its share of the board. */
+    var flc = num(d.ampConn, 0) > 0 ? d.ampConn : d.amp;
     /* A stand-by machine with no rated load on the sheet. It is a real motor and
        it will draw real inrush when it starts — but with no rated current there
        is no multiple to apply, and printing "0 A starting" would read as a
@@ -3191,14 +3213,14 @@ function clearingTimeAt(prot, multiple) {
     var group = num(pn.simultaneousStart, 1) > 1 ? num(pn.simultaneousStart, 1) : 1;
     return {
       method: m,
-      flc: d.amp,
-      amps: d.amp * m.multiple,
+      flc: flc,
+      amps: flc * m.multiple,
       multiple: m.multiple,
       torque: m.torque,
       accel: m.accel,
       group: group,
       /* what the board sees if several of these come in together */
-      combined: d.amp * m.multiple * group,
+      combined: flc * m.multiple * group,
       volt: D.num(pn.volt, 400)
     };
   }
