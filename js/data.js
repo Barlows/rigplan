@@ -85,6 +85,114 @@ var LS = (function () {
   var MCCB_SETTINGS = [10, 12.5, 16, 20, 25, 32, 40, 50, 63, 70, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300];
   /* Breaking capacities, in kA at 415 V / 440 V. */
   var ICU_KA = [6, 10, 15, 20, 25, 36, 50, 80, 100];
+
+  /* ===================================================== Schneider NSX ======
+
+     The NSX range, as reference data rather than as numbers scattered through the
+     arithmetic. A device is selected from it the way it is in practice: pick the
+     frame the rating needs, pick the trip unit that gives the functions the
+     coordination requires, set those functions to the values the coordination
+     works out, and take the interrupting rating the fault level demands.
+
+     Each frame is quoted over the range of long-time settings it offers, not at
+     a single rating, because that is the whole point of an adjustable pickup — a
+     1,250 A frame covers 630 to 1,250 A and the selection sits inside that, not
+     on it. `icu` is the catalogue ladder in kA at 415 V; the suffix after it is
+     Schneider's: N is the standard build, L the high-interrupting one.
+
+     Nothing here decides anything on its own. nsxSelect() in calc.js chooses from
+     it, and the reasoning that goes with the choice is in the findings. */
+
+  var NSX = [
+    /* The compact frame. Below 100 A it is thermal-magnetic only — Micrologic 2
+       or 3 — and there is no short-time stage, so it cannot be made selective
+       against anything. That is a real limit of the product and the selector has
+       to say so rather than pretending an electronic unit exists at this size. */
+    { size: 'NSX100', lo: 12.5, hi: 100,  icu: [25, 50, 100], suffix: { 25: 'N', 50: 'H', 100: 'L' },
+      compact: true, trip: ['2.2', '3.2'] },
+    { size: 'NSX160', lo: 100,  hi: 160,  icu: [25, 50, 100], suffix: { 25: 'N', 50: 'H', 100: 'L' },
+      trip: ['2.2', '3.2', '5.2', '6.2', '7.2'] },
+    { size: 'NSX250', lo: 100,  hi: 250,  icu: [25, 50, 100], suffix: { 25: 'N', 50: 'H', 100: 'L' },
+      trip: ['2.2', '3.2', '5.2', '6.2', '7.2'] },
+    { size: 'NSX400', lo: 160,  hi: 400,  icu: [25, 50, 100], suffix: { 25: 'N', 50: 'H', 100: 'L' },
+      trip: ['5.2', '5.3', '6.3', '7.3', '8.3'] },
+    { size: 'NSX630', lo: 250,  hi: 630,  icu: [25, 50, 100], suffix: { 25: 'N', 50: 'H', 100: 'L' },
+      trip: ['5.2', '5.3', '6.3', '7.3', '8.3'] },
+    { size: 'NSX800', lo: 500,  hi: 800,  icu: [50, 100], suffix: { 50: 'N', 100: 'L' },
+      trip: ['5.2', '5.3', '6.3', '7.3', '8.3'] },
+    { size: 'NSX1000', lo: 500, hi: 1000, icu: [50, 100], suffix: { 50: 'N', 100: 'L' },
+      trip: ['5.2', '5.3', '6.3', '7.3', '8.3'] },
+    { size: 'NSX1250', lo: 630, hi: 1250, icu: [50, 100], suffix: { 50: 'N', 100: 'L' },
+      trip: ['5.2', '5.3', '6.3', '7.3', '8.3'] },
+    { size: 'NSX1600', lo: 800, hi: 1600, icu: [50, 100], suffix: { 50: 'N', 100: 'L' },
+      trip: ['5.2', '5.3', '6.3', '7.3', '8.3'] },
+    { size: 'NSX2000', lo: 1000, hi: 2000, icu: [50, 100], suffix: { 50: 'N', 100: 'L' },
+      trip: ['6.3', '7.3', '8.3'] },
+    { size: 'NSX2500', lo: 1250, hi: 2500, icu: [50, 100], suffix: { 50: 'N', 100: 'L' },
+      trip: ['6.3', '7.3', '8.3'] },
+    { size: 'NSX3000', lo: 1600, hi: 3000, icu: [50, 100], suffix: { 50: 'N', 100: 'L' },
+      trip: ['6.3', '7.3', '8.3'] },
+    { size: 'NSX4000', lo: 2000, hi: 4000, icu: [50, 100], suffix: { 50: 'N', 100: 'L' },
+      trip: ['6.3', '7.3', '8.3'] },
+    { size: 'NSX5000', lo: 2500, hi: 5000, icu: [50, 100], suffix: { 50: 'N', 100: 'L' },
+      trip: ['6.3', '7.3', '8.3'] },
+    { size: 'NSX6000', lo: 3000, hi: 6000, icu: [50, 100], suffix: { 50: 'N', 100: 'L' },
+      trip: ['6.3', '7.3', '8.3'] }
+  ];
+
+  /* What the digit pairs in a Micrologic reference mean, because "7.3" on a
+     schedule is otherwise unreadable and the difference between 5.3 and 7.3 is
+     the whole of the coordination.
+
+     The first digit is the family — 2 is thermal-magnetic, 5 and up are
+     electronic — and the second is the number of protected poles plus one, so 2
+     is single-pole and 3 is the three-phase build. The lettered versions (5.3A,
+     7.3L) add earth-leakage or earth-fault measurement and are not auto-selected
+     here because nothing in the schedule asks for it. */
+  var MICLOGIC_FUNCTIONS = {
+    '2.2': { long: true,  short: false, instant: false, thermal: true,  label: 'L, thermal' },
+    '3.2': { long: true,  short: false, instant: true,  thermal: true,  label: 'L + I, thermal-magnetic' },
+    '5.2': { long: true,  short: false, instant: false, thermal: false, label: 'L' },
+    '5.3': { long: true,  short: false, instant: false, thermal: false, label: 'L' },
+    '6.2': { long: true,  short: true,  instant: false, thermal: false, label: 'L + S' },
+    '6.3': { long: true,  short: true,  instant: false, thermal: false, label: 'L + S' },
+    '7.2': { long: true,  short: true,  instant: true,  thermal: false, label: 'L + S + I' },
+    '7.3': { long: true,  short: true,  instant: true,  thermal: false, label: 'L + S + I' },
+    '8.3': { long: true,  short: true,  instant: true,  thermal: false, label: 'L + S + I + G, earth fault' }
+  };
+
+  /* The adjustment a Micrologic actually offers, so the coordination search does
+     not propose a number the unit cannot be set to.
+
+     Ir runs 0.4 to 1.0 of the frame on the electronic units and in 5 A steps,
+     which is what lets a 1,250 A frame be set to the 847 A its board actually
+     carries. Isd is 1.1 to 10 of Ir in the published steps, and tsd is the delay
+     list below it. Ii is OFF or 0.1 to 10 of Ir. */
+  var NSX_IR_STEPS = [0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0];
+  var NSX_ISD_STEPS = [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.8, 2, 2.5, 3, 4, 5, 6, 8, 10];
+  var NSX_II_STEPS  = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1, 1.2, 1.5, 2, 3, 4, 5, 6, 8, 10];
+
+  /* Frame that covers a rating, or null. The smallest frame whose range does,
+     which is not the same as the nearest size above it — NSX1250 covers 630 up,
+     so an 800 A device does not need the 1,000 A frame. */
+  function nsxFor(amps) {
+    var a = num(amps, 0);
+    if (!(a > 0)) return null;
+    var hits = NSX.filter(function (n) { return a >= n.lo && a <= n.hi; });
+    return hits.length ? hits[0] : (a < NSX[0].lo ? null : null);
+  }
+
+  /* The smallest interrupting rating in a frame that clears the fault level with
+     the margin the design margin asks for. Returns null when the frame cannot do
+     it at any rating it offers, which is a real answer and not a failure. */
+  function nsxIcu(frame, faultKA, margin) {
+    if (!frame || !(faultKA > 0)) return null;
+    var need = faultKA * num(margin, 1.25);
+    for (var i = 0; i < frame.icu.length; i++) {
+      if (frame.icu[i] >= need) return frame.icu[i];
+    }
+    return null;
+  }
   /* Trip unit families. TM = thermal-magnetic, the cheap answer up to 160 A.
      LI = long-time + instantaneous, LI+LS adds a short-time stage for a
      downstream earth fault, LSI adds instantaneous selectivity. */
@@ -1257,6 +1365,7 @@ var LS = (function () {
     SIZES_A, SIZES_KVA, SIZES_KW, PHASES, VOLT_LV, VOLT_HV,
     maxDisconnectionTime, peMinCsa, PE_MIN_CSA, PE_MIN, DISC_TN, DISC_TT,
     TRIP_STAGES, tripStages, stageSettings, SHORT_TIME_DELAYS,
+    NSX, MICLOGIC_FUNCTIONS, NSX_IR_STEPS, NSX_ISD_STEPS, NSX_II_STEPS, nsxFor, nsxIcu,
     SHORT_TIME_PICKUPS, INSTANT_PICKUPS,
     VECTOR_GROUPS, blocksTriplen, lvNeutralEarthed, VEC_LV_DELTA,
     START_METHODS, LOAD_TORQUES,

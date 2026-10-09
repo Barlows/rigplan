@@ -745,6 +745,168 @@ var LC = (function () {
     return self ? self.kA : faultAt(p, item, kind);
   }
 
+  /* ================================================ selecting an NSX ======
+
+     A device is chosen the way one is chosen in practice, in four steps, and each
+     step answers a different question — so each is reported separately, because
+     "we need 50 kA" and "we need 630 A" are not the same conversation.
+
+     1. FRAME, from the rating the load needs. The frame is the physical device
+        and its rating is the top of the adjustable range, not the setting: an
+        NSX1250 covers 630 to 1,250 A and a board carrying 847 A is an NSX1250
+        with the long-time pickup at 847 A. Choosing the frame on the setting
+        instead would put every board on the smallest frame that happened to
+        cover its load and leave no adjustment at all — which is how the grading
+        problem came about in the first place.
+
+     2. TRIP UNIT, from what the coordination requires and nothing else. The
+        Micrologic digit decides it: 5 is long-time only, 6 adds the short-time
+        stage that selectivity is made of, 7 adds the adjustable instantaneous.
+        A board with boards below it needs a 6 or a 7 or it cannot be graded at
+        any setting. Below 100 A the range offers no electronic unit at all — the
+        compact frame is thermal-magnetic and has no short-time stage — so that is
+        reported rather than quietly given a unit that cannot do it.
+
+     3. SETTINGS, from the coordination that has already been worked out: the
+        long-time pickup the grading chose or the load, the short-time pickup and
+        delay it chose, the instantaneous setting if one was chosen.
+
+     4. INTERRUPTING RATING, from the fault level with the design margin. Where
+        the frame cannot reach it, that is said plainly — an NSX5000 tops out at
+        100 kA and no setting changes that, which is exactly the kind of thing
+        that has to reach the person choosing the switchgear. */
+
+  function nsxSelect(p, item, kind) {
+    if (!item || !item.prot || item.prot.kind !== 'mccb') return null;
+    var prot = item.prot;
+
+    /* 1. The frame. Taken from the frame rating if the device has one, otherwise
+          from the setting, and in both cases rounded UP to a standard size so the
+          device is not a bespoke rating between two catalogue frames. */
+    var wanted = num(prot.frame, 0) || num(prot.ir, 0);
+    var frame = D.nsxFor(wanted) || D.nsxFor(D.SIZES_A.filter(function (a) {
+      return a >= wanted;
+    })[0]);
+    if (!frame) return {
+      item: item, kind: kind, ok: false,
+      why: 'No NSX frame covers ' + Math.round(wanted) + ' A. The range runs to ' +
+        D.NSX[D.NSX.length - 1].hi.toFixed(0) + ' A; above that the answer is a '
+    };
+
+    /* 2. What the coordination needs from the unit. */
+    var hasChild = false;
+    if (kind === 'pdb') {
+      hasChild = p.pdps.some(function (d) { return d.pdbId === item.id; });
+    } else if (kind === 'pdp') {
+      hasChild = p.dbs.some(function (b) { return b.pdpId === item.id; }) ||
+        p.panels.some(function (pn) { return pn.pdpId === item.id && !pn.dbId; });
+    } else if (kind === 'db') {
+      hasChild = p.panels.some(function (pn) { return pn.dbId === item.id; });
+    }
+    var needShort = hasChild || num(prot.sd, 0) > 0 || num(prot.ss, 0) > 0;
+
+    /* An instantaneous stage is required on EVERY device, not only where the
+       grading happens to want one.
+
+       Micrologic 2.2 is a long-time unit and nothing else: no magnetic release,
+       no electronic instantaneous. It will clear a sustained overload and it will
+       not clear a short circuit, and it offers nothing for an earth fault. A
+       first pass at this selection picked the first unit in the frame's list that
+       met the other requirements, and on this project that put 2.2 on
+       forty-eight circuits including fifteen of them Compact NSX100s — devices
+       with no fault protection on them at all, quoted as though they were a
+       selection.
+
+       The minimum is therefore 3.2, which is long-time plus magnetic, and every
+       device gets it unless the frame has nothing better. Anything above that is
+       added for coordination, never for protection. */
+    var needInstant = true;
+
+    var pick = null, whyNot = null;
+    function acceptable(mic) {
+      var f = D.MICLOGIC_FUNCTIONS[mic] || {};
+      if (needShort && !f.short) return false;
+      if (needInstant && !f.instant) return false;
+      return true;
+    }
+    for (var i = 0; i < frame.trip.length && !pick; i++) {
+      if (acceptable(frame.trip[i])) pick = frame.trip[i];
+    }
+    /* Nothing in this frame does what is needed. Say so rather than downgrading
+       to a unit that will not coordinate — that is the mistake the finding is
+       already there to prevent. */
+    if (!pick) {
+      var closest = frame.trip[frame.trip.length - 1];
+      var cf = D.MICLOGIC_FUNCTIONS[closest] || {};
+      return {
+        item: item, kind: kind, ok: false, frame: frame, mic: closest,
+        why: frame.size + ' has no ' + (needShort ? 'short-time' : 'instantaneous') +
+          ' stage at any rating — its units are ' + frame.trip.join(' and ') +
+          ', and ' + (cf.label || 'none of them') + ' cannot be graded against ' +
+          'what is below it. Above 100 A the range is electronic throughout; ' +
+          'below it the compact frame is thermal-magnetic and this is a limit of ' +
+          'the product, not a setting.'
+      };
+    }
+
+    /* 3. The settings, each one only if it was asked for. */
+    var irWant = num(prot.ir, 0) || frame.hi;
+    var irSet = Math.min(Math.max(irWant, frame.lo), frame.hi);
+    var mf = D.MICLOGIC_FUNCTIONS[pick] || {};
+    var ssSet = mf.short ? num(prot.ss, 0) || null : null;
+    var sdSet = mf.short ? num(prot.sd, 0) || null : null;
+    var iiSet = mf.instant ? num(prot.ii, 0) || null : null;
+
+    /* 4. The interrupting rating. */
+    var f = faultLevel(p, item, kind === 'panel' ? 'pdb' : kind);
+    var fKA = deviceFaultKA(p, item, kind);
+    var icu = D.nsxIcu(frame, fKA, p.design && p.design.spreadMargin);
+
+    var icuSuffix = icu && frame.suffix ? frame.suffix[icu] : '';
+    var poles = num(prot.poles, 4) >= 4 ? 4 : 3;
+    /* The reference is assembled from the selection, field by field, in
+       Schneider's own order: size and interrupting suffix, poles, the trip unit,
+       then the settings. Every one of those parts is here to be checked against
+       the catalogue before an order goes in — which is the point of quoting them
+       separately rather than as one opaque string. */
+    var ref = frame.size + icuSuffix + poles + ' MIC ' + pick +
+      (irSet ? ' N' + Math.round(irSet) : '') +
+      (ssSet ? ' Isd ' + ssSet.toFixed(1) : '') +
+      (sdSet ? ' tsd ' + Math.round(sdSet * 1000) + 'ms' : '') +
+      (iiSet ? ' Ii ' + iiSet : '') +
+      (icu ? ' Icu ' + icu + 'kA' : '');
+
+    return {
+      item: item, kind: kind, ok: icu !== null, frame: frame, mic: pick,
+      funcs: mf, icu: icu, icuSuffix: icuSuffix, poles: poles,
+      frameA: frame.hi, ir: irSet, ss: ssSet, sd: sdSet, ii: iiSet,
+      faultKA: fKA, ref: ref,
+      why: icu === null
+        ? frame.size + ' tops out at ' + frame.icu[frame.icu.length - 1] +
+          ' kA and this board sees ' + (fKA ? fKA.toFixed(1) : '?') + ' kA. No ' +
+          'setting of this device reaches it — a fuse at the transformer, a ' +
+          'different source impedance, or a busbar system with a higher ' +
+          'interrupting rating are the answers, not a larger frame.'
+        : null
+    };
+  }
+
+  /* The whole installation, ordered the way a switchgear schedule reads: from the
+     incomer down. */
+  function nsxSchedule(p) {
+    var rows = [];
+    var order = { pdb: 0, pdp: 1, db: 2, panel: 3 };
+    function add(item, kind) { var r = nsxSelect(p, item, kind); if (r) rows.push(r); }
+    (p.pdbs || []).forEach(function (b) { add(b, 'pdb'); });
+    (p.pdps || []).forEach(function (d) { add(d, 'pdp'); });
+    (p.dbs || []).forEach(function (b) { add(b, 'db'); });
+    (p.panels || []).forEach(function (pn) { add(pn, 'panel'); });
+    rows.sort(function (a, b) {
+      return (order[a.kind] - order[b.kind]) || String(a.item.tag).localeCompare(String(b.item.tag));
+    });
+    return rows;
+  }
+
   function pdpMaxA(p) {
     return num(p && p.design && p.design.pdpMaxIncomer, 1600);
   }
@@ -6584,7 +6746,7 @@ function selectivityBand(s) {
     startMethod, startingCurrentA, startingCheck, sourceImpedanceAt, curveInstantaneousMultiple, torqueNeeded,
     isMotorLoad, isSpare, minimumCsa, cableShortfalls, csaForFault, pdpMaxA, usableA,
     isBusbar, busbarCheck, impedanceSensitivity, deviceFaultKA,
-    tapPositions, tapAt, tapAdvice,
+    tapPositions, tapAt, tapAdvice, nsxSelect, nsxSchedule,
     SELECTIVITY_STEPS,
     choosePdp, assignPanel, createPdpFor, feederLen, syncLen,
     sizeCablesFor, sizeCablesForPdb, sizeCablesForDb, suggestDbFeeder, sizeCableForPanel, sizeAll, feederAmp, needsSizing,
