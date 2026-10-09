@@ -5018,6 +5018,78 @@
     };
   };
 
+/* Opening a project from a link: ?project=<path>
+
+     A load schedule is reviewed by more than one person, and the useful artefact
+     is a link that opens the current one rather than a file somebody has to
+     find. So the app takes a relative path and loads it.
+
+     The path is constrained to THIS origin, deliberately and completely: no
+     scheme, no protocol-relative //host, no leading slash, no .., no control
+     characters. It cannot be turned into a request somewhere else or a way of
+     reading outside the served directory.
+
+     That is the whole security model, and it is why nginx refuses /tools/ — this
+     parameter will fetch whatever the server is willing to serve, so the server
+     has to be the one deciding. A project file is client data and belongs behind
+     whatever the rest of it is behind. */
+  App.projectParam = function () {
+    var q = '';
+    try { q = window.location.search || ''; } catch (e) { return null; }
+    var m = /[?&]project=([^&]+)/.exec(q);
+    if (!m) return null;
+    var path;
+    try { path = decodeURIComponent(m[1].replace(/\+/g, ' ')); } catch (e) { return null; }
+    if (!path) return null;
+    if (/^[a-z][a-z0-9+.-]*:/i.test(path)) return null;
+    if (path.indexOf('//') === 0) return null;
+    if (path.charAt(0) === '/') return null;
+    if (path.split('/').indexOf('..') >= 0) return null;
+    if (/[\x00-\x1f]/.test(path)) return null;
+    /* No percent sign either, and this is the one that bites.
+
+       The path is decoded once from the query string, so a value written as
+       %252e%252e arrives here as the literal text %2e%2e — which is not ".." and
+       passes the check above. The browser then resolves it when it fetches, and
+       percent-encoded dots ARE normalised to dots on the way out. So a link like
+       ?project=tools%252F%252e%252e%252Fetc%252Fpasswd passed every rule here and
+       still walked out of the served directory. Found by testing the encoder
+       against the check rather than by reading it.
+
+       Refusing % outright closes the whole family, at the cost of a project file
+       whose name genuinely needs encoding — which on a path the author chose is
+       not a real cost, and is far cheaper than getting the normalisation rules
+       right by hand. Backslash too: some servers treat it as a separator. */
+    if (path.indexOf('%') >= 0) return null;
+    if (path.indexOf('\\') >= 0) return null;
+    return path;
+  };
+
+  App.loadProjectFromLink = function () {
+    var path = App.projectParam();
+    if (!path) return Promise.resolve(null);
+    return fetch(path, { cache: 'no-store' }).then(function (r) {
+      if (!r.ok) throw new Error('the server returned ' + r.status);
+      return r.json();
+    }).then(function (data) {
+      var body = data && data.project ? data.project : data;
+      if (!body || !Array.isArray(body.panels)) throw new Error('that file is not a project');
+      openProject(body, { quiet: true });
+      return path;
+    });
+  };
+
   window.App = App;
-  document.addEventListener('DOMContentLoaded', init);
+  document.addEventListener('DOMContentLoaded', function () {
+    init();
+    if (!App.projectParam()) return;
+    /* After init, so the shell is up and the load has somewhere to land. A
+       failure is reported rather than swallowed: a link that silently opens
+       nothing looks exactly like an app that is broken. */
+    App.loadProjectFromLink().then(function (p) {
+      toast('Opened ' + p, 'good');
+    }).catch(function (e) {
+      toast('Could not open ' + App.projectParam() + ' — ' + e.message, 'bad');
+    });
+  });
 })();
