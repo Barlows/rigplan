@@ -17,6 +17,26 @@ scratch/
 # the page that needs it.
 test/*.dxf
 
-# Generated project files. Regenerate from the source spreadsheet with the
-# tools in this folder rather than committing the output.
-tools/*.json
+# tools/*.json used to be ignored, with a note saying client data must stay out of
+# the repository. That was the right default and it is now a deliberate
+# exception: the WXM project is committed, because this repository is private and
+# the site this deploys to is dedicated to that one project.
+#
+# Two things to know before adding a THIRD project file here. The rule that
+# mattered was never "not in git forever" — it was "one client's installation data
+# must not be visible to another". A private repository satisfies that for as
+# long as it stays private, and it stops the day anyone else is given access.
+# If that ever happens this line goes back and the VM carries the file the way a
+# deploy carries a secret.
+#
+# And history is not the present. Removing a file from HEAD does not remove it
+# from any commit that already holds it, so this decision is not reversible by
+# re-adding the rule. It is reversible by new repository.
+
+# The earlier iteration of the same project, kept out of the repository. It is
+# the same client's data and a superseded draft — 97 circuits against 97, nothing
+# in it that the WXM file above does not have. Committing two copies of one
+# client's installation is how the superseded one gets quoted by mistake, so only
+# the current file is committed.
+tools/roeslein-line5.json
+

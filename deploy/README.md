@@ -112,10 +112,19 @@ nothing and the app fails open with a 404 on a script.
 
 ## Notes worth knowing
 
-**Client data.** `tools/*.json` is gitignored, so the generated project file is
-not in the checkout and not on the VM. Anyone with the URL uses the app with an
-empty project and their own data in their own browser. `nginx.conf` also refuses
-`/test/` and `/tools/` outright rather than relying on `.gitignore` alone.
+**Client data — this is the one thing to get right.** `tools/wxm-line5.json` is
+COMMITTED. It is in the repository history, and history is not the present: the
+only way to reverse it is a new repository, so treat access to this repo of yours
+as access to the client data. This was a deliberate decision — a private
+repository satisfies "one client's installation data must not be visible to
+another" for as long as it stays private, and stops the day anyone else is given
+access.
+
+`launch.html` is the landing page and opens the WXM project by default. If this
+container is ever reachable from outside your LAN, **put basic auth or a network
+allow-list on it first**. `nginx.conf` serves exactly one file out of `/tools/`
+— `wxm-line5.json` and nothing else — so a teammate's export at runtime is not
+exposed. That protects the boundary; it does not protect against a public URL.
 
 **HTTPS.** Do not add a certificate without deciding whether the site is
 reachable outside your LAN. A load schedule is not a secret, but a public URL is
