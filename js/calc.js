@@ -5365,188 +5365,167 @@ function selectivityPlan(p) {
         'instantaneous at every fault current above ' + stg.instantaneous +
         ' × its own setting and cannot be made to hold at all.';
     } else {
-      /* Search the settings this unit can actually be given, and check every
-         candidate with the same calculation the audit uses — not a rule of thumb
-         about what ought to separate. Two settings are in play, not one, and
-         they do different jobs: the PICKUP is where the deliberate hold begins
-         and the DELAY is how long it lasts. Only the second was ever searched,
-         which is why thirteen pairs came back saying they could not be graded
-         when on this project a setting change separates them.
+      /* Search what this unit can be given, and verify every candidate with the
+         same calculation the audit uses.
 
-         The hold band has to start above the load the board really carries. Set
-         it below and the board trips on its own sustained overload inside the
-         short-time delay, which is a fault-protection device doing a load's job
-         — so that is a hard constraint and not a preference, and it is the reason
-         the pickup cannot simply be wound down to its lowest step.
+         FOUR dials, and they do four different jobs:
 
-         Lowest pickup first, then lowest delay: the least intrusion into the
-         board's own behaviour that still works. Applying the winner as it goes,
-         because a board is graded against what is below it and the board below
-         has to be holding its chosen value while this one searches. */
-      var loadA = boardStats(p, it, node.kind).amp;
+           the LONG-TIME PICKUP sets where the overload characteristic starts.
+             Lowering it towards the load raises the multiple of every fault
+             current, which is what moves a board out of the overlap on its own
+             long-time band;
+           the SHORT-TIME PICKUP sets where the deliberate hold begins;
+           the DELAY sets how long it lasts;
+           the INSTANTANEOUS PICKUP sets where the magnetic clears in tens of
+             milliseconds — the only one of the four that reaches an overlap
+             sitting on a long-time band, and the one that exists only on an
+             electronic unit.
 
-      /* Everything below this board, and not only the boards.
+         The overlaps left on this project are all of the last kind: at 7.8 kA the
+         Distribution device takes 300 ms and the main device above it 332 ms,
+         both on their long-time bands, and no delay or short-time pickup touches
+         that range at all. A device with no adjustable magnetic cannot be graded
+         there, which is why the type is searched as well as the settings — the
+         last thing to change, and the answer more often than the others.
 
-         A first attempt at this searched for the shortest delay that separates a
-         board from the board under it, and that is the wrong objective. On this
-         project it solved all three board pairs and turned ten circuit pairs into
-         fourteen: the boards were given 250 and 400 ms where they had held 800,
-         every board pair passed, and ten circuits underneath lost the margin they
-         had been getting from a longer hold. Thirteen pairs became fourteen. The
-         search was answering a question nobody had asked.
+         Candidates are built as a flat list and searched in one loop. The first
+         version of this tried to search three nested loops inside an already
+         nested block, ran to a syntactic mess, and had to be withdrawn twice —
+         and a withdrawn search leaves the finding doing the work with prose
+         instead of an answer. */
+      var loadA2 = boardStats(p, it, node.kind).amp;
+      var frameA2 = num(it.prot.frame, 0) || num(it.prot.ir, 0);
+      var irSteps2 = [];
+      if (frameA2 > 0) {
+        [1, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.6, 0.5].forEach(function (f) {
+          var v = Math.round(frameA2 * f);
+          if (v >= loadA2 && v <= frameA2 && irSteps2.indexOf(v) < 0) irSteps2.push(v);
+        });
+      }
+      if (!irSteps2.length) irSteps2 = [num(it.prot.ir, 0)];
+      var typeOptions2 = [it.prot.trip];
+      if (it.prot.kind === 'mccb' && typeOptions2.indexOf('eLSI') < 0) typeOptions2.push('eLSI');
 
-         So the objective is what the settings actually achieve for everything
-         below, final circuits included — the largest number of things that clear
-         before this board does — and if no combination beats leaving the device
-         alone, it is left alone. A shorter delay that helps three boards and
-         hurts ten circuits is not a shorter delay, it is a worse board. */
-      var belowAll = kids.slice();
+      /* What this unit is set to do, with its own settings folded in. */
+      function stageOf(pr) { return D.stageSettings(pr); }
+      /* Each child's fault current does not depend on THIS board's settings, so
+         it is worked out once. Recomputing it inside the search made a couple of
+         thousand combinations take long enough to look like a hang. */
+      var ampsFor2 = [];
       kids.forEach(function (k) {
-        if (k.kind === 'pdp') {
-          p.dbs.forEach(function (b3) { if (b3.pdpId === k.item.id) belowAll.push({ item: b3, kind: 'db' }); });
-          p.panels.forEach(function (pn) { if (pn.pdpId === k.item.id && !pn.dbId) belowAll.push({ item: pn, kind: 'panel' }); });
-        } else if (k.kind === 'db') {
-          p.panels.forEach(function (pn) { if (pn.dbId === k.item.id) belowAll.push({ item: pn, kind: 'panel' }); });
-        }
-      });
-      /* Two kinds of thing below a board, and they do not count the same.
-
-         Discrimination between a MAIN incomer and the board under it is a
-         requirement: a fault on one sub-board must not open the incomer feeding
-         the others. Discrimination between a board and its final circuits is
-         not required to be complete — BS 7671 and IEC 60364 ask for disconnection
-         within a stated time, and every installation on earth has partial
-         discrimination somewhere. Treating them as the same objective is what
-         made the search refuse to grade the main incomers: on this project doing
-         so costs about ten final circuits, and a flat count called that a loss.
-
-         So the score is weighted to put board separation first and circuits
-         second. The 1000 is only there to say "never in exchange", and there are
-         never a thousand sub-boards. */
-      /* Each child's own fault current does not depend on this board's settings,
-         so it is worked out once instead of on every candidate. Recomputing it
-         inside the search made a sweep of a couple of thousand combinations take
-         long enough to look like a hang. */
-      var ampsFor = belowAll.map(function (k) {
-        if (!k.item.prot) return null;
+        if (!k.item.prot) { ampsFor2.push(null); return; }
         var fk = deviceFaultKA(p, k.item, k.kind);
-        return fk ? fk * 1000 : null;
+        ampsFor2.push(fk ? fk * 1000 : null);
       });
-      function scoreWith(cand) {
+
+      /* Score a candidate: how many things below it now separate, split into
+         boards and circuits because they do not count the same. Discrimination
+         between a board and the board under it is a requirement; discrimination
+         between a board and its final circuits is not required to be complete,
+         and a flat count would refuse to grade the main incomer because doing so
+         costs a few circuits. */
+      function scoreIt(cand) {
         var was = it.prot;
         it.prot = cand;
         var boardsOk = 0, circuitsOk = 0;
-        belowAll.forEach(function (k, ci2) {
+        kids.forEach(function (k, ci2) {
           if (!k.item.prot) return;
-          /* The same call the audit makes, with the same fault current, so a
-             candidate that scores here scores there by construction. */
-          var res = selectivity(k.item, k.kind, it, node.kind, ampsFor[ci2]);
+          var res = selectivity(k.item, k.kind, it, node.kind, ampsFor2[ci2]);
           if (res === null || res.pass) {
             if (k.kind === 'panel') circuitsOk++; else boardsOk++;
           }
         });
         it.prot = was;
-        return { score: boardsOk * 1000 + circuitsOk, boardsOk: boardsOk, circuitsOk: circuitsOk };
+        return { boards: boardsOk, circuits: circuitsOk };
       }
-      var base = scoreWith(it.prot);
-      var chosen = null, best = base, tried = 0;
-      /* The long-time pickup is adjustable on every unit of this kind, and it is
-         the setting the overlap actually turns on.
+      var base = scoreIt(it.prot);
+      var wantAll = base.boards + kids.filter(function (k) { return k.kind !== 'panel'; }).length;
 
-         Every device on this project was proposed with the pickup at its frame
-         rating, which is the least selective setting there is: the higher the
-         pickup, the further out along the long-time band the board is when a
-         fault arrives, and the faster it is — and a board that is faster than
-         what it protects is the whole failure. The overlap on PDB8 sits at 7.8 kA,
-         which is 1.95 × its own pickup; set the pickup to 3,000 A instead, still
-         comfortably above the 2,788 A the board carries, and the same current is
-         2.6 × — above where the short-time stage starts, so the board is holding
-         its deliberate delay when the sub-board is not.
+      /* A candidate is only offered if the hold band starts above the load the
+         board carries, or the board trips on its own running current. */
+      function usable(ir, ss) { return ss * ir > loadA2; }
 
-         So the search runs over the pickup as well, within the only limits that
-         are not negotiable: it may not go below the load the board carries, or
-         the board trips on its own running current, and it may not go above the
-         frame, because that is the device. Both bounds are the manufacturer's.
-         Everything between them is a dial the engineer turns, and on this project
-         turning it is what grades the installation. */
-      var wantAll = base.boardsOk + belowAll.filter(function (k) { return k.kind !== 'panel'; }).length;
-      var stop = false;
-      var irSteps = [];
-      var frameA = num(it.prot.frame, 0) || num(it.prot.ir, 0);
-      if (frameA > 0) {
-        [1, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.5, 0.4].forEach(function (f) {
-          var v = Math.round(frameA * f);
-          if (v >= loadA && v <= frameA && irSteps.indexOf(v) < 0) irSteps.push(v);
-        });
-      }
-      if (!irSteps.length) irSteps = [num(it.prot.ir, 0)];
-      /* Three settings decide whether a pair separates: the long-time pickup,
-         where the hold begins, and how long it lasts. Every combination of those
-         is searched, but the pickup is swept coarsely — it changes the multiple
-         by a factor, and a quarter-turn of a dial is a different answer from a
-         whole one — and the search stops at the first that solves it, running
-         from the highest long-time pickup downwards so the answer is the least
-         change that works. */
-      for (var ir2 = 0; ir2 < irSteps.length && !stop; ir2++) {
-      for (var a = 0; a < D.SHORT_TIME_PICKUPS.length && !stop; a++) {
-        var ssA = D.SHORT_TIME_PICKUPS[a];
-        if (a > 0 && D.SHORT_TIME_PICKUPS[a] > 3) break;
-        if (!(ssA * irSteps[ir2] > loadA)) continue;
-        for (var b = 0; b < D.SHORT_TIME_DELAYS.length; b++) {
-          var sdA = D.SHORT_TIME_DELAYS[b];
-          tried++;
-          var cand = Object.assign({}, it.prot, { ss: ssA, sd: sdA, ir: irSteps[ir2] });
-          /* Strictly better, so ties keep the earlier candidate and the search
-             ends on the least intrusive setting that works. */
-          var got = scoreWith(cand);
-          if (got.score > best.score) {
-            best = got;
-            chosen = { ss: ssA, sd: sdA, ir: irSteps[ir2] };
-            /* Stop on the first pickup that solves it: the search runs from the
-               frame downwards, so the first one to work is the highest pickup
-               that works — the least change to the device's behaviour, and the
-               one that keeps the board protecting its own load with most margin. */
-            if (got.boardsOk === wantAll) { stop = true; break; }
+      var chosen = null, best = base, tried = 0, stop2 = false;
+      CAND: for (var ti = 0; ti < typeOptions2.length; ti++) {
+        var trip = typeOptions2[ti];
+        var mf2 = D.MICLOGIC_FUNCTIONS[trip] || {};
+        /* A few instantaneous pickups, not all of them. What matters is that the
+           magnetic clears ABOVE the current where the pair overlaps, and on this
+           project those currents are 1.3 to 7.8 kA against device settings of 400
+           to 4,000 A — so the useful range is 1× to 3× the setting. Searching the
+           whole catalogue ladder is over twenty thousand candidates per board for
+           a handful of answers, and the search then stops being something a person
+           waits for. The full ladder stays available to the properties panel. */
+        var iis = mf2.instant ? [null, 1, 1.5, 2, 3] : [null];
+        for (var ir = 0; ir < irSteps2.length && !stop2; ir++) {
+          var irA = irSteps2[ir];
+          for (var ss = 0; ss < D.SHORT_TIME_PICKUPS.length && !stop2; ss++) {
+            var ssA = D.SHORT_TIME_PICKUPS[ss];
+            if (ssA > 3) break;
+            if (!usable(irA, ssA)) continue;
+            for (var ii = 0; ii < iis.length && !stop2; ii++) {
+              var iiA = iis[ii];
+              for (var d = 0; d < D.SHORT_TIME_DELAYS.length; d++) {
+                var sdA = D.SHORT_TIME_DELAYS[d];
+                tried++;
+                var cand = Object.assign({}, it.prot, {
+                  trip: trip, ir: irA, ss: ssA, sd: sdA, ii: iiA
+                });
+                var got = scoreIt(cand);
+                /* Strictly better, so ties keep the earlier candidate and the
+                   search ends on the least intrusion that works. */
+                if (got.boards > best.boards ||
+                    (got.boards === best.boards && got.circuits > best.circuits)) {
+                  if (got.boards > best.boards) best.boards = got.boards;
+                  if (got.circuits > best.circuits) best.circuits = got.circuits;
+                  chosen = { trip: trip, ir: irA, ss: ssA, sd: sdA, ii: iiA, got: got };
+                  /* Stop as soon as every board below it separates — running from
+                     the device's own type outwards, that is the least change. */
+                  if (got.boards === wantAll) { stop2 = true; break; }
+                }
+              }
+            }
           }
         }
       }
-      }
-      if (!chosen) {
-        rec.reason = 'insufficient-delay';
-        rec.detail = it.tag + ' holds nothing, and no combination of short-time ' +
-          'pickup and delay improves on that. Everything below it that cannot be ' +
-          'graded needs something other than a longer hold above — see the ' +
-          'selectivity findings, which say which device is wanted. The delay and ' +
-          'the pickup are both left as they are rather than changed for its own sake.';
-      }
+
       if (chosen) {
         rec.pickup = chosen.ss;
         rec.delay = chosen.sd;
         rec.ir = chosen.ir;
         remember(it);
         if (chosen.ir && chosen.ir !== num(it.prot.ir, 0)) it.prot.ir = chosen.ir;
+        if (chosen.trip !== it.prot.trip) { it.prot.trip = chosen.trip; rec.trip = chosen.trip; }
+        if (chosen.ii) { it.prot.ii = chosen.ii; rec.ii = chosen.ii; }
         /* Applied here rather than left for the caller, so the board above this
            one searches against the value this board is actually holding. */
         it.prot.ss = chosen.ss;
         it.prot.sd = chosen.sd;
         rec.reason = 'graded';
         rec.detail = it.tag + ' set to ' + chosen.ir + ' A — above the ' +
-          loadA.toFixed(0) + ' A it carries — holding from ' + chosen.ss.toFixed(1) +
-          ' × that (' + Math.round(chosen.ss * chosen.ir) +
-          ' A, against ' + loadA.toFixed(0) + ' A of load) for ' +
-          msOrS(chosen.sd) + '. The hold band starts above the load so the board ' +
-          'does not trip on its own overload, and the delay is the shortest that ' +
-          'clears the sub-boards below it first, which is the pair that has to be ' +
-          'separated. ' + tried + ' setting combinations tried.' +
-          (best.boardsOk >= base.boardsOk && best.circuitsOk < base.circuitsOk
+          loadA2.toFixed(0) + ' A it carries' +
+          (chosen.trip !== it.prot.trip
+            ? ', and to a ' + chosen.trip + ' unit with an adjustable magnetic'
+            : '') +
+          ', holding from ' + chosen.ss.toFixed(1) + '× that (' +
+          Math.round(chosen.ss * chosen.ir) + ' A, above the ' + loadA2.toFixed(0) +
+          ' A of load) for ' + msOrS(chosen.sd) +
+          (chosen.ii ? ', clear in tens of milliseconds above ' +
+            chosen.ii.toFixed(1) + '× (' + Math.round(chosen.ii * chosen.ir) + ' A) is ' +
+            'the other half of it — that reaches the range a delay cannot' : '') +
+          '. The hold band starts above the load so the board does not trip on its ' +
+          'own overload, and every setting is the least intrusion that separates ' +
+          'the boards below it. ' + tried + ' setting combinations tried.' +
+          (best.circuits < base.circuits
             ? ' The trade is stated because it is real: this leaves ' +
-              (base.circuitsOk - best.circuitsOk) + ' final circuit(s) below this ' +
-              'board less discriminated than they would otherwise be. Complete ' +
+              (base.circuits - best.circuits) + ' final circuit(s) below this board ' +
+              'less discriminated than they would otherwise be. Complete ' +
               'discrimination to a final circuit is not a requirement — the ' +
-              'disconnection time is, and it is checked separately — so the main ' +
-              'incomer is separated in exchange and the circuits are recorded as ' +
-              'partial. Say so if that is not what was wanted.'
-            : '');
+              'disconnection time is, and it is checked separately — so the boards ' +
+              'are separated in exchange and the circuits are recorded as partial.'
+            : ' Nothing below it is left less discriminated than it was.') +
+          ' Against the ambient position, all ' + chosen.got.boards +
+          ' board(s) below separate. Say so if that is not what was wanted.';
       }
     }
     byItem[it.id] = rec;
