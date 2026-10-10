@@ -10,6 +10,33 @@ Two paths to "every push is live". Both are below. The first is the one to use.
 
 ---
 
+## 0. The one that creates the container
+
+If the container does not exist yet, this makes it — Proxmox host, as root:
+
+    ./deploy/deploy-to-proxmox.sh
+
+It needs the template on the host first (`pveam download local
+debian-12-standard_12.7-1_amd64.tar.zst`) and a GitHub token, either exported as
+GITHUB_TOKEN or passed with --token. A fine-grained read-only token is enough:
+the container only ever pulls.
+
+It creates the container, installs nginx and git, clones as an unprivileged
+`deploy` user, pushes the nginx configuration and the systemd units with
+`pct push` — never through a quoted heredoc, because the nginx config is full of
+$uri and $host that a host shell would evaluate — and then runs the first update
+by hand with `--test`, so the first deploy is the one that is actually checked.
+
+Refuses rather than guesses: a VMID that is already taken stops the script
+unless `--force` is given, because `pct create` will overwrite an existing
+container without asking. And it waits for DHCP before going on, since every
+later step needs an address.
+
+Everything is a flag with a default, so `--vmid`, `--hostname`, `--template`,
+`--storage`, `--cores`, `--memory`, `--rootfs` and `--bridge` all override.
+
+---
+
 ## 1. Pull on a timer — recommended
 
 Nothing has to reach the VM from outside, no SSH key is exposed, and it works on
