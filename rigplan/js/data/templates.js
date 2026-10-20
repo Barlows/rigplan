@@ -47,7 +47,7 @@ export function templateCampervan() {
       const lights = add(n('lights', 1450, 270, {}));
       const pump = add(n('water-pump', 1450, 400, {}));
       const sockets = add(n('sockets', 1450, 800, {}));
-      const hob = add(n('induction-hob', 1450, 940, {}));
+      const hob = add(n('induction-hob', 1450, 600, {}));
       const ground = add(n('chassis-ground', 640, 980, {}));
       const shore = add(n('shore-inlet', 80, 860, {}));
       const rcbo = add(n('rcbo', 300, 860, { ratingA: 16 }));
