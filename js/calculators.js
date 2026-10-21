@@ -467,7 +467,7 @@ function initSolar() {
     update();
   });
   nameplate.forEach((id) => $(id).addEventListener('input', () => {
-    if (preset?.value !== 'custom') preset.value = 'custom';
+    if (preset && preset.value !== 'custom') preset.value = 'custom';
     update();
   }));
   ['#solar-count', '#solar-series', '#solar-system-v', '#solar-maxpv'].forEach((id) => $(id).addEventListener('input', update));
