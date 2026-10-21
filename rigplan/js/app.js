@@ -1,11 +1,11 @@
-import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js?v=20261025';
-import { TEMPLATES, templateCampervan } from './data/templates.js?v=20261025';
+import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js?v=20261027';
+import { TEMPLATES, templateCampervan } from './data/templates.js?v=20261027';
 import { createStore, emptyProject } from './core/store.js?v=20261022';
 import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js';
-import { createEditor } from './ui/editor.js?v=20261025';
+import { createEditor } from './ui/editor.js?v=20261027';
 import {
   STANDARDS, TEMP_RATINGS, FUSE_FAMILIES, FUSE_RATINGS,
-  formatSize, TERMINAL_KINDS, metricArea,
+  formatSize, TERMINAL_KINDS, WIRE_COLORS, metricArea,
 } from './data/standards.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -119,10 +119,55 @@ function field(label, input) {
   return `<div class="field"><label>${label}</label>${input}</div>`;
 }
 
+// Every connector on a part, together with the cable run(s) leaving it. This
+// makes inputs and outputs readable without having to decode the dot colours.
+function connectionRows(doc, node, def) {
+  return def.terminals.map((terminal) => {
+    const links = [];
+    for (const wire of doc.wires || []) {
+      const fromHere = wire.from.node === node.id && wire.from.terminal === terminal.id;
+      const toHere = wire.to.node === node.id && wire.to.terminal === terminal.id;
+      if (!fromHere && !toHere) continue;
+      const other = fromHere ? wire.to : wire.from;
+      const otherNode = doc.nodes.find((n) => n.id === other.node);
+      const otherDef = otherNode ? CATALOG_BY_ID[otherNode.type] : null;
+      const otherTerm = otherDef?.terminals.find((t) => t.id === other.terminal);
+      links.push({
+        node: otherNode?.label || 'Missing component',
+        terminal: otherTerm?.label || other.terminal,
+      });
+    }
+    return { terminal, links };
+  });
+}
+
+function connectionsSection(doc, node, def) {
+  const rows = connectionRows(doc, node, def);
+  return `
+    <div class="section">
+      <h3 class="section-title">Connections <span class="badge neutral">${def.terminals.length}</span></h3>
+      <div class="conn-list">
+        ${rows.map(({ terminal, links }) => `
+          <div class="conn-row" data-conn-terminal="${escapeAttr(terminal.id)}">
+            <span class="conn-dot" style="background:${WIRE_COLORS[terminal.kind] || '#1d2b3a'}"></span>
+            <div class="conn-name">
+              <strong>${escapeHtml(terminal.label)}</strong>
+              <span>${escapeHtml(TERMINAL_KINDS[terminal.kind]?.label || terminal.kind)}</span>
+            </div>
+            <div class="conn-links">${links.length
+              ? links.map((link) => `<span>${escapeHtml(link.node)} <em>${escapeHtml(link.terminal)}</em></span>`).join('')
+              : '<span class="conn-empty">Not wired</span>'}</div>
+          </div>`).join('')}
+      </div>
+      <p class="hint">Hover a row to highlight that connector on the drawing.</p>
+    </div>`;
+}
+
 function renderInspector() {
   const panel = $('#inspector-panel');
   const { doc } = store.get();
   const sel = editor.getSelection();
+  editor.highlightTerminal(null);
 
   if (!sel) {
     const critical = evaluation.checks.filter((c) => c.severity === 'critical').length;
@@ -201,6 +246,7 @@ function renderInspector() {
           <button class="btn small danger" id="node-delete">Delete</button>
         </div>
       </div>
+      ${connectionsSection(doc, node, def)}
       <div class="section">
         <h3 class="section-title">Electrical</h3>
         ${props}
@@ -208,7 +254,7 @@ function renderInspector() {
       <div class="section">
         <h3 class="section-title">Notes</h3>
         <textarea data-field="notes" placeholder="Mounting, part numbers, installation notes…">${escapeAttr(node.notes)}</textarea>
-        <p class="hint">Terminals: ${def.terminals.map((t) => `<span class="mono">${t.label}</span> (${TERMINAL_KINDS[t.kind]?.label})`).join(' · ')}</p>
+        <p class="hint">Connector colours: ${[...new Set(def.terminals.map((t) => t.kind))].map((kind) => `<span style="color:${WIRE_COLORS[kind] || '#1d2b3a'}">●</span> ${TERMINAL_KINDS[kind]?.label || kind}`).join(' · ')}</p>
       </div>`;
 
     $('#node-label').addEventListener('change', (e) => store.mutate((d) => {
@@ -231,6 +277,10 @@ function renderInspector() {
         if (item) item.props[key] = value;
       });
     }));
+    panel.querySelectorAll('[data-conn-terminal]').forEach((row) => {
+      row.addEventListener('mouseenter', () => editor.highlightTerminal(node.id, row.dataset.connTerminal));
+      row.addEventListener('mouseleave', () => editor.highlightTerminal(null));
+    });
     $('#node-duplicate').addEventListener('click', () => editor.duplicateSelection());
     $('#node-delete').addEventListener('click', () => editor.deleteSelection());
     return;
