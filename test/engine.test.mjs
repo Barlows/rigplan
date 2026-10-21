@@ -7,6 +7,7 @@ import {
   computeCurrents, buildBom, DEFAULT_SETTINGS,
 } from '../js/core/engine.js';
 import { templateCampervan, templateSimple, templateSolar } from '../js/data/templates.js';
+import { recoverOffSheet } from '../js/core/store.js';
 import { STANDARDS, FUSE_FAMILIES, METRIC_SIZES } from '../js/data/standards.js';
 
 const doc = (settings = {}) => ({
@@ -218,4 +219,23 @@ test('standards share a common shape', () => {
     assert.ok(Array.isArray(std.methods) && std.methods.length);
     assert.ok(std.ampacity.metric && std.ampacity.awg);
   }
+});
+
+// ---------------------------------------------------------------------------
+test('off-sheet and non-finite components are pulled back onto the sheet', () => {
+  const diagram = {
+    nodes: [
+      { id: 'a', x: 50000, y: 42000, w: 120, h: 90 },
+      { id: 'b', x: -8000, y: NaN, w: 100, h: 80 },
+      { id: 'c', x: 900, y: 400, w: 120, h: 90 },
+    ],
+  };
+  assert.equal(recoverOffSheet(diagram), 2);
+  for (const node of diagram.nodes) {
+    assert.ok(Number.isFinite(node.x) && Number.isFinite(node.y));
+    assert.ok(node.x >= 40 && node.x + node.w <= 1760);
+    assert.ok(node.y >= 40 && node.y + node.h <= 1060);
+  }
+  assert.deepEqual({ x: diagram.nodes[2].x, y: diagram.nodes[2].y }, { x: 900, y: 400 });
+  assert.equal(recoverOffSheet({ nodes: [{ id: 'd', x: 100, y: 100, w: 50, h: 50 }] }), 0);
 });
