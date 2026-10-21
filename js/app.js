@@ -2,7 +2,7 @@ import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js';
 import { TEMPLATES, templateCampervan } from './data/templates.js';
 import { createStore, emptyProject } from './core/store.js';
 import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js';
-import { createEditor } from './ui/editor.js';
+import { createEditor } from './ui/editor.js?v=20261021';
 import {
   STANDARDS, TEMP_RATINGS, FUSE_FAMILIES, FUSE_RATINGS,
   formatSize, TERMINAL_KINDS, metricArea,
