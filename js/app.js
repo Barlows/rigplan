@@ -1,7 +1,8 @@
 import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js?v=20261027';
 import { TEMPLATES, templateCampervan } from './data/templates.js?v=20261027';
 import { createStore, emptyProject } from './core/store.js?v=20261022';
-import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js';
+import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js?v=20261028';
+import { fixForCheck } from './core/fixes.js?v=20261037';
 import { createEditor } from './ui/editor.js?v=20261027';
 import {
   STANDARDS, TEMP_RATINGS, FUSE_FAMILIES, FUSE_RATINGS,
@@ -390,6 +391,7 @@ function renderInspector() {
 // ---------------------------------------------------------------------------
 function renderChecks() {
   const panel = $('#checks-panel');
+  const { doc } = store.get();
   const checks = evaluation.checks;
   const actionable = checks.filter((c) => c.severity !== 'info');
   const pill = $('#check-pill');
@@ -405,20 +407,28 @@ function renderChecks() {
     ['warning', 'Worth checking'],
     ['info', 'Notes'],
   ];
-  panel.innerHTML = groups.map(([severity, label]) => {
+  const groupHtml = groups.map(([severity, label]) => {
     const rows = checks.filter((c) => c.severity === severity);
     if (!rows.length) return '';
     return `<div class="section" style="padding-bottom:4px"><h3 class="section-title">${label} <span>${rows.length}</span></h3></div>
-      ${rows.map((c, i) => `
+      ${rows.map((c) => {
+        const fix = fixForCheck(c, doc);
+        return `
         <div class="check ${severity}" data-check="${checks.indexOf(c)}">
           <div class="bar"></div>
           <div class="body">
             <div class="t">${escapeHtml(c.title)}</div>
             <div class="d">${escapeHtml(c.detail)}</div>
-            <div class="meta"><span class="code">${checkCode(c)}</span>${c.wireIds.length || c.nodeIds.length ? '<span class="code">· click to locate</span>' : ''}</div>
+            <div class="meta">
+              <span class="code">${checkCode(c)}</span>
+              ${c.wireIds.length || c.nodeIds.length ? '<span class="code">· click to locate</span>' : ''}
+              ${fix ? `<button type="button" class="check-fix" data-fix="${checks.indexOf(c)}" title="${escapeAttr(fix.label)}">${escapeHtml(fix.label)}</button>` : ''}
+            </div>
           </div>
-        </div>`).join('')}`;
+        </div>`;
+      }).join('')}`;
   }).join('');
+  panel.innerHTML = `<div class="check-hint">Repairs can be undone with Ctrl/Cmd+Z. Issues that need a design decision stay manual.</div>${groupHtml}`;
 
   panel.querySelectorAll('[data-check]').forEach((el) => el.addEventListener('click', () => {
     const check = checks[Number(el.dataset.check)];
@@ -426,6 +436,42 @@ function renderChecks() {
       editor.selectWire(check.wireIds[0], true);
     } else if (check.nodeIds.length) {
       editor.selectNode(check.nodeIds[0], true);
+    }
+    updateStatus();
+  }));
+
+  panel.querySelectorAll('[data-fix]').forEach((button) => button.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const check = checks[Number(button.dataset.fix)];
+    const fix = fixForCheck(check, store.get().doc);
+    if (!fix) {
+      toast('That repair is no longer available.');
+      return;
+    }
+    const stayOnChecks = activeTab === 'checks';
+    const scrollTop = panel.scrollTop;
+    let result;
+    try {
+      const draft = typeof structuredClone === 'function'
+        ? structuredClone(store.get().doc)
+        : JSON.parse(JSON.stringify(store.get().doc));
+      result = fix.run(draft);
+      if (!result) {
+        toast('This issue needs a manual change.');
+        return;
+      }
+      store.setDoc(draft);
+    } catch (err) {
+      console.error(err);
+      toast('Could not apply that repair automatically.', 'error');
+      return;
+    }
+    toast(result.notice || 'Repair applied.');
+    if (result.selectNodeId) editor.selectNode(result.selectNodeId, true);
+    if (stayOnChecks) {
+      switchTab('checks');
+      panel.scrollTop = scrollTop;
     }
     updateStatus();
   }));

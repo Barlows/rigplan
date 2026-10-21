@@ -180,7 +180,9 @@ export function buildGraph(diagram) {
 }
 
 export function terminalKind(node, terminalId) {
-  const def = CATALOG_BY_ID[node.type];
+  const override = node?.props?.terminalKinds?.[terminalId];
+  if (override) return override;
+  const def = CATALOG_BY_ID[node?.type];
   return def?.terminals.find((t) => t.id === terminalId)?.kind || 'dc+';
 }
 

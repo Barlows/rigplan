@@ -33,6 +33,7 @@ component database.
 | Per-cable length, current override, cable size override, fuse override | **Built** | Manual choices are still validated. |
 | Live cable and fuse sizing as you draw | **Built** | `evaluateDiagram()` runs on every store change. |
 | Automatic safety checks with explanations | **Built** | 34 distinct findings; each has a rule, severity and jump-to item. |
+| One-click automatic repairs | **Built** | Deterministic fixes insert parts and rewire the circuit; unsupported design decisions stay manual. |
 | Templates / worked examples | **Partial** | 3 original templates vs 41 on Wireframe; same idea, different catalogue. |
 | Branded component catalogue | **Partial** | 39 generic, fully modelled components. No Victron/Renogy/Blue Sea part numbers or logos. |
 | Search the library | **Built** | Filters by name, category and tag. |

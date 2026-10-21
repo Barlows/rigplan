@@ -6,6 +6,6 @@
   "description": "Wiring diagram planner for campervans, RVs, boats and off-grid systems.",
   "scripts": {
     "start": "node test/serve.mjs",
-    "test": "node test/engine.test.mjs"
+    "test": "node --test test/*.test.mjs"
   }
 }

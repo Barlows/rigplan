@@ -1,7 +1,5 @@
 # RigPlan
 
-**Live app:** <https://barlows.github.io/rigplan/>
-
 A wiring-diagram planner for campervans, RVs, boats and off-grid electrical
 systems. Draw the system, and every cable, fuse and breaker is sized as you go.
 
@@ -64,6 +62,14 @@ Any static file server works; there is no compile step.
 
 Each finding explains the rule and can centre the editor on the offending part.
 
+Where a safe, deterministic repair exists, the finding also has a one-click
+action: fit a battery isolator, add a primary fuse, install a shore RCBO, add a
+PV isolator, upsize a cable, remove a shorted run, and so on. The repair inserts
+real catalogue parts and reconnects the existing circuit, rather than only
+silencing the check. Repairs are ordinary edits, so they can be undone and are
+included in project exports. Findings that need a design decision (mixed
+chemistries, overloaded supplies, missing charging sources) stay manual.
+
 ### Documents
 
 - Bill of materials with components, cable lengths and fuse counts.
@@ -104,13 +110,15 @@ css/site.css             marketing + calculator design system
 js/app.js                UI glue: inspector, checks, BOM, project, exports
 js/calculators.js        the ten calculators
 js/core/engine.js        sizing, current tracing, checks, BOM
+js/core/fixes.js         deterministic one-click repairs for check findings
 js/core/store.js         document store, undo/redo, persistence, versions
 js/ui/editor.js          SVG canvas, drag, wiring, pan/zoom, export
 js/ui/symbols.js         original SVG artwork for the 39 components
 js/data/catalog.js       component definitions, terminals, defaults, prices
 js/data/standards.js     ampacity tables, derating, fuses, wire sizes
 js/data/templates.js     campervan, simple and solar starter diagrams
-test/engine.test.mjs     22 Node tests
+test/engine.test.mjs      engine regression tests
+test/fixes.test.mjs       one-click repair regression tests
 test/serve.mjs           no-cache static dev server
 docs/feature-parity.md   mapping from the reference product to this build
 ```
