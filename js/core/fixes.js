@@ -4,8 +4,8 @@
 // ordinary store mutations, so they are undoable and are saved with the
 // project just like a manual edit.
 
-import { CATALOG_BY_ID, makeNode } from '../data/catalog.js?v=20261040';
-import { evaluateDiagram, sizeRun, sizeOptions } from './engine.js?v=20261040';
+import { CATALOG_BY_ID, makeNode } from '../data/catalog.js?v=20261041';
+import { evaluateDiagram, sizeRun, sizeOptions } from './engine.js?v=20261041';
 import { FUSE_RATINGS, STANDARDS, metricArea } from '../data/standards.js';
 
 const SHEET_W = 1800;

@@ -13,6 +13,11 @@ const acTriple = () => ([
   { id: 'pe', x: 0.75, y: 0, kind: 'ac-pe', label: 'PE' },
 ]);
 
+const pvPair = () => ([
+  { id: 'pvpos', x: 0.35, y: 1, kind: 'pv+', label: 'PV+' },
+  { id: 'pvneg', x: 0.65, y: 1, kind: 'pv-', label: 'PV−' },
+]);
+
 export const CATEGORIES = [
   'Sources', 'Charging', 'Distribution', 'Protection', 'Loads', 'Grounding', 'Monitoring', 'Connectors',
 ];
@@ -44,10 +49,25 @@ export const CATALOG = [
       watts: 200, voc: 22.5, isc: 11.8, voltage: 18, supplyA: 11.1,
       moduleEfficiency: 21, technology: 'mono',
     },
-    terminals: [
-      { id: 'pvpos', x: 0.35, y: 1, kind: 'pv+', label: 'PV+' },
-      { id: 'pvneg', x: 0.65, y: 1, kind: 'pv-', label: 'PV−' },
-    ],
+    terminals: pvPair(),
+  },
+  {
+    id: 'solar-panel-465', cat: 'Sources', label: '465 W solar panel', symbol: 'panel', w: 170, h: 100,
+    roles: ['source'], price: 260,
+    defaults: {
+      watts: 465, voc: 36.46, isc: 15.88, voltage: 31.21, supplyA: 14.91,
+      moduleEfficiency: 23.3, technology: 'mono',
+    },
+    terminals: pvPair(),
+  },
+  {
+    id: 'solar-panel-450', cat: 'Sources', label: '450 W solar panel', symbol: 'panel', w: 170, h: 100,
+    roles: ['source'], price: 250,
+    defaults: {
+      watts: 450, voc: 40.25, isc: 14.17, voltage: 33.91, supplyA: 13.27,
+      moduleEfficiency: 22.5, technology: 'mono',
+    },
+    terminals: pvPair(),
   },
   {
     id: 'alternator', cat: 'Sources', label: 'Alternator', symbol: 'alternator', w: 150, h: 90,

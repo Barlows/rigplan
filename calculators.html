@@ -197,6 +197,13 @@
         <p class="sub">Enter the panel nameplate, then read the array totals, controller current and cold-weather voltage check.</p>
         <form onsubmit="return false">
           <div class="fields three">
+            <label class="field"><span>Panel preset</span>
+              <select id="solar-preset">
+                <option value="custom">Custom / generic 200 W</option>
+                <option value="465">465 W panel · 23.3%</option>
+                <option value="450">450 W panel · 22.5%</option>
+              </select>
+            </label>
             <label class="field"><span>Pmax (max power) <span class="unit">W</span></span>
               <input id="solar-pmax" type="number" value="200" min="1" step="1">
             </label>
@@ -360,6 +367,6 @@
   </div>
 </footer>
 
-<script type="module" src="js/calculators.js?v=20261040"></script>
+<script type="module" src="js/calculators.js?v=20261041"></script>
 </body>
 </html>

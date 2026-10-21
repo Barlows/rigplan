@@ -5,7 +5,7 @@ import {
   STANDARDS, TEMP_RATINGS, FUSE_FAMILIES, FUSE_RATINGS,
   AWG_SIZES, AWG_AREA, METRIC_SIZES, metricArea, formatSize,
 } from './data/standards.js';
-import { sizeRun, pickFuse } from './core/engine.js?v=20261040';
+import { sizeRun, pickFuse } from './core/engine.js?v=20261041';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -449,8 +449,28 @@ function initSolar() {
     });
   }
 
-  ['#solar-pmax', '#solar-voc', '#solar-isc', '#solar-vmp', '#solar-imp', '#solar-eff',
-    '#solar-count', '#solar-series', '#solar-system-v', '#solar-maxpv'].forEach((id) => $(id).addEventListener('input', update));
+  const presets = {
+    '465': { pmax: 465, voc: 36.46, isc: 15.88, vmp: 31.21, imp: 14.91, eff: 23.3 },
+    '450': { pmax: 450, voc: 40.25, isc: 14.17, vmp: 33.91, imp: 13.27, eff: 22.5 },
+  };
+  const preset = $('#solar-preset');
+  const nameplate = ['#solar-pmax', '#solar-voc', '#solar-isc', '#solar-vmp', '#solar-imp', '#solar-eff'];
+  preset?.addEventListener('change', () => {
+    const chosen = presets[preset.value];
+    if (!chosen) return;
+    $('#solar-pmax').value = chosen.pmax;
+    $('#solar-voc').value = chosen.voc;
+    $('#solar-isc').value = chosen.isc;
+    $('#solar-vmp').value = chosen.vmp;
+    $('#solar-imp').value = chosen.imp;
+    $('#solar-eff').value = chosen.eff;
+    update();
+  });
+  nameplate.forEach((id) => $(id).addEventListener('input', () => {
+    if (preset?.value !== 'custom') preset.value = 'custom';
+    update();
+  }));
+  ['#solar-count', '#solar-series', '#solar-system-v', '#solar-maxpv'].forEach((id) => $(id).addEventListener('input', update));
   update();
 }
 

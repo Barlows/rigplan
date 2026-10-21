@@ -212,6 +212,12 @@ function isBattery(node) {
   return node.type.startsWith('battery');
 }
 
+function isSolarPanel(node) {
+  return Boolean(node) && (node.type === 'solar-panel'
+    || node.type?.startsWith('solar-panel-')
+    || CATALOG_BY_ID[node.type]?.symbol === 'panel');
+}
+
 function isProtectionNode(node) {
   return (CATALOG_BY_ID[node.type]?.roles || []).includes('protection');
 }
@@ -314,7 +320,7 @@ function pvComponent(graph, startId) {
 }
 
 function isSeriesPvLink(from, to, fromKind, toKind) {
-  return from?.type === 'solar-panel' && to?.type === 'solar-panel' && from.id !== to.id
+  return isSolarPanel(from) && isSolarPanel(to) && from.id !== to.id
     && ((fromKind === 'pv+' && toKind === 'pv-') || (fromKind === 'pv-' && toKind === 'pv+'));
 }
 
@@ -350,7 +356,7 @@ function pvArraySummary(graph, startId) {
   const component = pvComponent(graph, startId);
   const panels = [...component.nodes]
     .map((id) => graph.nodeById.get(id))
-    .filter((node) => node?.type === 'solar-panel');
+    .filter((node) => isSolarPanel(node));
   if (!panels.length) return null;
 
   const seriesLinks = [...component.wires].filter((wire) => {
@@ -690,7 +696,7 @@ export function runChecks(diagram, sizing) {
   }
 
   // ---- solar --------------------------------------------------------------
-  const panels = nodes.filter((n) => n.type === 'solar-panel');
+  const panels = nodes.filter(isSolarPanel);
   const pvChargers = nodes.filter((n) => n.type === 'mppt' || n.type === 'hybrid-inverter');
   for (const charger of pvChargers) {
     if (charger.type === 'mppt') {

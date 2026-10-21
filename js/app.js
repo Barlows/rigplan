@@ -1,9 +1,9 @@
-import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js?v=20261040';
-import { TEMPLATES, templateCampervan } from './data/templates.js?v=20261040';
+import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js?v=20261041';
+import { TEMPLATES, templateCampervan } from './data/templates.js?v=20261041';
 import { createStore, emptyProject } from './core/store.js?v=20261022';
-import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js?v=20261040';
-import { fixForCheck } from './core/fixes.js?v=20261040';
-import { createEditor } from './ui/editor.js?v=20261040';
+import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js?v=20261041';
+import { fixForCheck } from './core/fixes.js?v=20261041';
+import { createEditor } from './ui/editor.js?v=20261041';
 import {
   STANDARDS, TEMP_RATINGS, FUSE_FAMILIES, FUSE_RATINGS,
   formatSize, TERMINAL_KINDS, WIRE_COLORS, metricArea,
@@ -30,6 +30,11 @@ const editor = createEditor({
 // ---------------------------------------------------------------------------
 // Library
 // ---------------------------------------------------------------------------
+function libraryTag(item) {
+  if (item.symbol === 'panel') return `${item.defaults.watts ?? ''} W`;
+  return item.defaults.voltage ? `${item.defaults.voltage}V` : '';
+}
+
 function renderLibrary(filter = '') {
   const q = filter.trim().toLowerCase();
   const list = $('#library-list');
@@ -48,7 +53,7 @@ function renderLibrary(filter = '') {
         <button class="lib-item" draggable="true" data-type="${item.id}" data-cat="${cat}" title="${item.label}">
           <span class="dot"></span>
           <span class="name">${item.label}</span>
-          <span class="tag">${item.defaults.voltage ? `${item.defaults.voltage}V` : ''}</span>
+          <span class="tag">${libraryTag(item)}</span>
         </button>`).join('')}
     </details>`).join('');
 }
@@ -123,7 +128,10 @@ const CONNECTION_HINTS = {
   'hybrid-inverter': 'PV IN is the built-in MPPT input. BAT is the battery bus, AC IN is shore or generator, AC OUT is the load panel, and PE is shared.',
 };
 
-const propLabel = (type, key) => PROP_LABELS[type]?.[key] || humanize(key);
+const propLabel = (type, key) => {
+  const labels = PROP_LABELS[type] || (String(type || '').startsWith('solar-panel') ? PROP_LABELS['solar-panel'] : null);
+  return labels?.[key] || humanize(key);
+};
 
 function humanize(key) {
   return key

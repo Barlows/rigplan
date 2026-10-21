@@ -279,6 +279,37 @@ test('inverter/charger DC input accepts the MPPT output on the battery bus', () 
   assert.deepEqual(result.checks.filter((c) => c.severity === 'critical'), []);
 });
 
+test('the 465 W and 450 W panel presets carry their nameplate values', () => {
+  const p465 = CATALOG_BY_ID['solar-panel-465'];
+  const p450 = CATALOG_BY_ID['solar-panel-450'];
+  assert.deepEqual(
+    [p465.defaults.watts, p465.defaults.voc, p465.defaults.isc, p465.defaults.voltage, p465.defaults.supplyA, p465.defaults.moduleEfficiency],
+    [465, 36.46, 15.88, 31.21, 14.91, 23.3],
+  );
+  assert.deepEqual(
+    [p450.defaults.watts, p450.defaults.voc, p450.defaults.isc, p450.defaults.voltage, p450.defaults.supplyA, p450.defaults.moduleEfficiency],
+    [450, 40.25, 14.17, 33.91, 13.27, 22.5],
+  );
+
+  const diagram = doc();
+  diagram.nodes = [
+    makeNode('solar-panel-465', 100, 0, { id: 'p1' }),
+    makeNode('solar-panel-465', 300, 0, { id: 'p2' }),
+    mpptNode('mppt'),
+  ];
+  diagram.wires = [
+    { id: 'series', from: { node: 'p1', terminal: 'pvpos' }, to: { node: 'p2', terminal: 'pvneg' }, lengthM: 1 },
+    { id: 'stringpos', from: { node: 'p2', terminal: 'pvpos' }, to: { node: 'mppt', terminal: 'pvpos' }, lengthM: 2 },
+    { id: 'stringneg', from: { node: 'mppt', terminal: 'pvneg' }, to: { node: 'p1', terminal: 'pvneg' }, lengthM: 2 },
+  ];
+  const result = evaluateDiagram(diagram);
+  for (const id of ['series', 'stringpos', 'stringneg']) {
+    assert.equal(result.wires.get(id).currentA, 15.88, `${id} carries the 465 W panel Isc`);
+    assert.equal(result.wires.get(id).voltage, 62.4, `${id} carries the rounded two-panel Vmp`);
+  }
+  assert.equal(result.checks.some((c) => c.id === 'short'), false);
+});
+
 test('a hybrid inverter accepts a PV array and a battery on one part', () => {
   const def = CATALOG_BY_ID['hybrid-inverter'];
   assert.deepEqual(

@@ -21,9 +21,10 @@ Any static file server works; there is no compile step.
 
 ### Drawing
 
-- 40-component library: batteries, solar, alternators, MPPTs, DC-DC chargers,
-  inverter/chargers, hybrid inverter/chargers with a PV MPPT input, fuse boxes,
-  busbars, switches, shunts, AC panels, RCDs, sockets, appliances and grounding.
+- 42-component library: batteries, solar panels (including 465 W and 450 W
+  presets), alternators, MPPTs, DC-DC chargers, inverter/chargers, hybrid
+  inverter/chargers with a PV MPPT input, fuse boxes, busbars, switches, shunts,
+  AC panels, RCDs, sockets, appliances and grounding.
 - Drag-and-drop placement, multi-select, duplicate, delete, undo/redo.
 - Terminal-to-terminal cable drawing with polarity awareness. A cable between
   opposite polarities is refused as a short; duplicate runs are flagged.
@@ -113,7 +114,7 @@ js/core/engine.js        sizing, current tracing, checks, BOM
 js/core/fixes.js         deterministic one-click repairs for check findings
 js/core/store.js         document store, undo/redo, persistence, versions
 js/ui/editor.js          SVG canvas, drag, wiring, pan/zoom, export
-js/ui/symbols.js         original SVG artwork for the 40 components
+js/ui/symbols.js         original SVG artwork for the 42 components
 js/data/catalog.js       component definitions, terminals, defaults, prices
 js/data/standards.js     ampacity tables, derating, fuses, wire sizes
 js/data/templates.js     campervan, simple and solar starter diagrams
