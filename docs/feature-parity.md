@@ -33,10 +33,10 @@ component database.
 | Inspector for components and cables | **Built** | Label, brand, model, price, electrical properties, notes. |
 | Per-cable length, current override, cable size override, fuse override | **Built** | Manual choices are still validated. |
 | Live cable and fuse sizing as you draw | **Built** | `evaluateDiagram()` runs on every store change. |
-| Automatic safety checks with explanations | **Built** | 37 distinct findings; each has a rule, severity and jump-to item. |
+| Automatic safety checks with explanations | **Built** | 39 distinct findings; each has a rule, severity and jump-to item. |
 | One-click automatic repairs | **Built** | Deterministic fixes insert parts and rewire the circuit; unsupported design decisions stay manual. |
 | Templates / worked examples | **Partial** | 3 original templates vs 41 on Wireframe; same idea, different catalogue. |
-| Branded component catalogue | **Partial** | 44 generic, fully modelled components, including 465 W and 450 W solar panel presets, a hybrid inverter/charger with a PV MPPT input, a 2-in/1-out PV combiner box with string fuses, an SPD and a 2-pole outgoing DC MCB, and a 2-pole MCCB for the battery–inverter feed. No Victron/Renogy/Blue Sea part numbers or logos. |
+| Branded component catalogue | **Partial** | 45 generic, fully modelled components, including 465 W and 450 W solar panel presets, a hybrid inverter/charger with a PV MPPT input, a 2-in/1-out PV combiner box with string fuses, an SPD and a 2-pole outgoing DC MCB, and a 2-pole MCCB for the battery–inverter feed. No Victron/Renogy/Blue Sea part numbers or logos. |
 | Search the library | **Built** | Filters by name, category and tag. |
 | Quick-add shortcuts | **Built** | Battery, fuse box, MPPT, load. |
 | Title block (client, drawing no., revision, date) | **Built** | Editable in the Project tab and printed on the sheet. |
@@ -53,7 +53,8 @@ component database.
 | NEC (NFPA 70) sizing | **Built** | Table 310.16 columns, ambient correction, conductor adjustment. |
 | Continuous-load factor | **Built** | ×1.25 by default, per standard; can be disabled per run. |
 | Voltage-drop targets | **Built** | 3% / 5% / 10% presets, standard-specific defaults, editable. |
-| 12 / 24 / 48 V systems | **Built** | Voltage is per component and per run. |
+| 12 / 24 / 48 V systems | **Built** | Voltage is per component and per run. A 51.2 V 280 Ah preset and a complete 48 V home template target BS 7671 / IEC 60364. |
+| DC voltage ratings | **Built** | Fuses, breakers, isolators and the MCCB carry a max DC voltage; a device below the circuit's charge or open-circuit voltage is flagged. |
 | AC circuits (shore, inverter output, sockets) | **Built** | AC L/N/PE conductors with separate colours and checks. |
 | PV minimum cable size | **Built** | 2.5 mm² minimum enforced for PV conductors. |
 | Series / parallel PV arrays | **Built** | Panels joined pv+ to pv− form a series string; parallel branches add at a combiner; cable current uses string Isc and voltage drop uses string Vmp. |
@@ -64,7 +65,7 @@ component database.
 
 ## 3. Safety checks
 
-RigPlan implements 34 rule types, including all the examples Wireframe names in
+RigPlan implements 39 rule types, including all the examples Wireframe names in
 its marketing:
 
 - battery without a primary fuse
@@ -78,6 +79,8 @@ its marketing:
 - shore power without an RCD/RCBO
 - fuse larger than the cable's derated ampacity
 - fuse below the continuous load
+- a device rated below the circuit's DC voltage (charge voltage or array Voc)
+- charge sources above the battery's charge-current limit
 - AC and DC on the same cable
 - reverse-polarity cable (short)
 - mixed battery chemistries or voltages
@@ -156,7 +159,7 @@ content gap rather than a software gap.
 ## Summary
 
 **Replicated:** the editor workflow, orthogonal cable autorouting, automatic
-cable and fuse sizing, 37 safety checks, BOM/cable/fuse schedules,
+cable and fuse sizing, 39 safety checks, BOM/cable/fuse schedules,
 SVG/PNG/PDF/JSON export, standards switching, named versions, templates, and all
 ten calculators.
 

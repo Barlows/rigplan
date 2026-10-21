@@ -5,7 +5,7 @@ import {
   STANDARDS, TEMP_RATINGS, FUSE_FAMILIES, FUSE_RATINGS,
   AWG_SIZES, AWG_AREA, METRIC_SIZES, metricArea, formatSize,
 } from './data/standards.js';
-import { sizeRun, pickFuse } from './core/engine.js?v=20261044';
+import { sizeRun, pickFuse } from './core/engine.js?v=20261045';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -305,6 +305,18 @@ function initBank() {
   }
 
   ['#bank-battery-v', '#bank-ah', '#bank-count', '#bank-system-v', '#bank-dod'].forEach((id) => $(id).addEventListener('input', update));
+
+  // A home bank is usually one 51.2 V battery, a 24 V bank two 12.8 V batteries in series.
+  const presets = { 12: [12.8, 12, 1], 24: [12.8, 24, 2], 48: [51.2, 48, 1] };
+  document.querySelectorAll('[data-bank-preset]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const [batteryV, systemV, count] = presets[button.dataset.bankPreset] || presets[12];
+      $('#bank-battery-v').value = batteryV;
+      $('#bank-system-v').value = systemV;
+      $('#bank-count').value = count;
+      update();
+    });
+  });
   update();
 }
 

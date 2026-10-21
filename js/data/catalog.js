@@ -43,6 +43,15 @@ export const CATALOG = [
     terminals: dcPair(),
   },
   {
+    id: 'battery-lifepo4-48', cat: 'Sources', label: '48 V LiFePO4 battery', symbol: 'battery', w: 170, h: 96,
+    roles: ['source'], price: 2400,
+    defaults: {
+      voltage: 51.2, capacityAh: 280, supplyA: 200, chemistry: 'LiFePO4',
+      hasBMS: true, maxChargeA: 140, chargeV: 58.4,
+    },
+    terminals: dcPair(),
+  },
+  {
     id: 'solar-panel', cat: 'Sources', label: 'Solar panel', symbol: 'panel', w: 170, h: 100,
     roles: ['source'], price: 180,
     defaults: {
@@ -220,7 +229,7 @@ export const CATALOG = [
   {
     id: 'main-switch', cat: 'Distribution', label: 'Battery isolator switch', symbol: 'switch', w: 130, h: 80,
     roles: ['protection'], price: 55,
-    defaults: { voltage: 12, ratedA: 275, remote: false },
+    defaults: { voltage: 12, ratedA: 275, dcV: 60, remote: false },
     terminals: [
       { id: 'in', x: 0.2, y: 0.5, kind: 'dc+', label: 'IN' },
       { id: 'out', x: 0.8, y: 0.5, kind: 'dc+', label: 'OUT' },
@@ -240,7 +249,7 @@ export const CATALOG = [
   {
     id: 'fuse', cat: 'Protection', label: 'Inline fuse', symbol: 'fuse', w: 120, h: 60,
     roles: ['protection'], price: 12,
-    defaults: { voltage: 12, ratingA: 30, family: 'blade', atSource: true },
+    defaults: { voltage: 12, ratingA: 30, family: 'blade', dcV: 32, atSource: true },
     terminals: [
       { id: 'in', x: 0.1, y: 0.5, kind: 'dc+', label: 'IN' },
       { id: 'out', x: 0.9, y: 0.5, kind: 'dc+', label: 'OUT' },
@@ -249,7 +258,7 @@ export const CATALOG = [
   {
     id: 'class-t-fuse', cat: 'Protection', label: 'Class-T fuse', symbol: 'fuse', w: 130, h: 60,
     roles: ['protection'], price: 48,
-    defaults: { voltage: 12, ratingA: 400, family: 'class-t', atSource: true },
+    defaults: { voltage: 12, ratingA: 400, family: 'class-t', dcV: 125, atSource: true },
     terminals: [
       { id: 'in', x: 0.1, y: 0.5, kind: 'dc+', label: 'IN' },
       { id: 'out', x: 0.9, y: 0.5, kind: 'dc+', label: 'OUT' },
@@ -258,7 +267,7 @@ export const CATALOG = [
   {
     id: 'breaker-dc', cat: 'Protection', label: 'DC breaker', symbol: 'breaker', w: 130, h: 60,
     roles: ['protection'], price: 34,
-    defaults: { voltage: 12, ratingA: 50, family: 'breaker', curve: 'C', atSource: true },
+    defaults: { voltage: 12, ratingA: 50, family: 'breaker', curve: 'C', dcV: 60, atSource: true },
     terminals: [
       { id: 'in', x: 0.1, y: 0.5, kind: 'dc+', label: 'IN' },
       { id: 'out', x: 0.9, y: 0.5, kind: 'dc+', label: 'OUT' },
@@ -278,7 +287,7 @@ export const CATALOG = [
   {
     id: 'mccb-2p', cat: 'Protection', label: '2-pole MCCB', symbol: 'mccb', w: 150, h: 90,
     roles: ['protection'], price: 95,
-    defaults: { voltage: 12, ratingA: 125, poles: 2, curve: 'C', family: 'breaker' },
+    defaults: { voltage: 12, ratingA: 125, poles: 2, curve: 'C', family: 'breaker', dcV: 125 },
     terminals: [
       { id: 'inpos', x: 0, y: 0.3, kind: 'dc+', label: 'IN +' },
       { id: 'inneg', x: 0, y: 0.7, kind: 'dc-', label: 'IN −' },
@@ -384,10 +393,12 @@ export const CATALOG = [
     roles: ['ground'], price: 25,
     defaults: { bonded: true },
     terminals: [
-      { id: 'g1', x: 0.2, y: 0.5, kind: 'gnd', label: '1' },
-      { id: 'g2', x: 0.4, y: 0.5, kind: 'gnd', label: '2' },
-      { id: 'g3', x: 0.6, y: 0.5, kind: 'gnd', label: '3' },
-      { id: 'g4', x: 0.8, y: 0.5, kind: 'gnd', label: '4' },
+      { id: 'g1', x: 0.14, y: 0.5, kind: 'gnd', label: '1' },
+      { id: 'g2', x: 0.29, y: 0.5, kind: 'gnd', label: '2' },
+      { id: 'g3', x: 0.43, y: 0.5, kind: 'gnd', label: '3' },
+      { id: 'g4', x: 0.57, y: 0.5, kind: 'gnd', label: '4' },
+      { id: 'g5', x: 0.71, y: 0.5, kind: 'gnd', label: '5' },
+      { id: 'g6', x: 0.86, y: 0.5, kind: 'gnd', label: '6' },
     ],
   },
   {

@@ -276,3 +276,39 @@ test('the PV combiner SPD repair adds an earth point when none exists', () => {
   assert.equal(finding(doc, 'pv-combiner-spd'), null);
   assert.ok(doc.nodes.some((n) => n.type === 'chassis-ground'), 'an earth point is added');
 });
+
+// ---------------------------------------------------------------------------
+// A 48 V bank charges to about 58 V, well past the 32 V DC rating of a blade fuse.
+function batteryFixture(typeId) {
+  const blank = structuredClone({ nodes: [], wires: [], settings: { ...DEFAULT_SETTINGS } });
+  const battery = makeNode(typeId, 100, 100, { id: 'n_bat' });
+  const load = makeNode('fridge', 420, 100, { id: 'n_load' });
+  blank.nodes.push(battery, load);
+  blank.wires.push(
+    { id: 'w_p', from: { node: battery.id, terminal: 'pos' }, to: { node: load.id, terminal: 'pos' }, lengthM: 2 },
+    { id: 'w_n', from: { node: battery.id, terminal: 'neg' }, to: { node: load.id, terminal: 'neg' }, lengthM: 2 },
+  );
+  return blank;
+}
+
+test('the battery fuse repair fits a Class-T on a 48 V bank', () => {
+  const broken = batteryFixture('battery-lifepo4-48');
+  const check = finding(broken, 'battery-unfused');
+  assert.ok(check, 'fixture should have an unprotected 48 V battery');
+
+  const { doc: repaired } = applyFix(broken, check);
+  assert.ok(repaired.nodes.some((n) => n.type === 'class-t-fuse'), 'should fit a Class-T, not a blade fuse');
+  assert.equal(finding(repaired, 'battery-unfused'), null);
+  assert.equal(finding(repaired, 'dc-voltage-rating'), null, 'the repair must not leave a voltage-rating warning behind');
+});
+
+test('the battery fuse repair still fits a blade fuse on a 12 V bank', () => {
+  const broken = batteryFixture('battery-lifepo4');
+  const check = finding(broken, 'battery-unfused');
+  assert.ok(check);
+
+  const { doc: repaired } = applyFix(broken, check);
+  assert.ok(repaired.nodes.some((n) => n.type === 'fuse'));
+  assert.equal(repaired.nodes.some((n) => n.type === 'class-t-fuse'), false);
+  assert.equal(finding(repaired, 'dc-voltage-rating'), null);
+});

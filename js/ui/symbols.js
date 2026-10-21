@@ -268,7 +268,7 @@ const SYMBOLS = {
     line(w / 2 - 6, h / 2 + 16, w / 2 + 6, h / 2 + 16, INK, 2),
 
   earthbar: (w, h, node) => rect(12, h / 2 - 8, w - 24, 16, 3, '#eef3f6', '#c3ced9', 1.2) +
-    [0.2, 0.4, 0.6, 0.8].map((p) => line(12 + (w - 24) * p, h / 2 - 8, 12 + (w - 24) * p, h / 2 - 18, MUTED, 1.4)).join(''),
+    [0.14, 0.29, 0.43, 0.57, 0.71, 0.86].map((p) => line(12 + (w - 24) * p, h / 2 - 8, 12 + (w - 24) * p, h / 2 - 18, MUTED, 1.4)).join(''),
 
   monitor: (w, h, node) => rect(18, 14, w - 36, h - 40, 4) +
     line(w / 2 - 10, h - 22, w / 2 + 10, h - 22, MUTED, 1.6) +

@@ -1,9 +1,9 @@
-import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js?v=20261044';
-import { TEMPLATES, templateCampervan } from './data/templates.js?v=20261044';
-import { createStore, emptyProject } from './core/store.js?v=20261044';
-import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js?v=20261044';
-import { fixForCheck } from './core/fixes.js?v=20261044';
-import { createEditor } from './ui/editor.js?v=20261044';
+import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js?v=20261045';
+import { TEMPLATES, templateCampervan } from './data/templates.js?v=20261045';
+import { createStore, emptyProject } from './core/store.js?v=20261045';
+import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js?v=20261045';
+import { fixForCheck } from './core/fixes.js?v=20261045';
+import { createEditor } from './ui/editor.js?v=20261045';
 import {
   STANDARDS, TEMP_RATINGS, FUSE_FAMILIES, FUSE_RATINGS,
   formatSize, TERMINAL_KINDS, WIRE_COLORS, metricArea,
@@ -146,9 +146,14 @@ const CONNECTION_HINTS = {
   'mccb-2p': 'IN + / IN − come from the battery, OUT + / OUT − feed the inverter. Both poles break together, so it doubles as the inverter DC isolator.',
 };
 
+const GLOBAL_PROP_LABELS = {
+  dcV: 'Max DC voltage',
+  chargeV: 'Full-charge voltage',
+};
+
 const propLabel = (type, key) => {
   const labels = PROP_LABELS[type] || (String(type || '').startsWith('solar-panel') ? PROP_LABELS['solar-panel'] : null);
-  return labels?.[key] || humanize(key);
+  return labels?.[key] || GLOBAL_PROP_LABELS[key] || humanize(key);
 };
 
 function humanize(key) {

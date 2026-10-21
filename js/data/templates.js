@@ -1,8 +1,8 @@
 // Starter diagrams.
 
-import { makeNode } from './catalog.js?v=20261044';
-import { emptyProject } from '../core/store.js?v=20261044';
-import { DEFAULT_SETTINGS } from '../core/engine.js?v=20261044';
+import { makeNode } from './catalog.js?v=20261045';
+import { emptyProject } from '../core/store.js?v=20261045';
+import { DEFAULT_SETTINGS } from '../core/engine.js?v=20261045';
 
 let counter = 0;
 const n = (type, x, y, props = {}, label) => {
@@ -18,14 +18,14 @@ const w = (from, fromT, to, toT, lengthM, extra = {}) => ({
   ...extra,
 });
 
-function doc(name, notes, build) {
+function doc(name, notes, build, settings = {}) {
   counter = 0;
   const nodes = [];
   const wires = [];
   const add = (node) => { nodes.push(node); return node; };
   const link = (...args) => { wires.push(w(...args)); };
   build(add, link);
-  return emptyProject({ name, notes, nodes, wires, settings: { ...DEFAULT_SETTINGS } });
+  return emptyProject({ name, notes, nodes, wires, settings: { ...DEFAULT_SETTINGS, ...settings } });
 }
 
 export function templateCampervan() {
@@ -36,7 +36,7 @@ export function templateCampervan() {
       const mppt = add(n('mppt', 380, 80, { outputA: 30 }));
       const alt = add(n('alternator', 100, 300, { supplyA: 150 }));
       const dcdc = add(n('dcdc', 380, 300, { outputA: 30 }));
-      const battery = add(n('battery-lifepo4', 640, 520, { capacityAh: 300, supplyA: 300, hasBMS: true }));
+      const battery = add(n('battery-lifepo4', 640, 520, { capacityAh: 300, supplyA: 300, maxChargeA: 100, hasBMS: true }));
       const mainFuse = add(n('class-t-fuse', 480, 560, { ratingA: 300 }));
       const isolator = add(n('main-switch', 900, 560, { ratedA: 275 }));
       const box = add(n('fuse-box', 1080, 520, { ratedA: 100 }));
@@ -143,7 +143,72 @@ export function templateSolar() {
     });
 }
 
+export function templateHome48() {
+  return doc('48 V home — PV, battery and hybrid inverter',
+    'Off-grid 48 V core to BS 7671 / IEC 60364. Two strings of 465 W panels feed a 2-in 1-out combiner, and a 51.2 V 280 Ah battery runs through a Class-T fuse and a 2-pole MCCB into a 5 kW hybrid inverter. Outgoing way 1 is protected by a 30 mA RCBO; way 2 is spare. Lengths and cable sizes are examples — measure your own runs and confirm every rating against the equipment you buy.',
+    (add, link) => {
+      const p1 = add(n('solar-panel-465', 60, 80, {}, 'PV string 1a'));
+      const p2 = add(n('solar-panel-465', 60, 220, {}, 'PV string 1b'));
+      const p3 = add(n('solar-panel-465', 60, 380, {}, 'PV string 2a'));
+      const p4 = add(n('solar-panel-465', 60, 520, {}, 'PV string 2b'));
+      const combiner = add(n('pv-combiner', 330, 180, { stringFuseA: 20, outBreakerA: 32, poles: 2 }, 'PV combiner'));
+      const hybrid = add(n('hybrid-inverter', 800, 200, {
+        voltage: 51.2, inputV: 51.2, watts: 5000, chargeA: 80,
+        maxPvVoc: 450, maxPvA: 20, efficiency: 0.94, acOutA: 22,
+      }, '5 kW hybrid inverter'));
+      const mainFuse = add(n('class-t-fuse', 700, 480, { voltage: 48, ratingA: 150 }, 'Battery main fuse'));
+      const mccb = add(n('mccb-2p', 880, 560, { voltage: 48, ratingA: 125, poles: 2 }, 'Battery MCCB'));
+      const battery = add(n('battery-lifepo4-48', 660, 620, {}, '48 V battery'));
+      const panel = add(n('ac-panel', 1100, 420, { voltage: 230, ratedA: 32, circuits: 4 }, 'AC consumer unit'));
+      const rcbo = add(n('rcbo', 1120, 620, { voltage: 230, ratingA: 32, sensitivity: 30 }, 'Sockets RCBO'));
+      const sockets = add(n('sockets', 1400, 620, {}, 'Sockets'));
+      const earth = add(n('earth-bar', 760, 900, { bonded: true }, 'Main earth terminal'));
+
+      // String 1: two panels in series, then into fused input 1.
+      link(p1, 'pvpos', p2, 'pvneg', 0.8);
+      link(p2, 'pvpos', combiner, 'in1pos', 3.2);
+      link(p1, 'pvneg', combiner, 'in1neg', 4.1);
+
+      // String 2: same, into fused input 2.
+      link(p3, 'pvpos', p4, 'pvneg', 0.8);
+      link(p4, 'pvpos', combiner, 'in2pos', 3.2);
+      link(p3, 'pvneg', combiner, 'in2neg', 4.1);
+
+      // Combined array into the hybrid MPPT input.
+      link(combiner, 'outpos', hybrid, 'pvpos', 4.5);
+      link(combiner, 'outneg', hybrid, 'pvneg', 4.5);
+
+      // Battery: positive through the Class-T and the 2-pole MCCB.
+      link(battery, 'pos', mainFuse, 'in', 1.2);
+      link(mainFuse, 'out', mccb, 'inpos', 1.2);
+      link(battery, 'neg', mccb, 'inneg', 1.8);
+      link(mccb, 'outpos', hybrid, 'pos', 2.6);
+      link(mccb, 'outneg', hybrid, 'neg', 2.6);
+
+      // AC out to the consumer unit, then one protected outgoing way.
+      link(hybrid, 'outl', panel, 'inl', 6);
+      link(hybrid, 'outn', panel, 'inn', 6);
+      link(panel, 'o1l', rcbo, 'inl', 1.5);
+      link(panel, 'o1n', rcbo, 'inn', 1.5);
+      link(rcbo, 'outl', sockets, 'l', 8);
+      link(rcbo, 'outn', sockets, 'n', 8);
+
+      // One earth terminal for the array, DC and AC protective conductors.
+      link(combiner, 'gnd', earth, 'g1', 6.5);
+      link(battery, 'neg', earth, 'g2', 3.4);
+      link(hybrid, 'pe', earth, 'g3', 7.2);
+      link(panel, 'inpe', earth, 'g4', 3.6);
+      link(sockets, 'pe', earth, 'g5', 6.4);
+    },
+    { standard: 'iec', tempRating: 90, ambientC: 30, vdTarget: 3, units: 'mm2', method: 'C', groupingCount: 1 });
+}
+
 export const TEMPLATES = [
+  {
+    id: 'home48', name: '48 V home — PV, battery and hybrid inverter',
+    blurb: 'UK/EU 48 V off-grid core: two PV strings, a combiner, a 14 kWh battery and AC outgoing ways.',
+    build: templateHome48,
+  },
   {
     id: 'campervan', name: 'Campervan — solar, DC-DC and inverter',
     blurb: 'A full 12 V system with AC, shore charging and 2000 W inverter.',

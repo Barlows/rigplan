@@ -4,8 +4,8 @@
 // ordinary store mutations, so they are undoable and are saved with the
 // project just like a manual edit.
 
-import { CATALOG_BY_ID, makeNode } from '../data/catalog.js?v=20261044';
-import { evaluateDiagram, sizeRun, sizeOptions } from './engine.js?v=20261044';
+import { CATALOG_BY_ID, makeNode } from '../data/catalog.js?v=20261045';
+import { evaluateDiagram, sizeRun, sizeOptions } from './engine.js?v=20261045';
 import { FUSE_RATINGS, STANDARDS, metricArea } from '../data/standards.js';
 
 const SHEET_W = 1800;
@@ -229,7 +229,10 @@ const FIXES = {
     const battery = batteryFor(check, doc);
     if (!battery || !hasWire(doc, battery.id, 'pos')) return null;
     const cap = Number(battery.props?.supplyA) || 0;
-    const typeId = cap >= 200 ? 'class-t-fuse' : 'fuse';
+    // A 48 V bank charges to about 58 V, well above the 32 V DC rating of most
+    // blade, MIDI and ANL fuses, so those systems need a Class-T.
+    const chargeV = Number(battery.props?.chargeV) || (Number(battery.props?.voltage) || 12) * 1.15;
+    const typeId = cap >= 200 || chargeV > 32 ? 'class-t-fuse' : 'fuse';
     return addBatterySeriesPart(check, doc, {
       typeId,
       label: typeId === 'class-t-fuse' ? 'Battery main fuse' : 'Battery fuse',
@@ -361,11 +364,15 @@ const FIXES = {
         const live = nodeById(d, mppt.id);
         if (!live) return null;
         const amps = Number(live.props?.outputA) || 30;
-        const fuse = addPart(d, 'fuse', live.x + live.w + 45, live.y + 15, {
-          voltage: Number(live.props?.voltage) || 12,
+        const volts = Number(live.props?.voltage) || 12;
+        // Above 32 V a blade/MIDI/ANL fuse is the wrong device; a DC breaker carries
+        // the higher DC rating a 48 V bank needs.
+        const highVoltage = volts > 32;
+        const fuse = addPart(d, highVoltage ? 'breaker-dc' : 'fuse', live.x + live.w + 45, live.y + 15, {
+          voltage: volts,
           ratingA: nextFuseRating(amps * 1.25),
-          family: amps > 80 ? 'anl' : 'midi',
-        }, 'MPPT output fuse');
+          family: highVoltage ? 'breaker' : (amps > 80 ? 'anl' : 'midi'),
+        }, highVoltage ? 'MPPT output breaker' : 'MPPT output fuse');
         redirectThrough(d, live.id, 'batpos', fuse, 'in', 'out', 0.4);
         return { notice: `Fitted an output fuse on ${live.label}.`, selectNodeId: fuse.id };
       },
@@ -383,6 +390,7 @@ const FIXES = {
         const node = addPart(d, 'main-switch', live.x - 170, live.y + 10, {
           voltage: 600,
           ratedA: 25,
+          dcV: 600,
           terminalKinds: { in: 'pv+', out: 'pv+' },
         }, 'PV isolator');
         redirectThrough(d, live.id, 'pvpos', node, 'out', 'in', 0.4);

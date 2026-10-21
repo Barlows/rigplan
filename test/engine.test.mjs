@@ -6,7 +6,7 @@ import {
   ampacityFor, deratingFactors, sizeRun, pickFuse, evaluateDiagram,
   computeCurrents, buildBom, DEFAULT_SETTINGS,
 } from '../js/core/engine.js';
-import { templateCampervan, templateSimple, templateSolar } from '../js/data/templates.js';
+import { templateCampervan, templateSimple, templateSolar, templateHome48 } from '../js/data/templates.js';
 import { recoverOffSheet } from '../js/core/store.js';
 import { CATALOG_BY_ID, makeNode } from '../js/data/catalog.js';
 import { STANDARDS, FUSE_FAMILIES, METRIC_SIZES } from '../js/data/standards.js';
@@ -510,4 +510,55 @@ test('off-sheet and non-finite components are pulled back onto the sheet', () =>
   }
   assert.deepEqual({ x: diagram.nodes[2].x, y: diagram.nodes[2].y }, { x: 900, y: 400 });
   assert.equal(recoverOffSheet({ nodes: [{ id: 'd', x: 100, y: 100, w: 50, h: 50 }] }), 0);
+});
+
+// ---------------------------------------------------------------------------
+// 48 V safety pack: DC voltage ratings and battery charge limits.
+test('the 48 V home template evaluates without findings', () => {
+  const result = evaluateDiagram(templateHome48());
+  assert.deepEqual(result.checks, [], 'the reference 48 V design should be clean');
+});
+
+test('a device rated below the battery charge voltage is flagged', () => {
+  const diagram = templateHome48();
+  const fuse = diagram.nodes.find((n) => n.type === 'class-t-fuse');
+  fuse.props.dcV = 32;
+  const check = evaluateDiagram(diagram).checks.find((c) => c.id === 'dc-voltage-rating');
+  assert.ok(check, 'a 32 V DC fuse should not pass on a 58.4 V battery bus');
+  assert.match(check.detail, /58\.4/);
+  assert.deepEqual(check.nodeIds, [fuse.id]);
+});
+
+test('the DC voltage check uses array open-circuit voltage on the PV side', () => {
+  const diagram = templateHome48();
+  const combiner = diagram.nodes.find((n) => n.type === 'pv-combiner');
+  combiner.props.dcV = 60;
+  const check = evaluateDiagram(diagram).checks.find((c) => c.id === 'dc-voltage-rating');
+  assert.ok(check, 'two 465 W panels in series reach 72.9 V open circuit');
+  assert.match(check.detail, /72\.9/);
+});
+
+test('a battery-side device is not judged against the PV string voltage', () => {
+  const diagram = templateHome48();
+  const mccb = diagram.nodes.find((n) => n.type === 'mccb-2p');
+  mccb.props.dcV = 60; // above 58.4 V charge, below the 72.9 V array
+  assert.deepEqual(evaluateDiagram(diagram).checks, []);
+});
+
+test('charge sources above the battery limit are flagged', () => {
+  const diagram = templateHome48();
+  const battery = diagram.nodes.find((n) => n.type === 'battery-lifepo4-48');
+  battery.props.maxChargeA = 50; // the hybrid alone charges at 80 A
+  const check = evaluateDiagram(diagram).checks.find((c) => c.id === 'battery-charge-limit');
+  assert.ok(check);
+  assert.match(check.detail, /80/);
+  assert.deepEqual(check.nodeIds, [battery.id]);
+});
+
+test('the 48 V battery part declares a charge voltage and a BMS', () => {
+  const battery = makeNode('battery-lifepo4-48', 100, 100, {});
+  assert.equal(battery.props.voltage, 51.2);
+  assert.equal(battery.props.chargeV, 58.4);
+  assert.equal(battery.props.hasBMS, true);
+  assert.ok(battery.props.maxChargeA > 0);
 });

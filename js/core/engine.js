@@ -7,7 +7,7 @@ import {
   STANDARDS, FUSE_FAMILIES, FUSE_RATINGS, METRIC_SIZES, AWG_SIZES, AWG_AREA,
   TERMINAL_KINDS, resistancePerMetre, metricArea, formatSize,
 } from '../data/standards.js';
-import { CATALOG_BY_ID } from '../data/catalog.js?v=20261044';
+import { CATALOG_BY_ID } from '../data/catalog.js?v=20261045';
 
 export const DEFAULT_SETTINGS = {
   standard: 'abyc',
@@ -229,6 +229,79 @@ function isProtectionNode(node) {
 /** Devices that double as a service isolator: a manual switch or a 2-pole MCCB. */
 function isIsolatorNode(node) {
   return node?.type === 'main-switch' || node?.type === 'mccb-2p';
+}
+
+/** Voltage a battery reaches at full charge, used for DC voltage-rating checks. */
+function batteryChargeVoltage(battery) {
+  const props = battery?.props || {};
+  const rated = Number(props.chargeV);
+  if (rated > 0) return rated;
+  const nominal = Number(props.voltage) || 12.8;
+  return Math.round(nominal * 1.15 * 10) / 10;
+}
+
+/** Conversion devices separate one DC circuit from another (PV side vs battery side). */
+function isDcBarrier(node) {
+  return (CATALOG_BY_ID[node?.type]?.roles || []).includes('charger');
+}
+
+/**
+ * Nodes and wires on the same DC circuit as `startId`. The walk crosses
+ * protection, distribution, busbars and monitors but stops at conversion
+ * devices, so a device on the battery side never inherits the PV string voltage.
+ */
+function dcComponent(graph, startId) {
+  const nodes = new Set([startId]);
+  const wires = new Set();
+  const queue = [startId];
+  while (queue.length) {
+    const id = queue.shift();
+    if (id !== startId && isDcBarrier(graph.nodeById.get(id))) continue;
+    for (const edge of graph.byNode.get(id) || []) {
+      const family = wireFamily(edge.wire, graph);
+      if (family !== 'dc+' && family !== 'dc-') continue;
+      wires.add(edge.wire);
+      if (!nodes.has(edge.other)) {
+        nodes.add(edge.other);
+        queue.push(edge.other);
+      }
+    }
+  }
+  return { nodes, wires };
+}
+
+/** Highest DC voltage any device on this circuit has to withstand. */
+function dcCircuitVoltage(graph, startId) {
+  let required = 0;
+  for (const id of dcComponent(graph, startId).nodes) {
+    const node = graph.nodeById.get(id);
+    if (!node) continue;
+    if (isBattery(node)) required = Math.max(required, batteryChargeVoltage(node));
+    const volts = Number(node.props?.voltage);
+    if (volts > 0) required = Math.max(required, volts);
+  }
+  // PV strings live on their own families, and their open-circuit voltage is
+  // higher than the nominal array voltage used for cable sizing.
+  const pv = pvComponent(graph, startId);
+  const onPv = [...pv.nodes].some((id) => isSolarPanel(graph.nodeById.get(id)) || isPvCombiner(graph.nodeById.get(id)));
+  if (onPv) {
+    for (const id of pv.nodes) {
+      const node = graph.nodeById.get(id);
+      if (node?.type !== 'mppt' && node?.type !== 'hybrid-inverter') continue;
+      const summary = pvArraySummary(graph, node.id);
+      if (summary) required = Math.max(required, summary.maxStringVoc);
+    }
+  }
+  return required;
+}
+
+/** Charge current a charger can push into a battery, for the charge-limit check. */
+function chargerOutputA(node) {
+  const props = node?.props || {};
+  if (node?.type === 'mppt') return Number(props.outputA) || 0;
+  if (node?.type === 'hybrid-inverter' || node?.type === 'inverter-charger') return Number(props.chargeA) || 0;
+  if (node?.type === 'ac-charger' || node?.type === 'dcdc') return Number(props.outputA) || 0;
+  return 0;
 }
 
 /** BFS from a node; stop at the first node matching `stop`. Returns the wire path. */
@@ -692,6 +765,37 @@ export function runChecks(diagram, sizing) {
         'Fit a manual isolator on the battery positive so the system can be made dead for service.',
         { nodeIds: [battery.id] }));
     }
+    const maxChargeA = Number(battery.props?.maxChargeA) || 0;
+    if (maxChargeA > 0) {
+      const sources = [];
+      let totalA = 0;
+      for (const id of dcComponent(graph, battery.id).nodes) {
+        const node = graph.nodeById.get(id);
+        if (!node || node.id === battery.id) continue;
+        const amps = chargerOutputA(node);
+        if (amps <= 0) continue;
+        totalA += amps;
+        sources.push(`${node.label} ${round(amps, 1)} A`);
+      }
+      if (totalA > maxChargeA + 0.5) {
+        out.push(finding('battery-charge-limit', 'warning', 'Charge current above the battery limit',
+          `Charging sources on ${battery.label} add up to ${round(totalA, 1)} A (${sources.join(', ')}) but the bank accepts ${maxChargeA} A. Reduce the charge current, split the bank, or confirm the BMS will curtail it.`,
+          { nodeIds: [battery.id] }));
+      }
+    }
+  }
+
+  // ---- DC voltage ratings -------------------------------------------------
+  // A 48 V bank charges to about 58 V, and a PV string sits at its open-circuit
+  // voltage. Both exceed the 32 V DC rating of a lot of small breakers and fuses.
+  for (const node of nodes) {
+    const dcV = Number(node.props?.dcV) || 0;
+    if (dcV <= 0) continue;
+    const required = dcCircuitVoltage(graph, node.id);
+    if (required <= dcV + 0.5) continue;
+    out.push(finding('dc-voltage-rating', 'warning', 'DC rating below the circuit voltage',
+      `${node.label} is rated ${round(dcV, 1)} V DC but this circuit reaches ${round(required, 1)} V (full charge or array open-circuit). Fit a device rated above ${round(required, 1)} V DC.`,
+      { nodeIds: [node.id] }));
   }
 
   // ---- inverters ----------------------------------------------------------

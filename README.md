@@ -52,7 +52,7 @@ Any static file server works; there is no compile step.
 
 ### Safety checks
 
-37 rule types run on every change, grouped by severity:
+39 rule types run on every change, grouped by severity:
 
 - **Critical** — battery without a primary fuse, unprotected inverter feed,
   undersized cable, fuse above cable ampacity, shore power without an RCD, no
@@ -60,9 +60,12 @@ Any static file server works; there is no compile step.
   the battery's capability.
 - **Warning** — missing PV isolator, unprotected MPPT output, PV combiner SPD
   not earthed, combiner under-rated for the array, large lithium bank
-  without high-interrupt protection, voltage drop above target, fuse below the
-  continuous load, mixed chemistries or voltages, alternator charging lithium
-  directly, parallel PV strings without string fuses, busbar/fuse-box overload.
+  without high-interrupt protection, a device whose DC rating is below the
+  circuit voltage (58.4 V on a 48 V bank, Voc on a PV string), charge sources
+  adding up to more than the battery's charge limit, voltage drop above target,
+  fuse below the continuous load, mixed chemistries or voltages, alternator
+  charging lithium directly, parallel PV strings without string fuses,
+  busbar/fuse-box overload.
 - **Info** — unconnected terminals, unused ground points, zero-length runs,
   duplicate cables, fuse family mismatches.
 
@@ -121,10 +124,10 @@ js/core/fixes.js         deterministic one-click repairs for check findings
 js/core/store.js         document store, undo/redo, persistence, versions
 js/ui/editor.js          SVG canvas, drag, wiring, pan/zoom, export
 js/ui/router.js          orthogonal cable autorouter (obstacles + lanes)
-js/ui/symbols.js         original SVG artwork for the 44 components
+js/ui/symbols.js         original SVG artwork for the 45 components
 js/data/catalog.js       component definitions, terminals, defaults, prices
 js/data/standards.js     ampacity tables, derating, fuses, wire sizes
-js/data/templates.js     campervan, simple and solar starter diagrams
+js/data/templates.js     48 V home, campervan, simple and solar starter diagrams
 test/engine.test.mjs      engine regression tests
 test/fixes.test.mjs       one-click repair regression tests
 test/router.test.mjs      cable autorouter regression tests
