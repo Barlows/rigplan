@@ -192,16 +192,28 @@
       </section>
 
       <!-- solar ------------------------------------------------------------ -->
-      <section class="calc" id="solar">
+      <section class="calc wide" id="solar">
         <h2>Solar array &amp; MPPT</h2>
-        <p class="sub">Array output, controller current and the next sensible MPPT rating.</p>
+        <p class="sub">Enter the panel nameplate, then read the array totals, controller current and cold-weather voltage check.</p>
         <form onsubmit="return false">
           <div class="fields three">
-            <label class="field"><span>Watts per panel <span class="unit">W</span></span>
-              <input id="solar-watts" type="number" value="200" min="1" step="1">
+            <label class="field"><span>Pmax <span class="unit">W</span></span>
+              <input id="solar-pmax" type="number" value="200" min="1" step="1">
             </label>
-            <label class="field"><span>Panel Vmp <span class="unit">V</span></span>
-              <input id="solar-vmp" type="number" value="18" min="1" step="0.1">
+            <label class="field"><span>Voc <span class="unit">V</span></span>
+              <input id="solar-voc" type="number" value="22.5" min="0.1" step="0.1">
+            </label>
+            <label class="field"><span>Isc <span class="unit">A</span></span>
+              <input id="solar-isc" type="number" value="11.8" min="0.1" step="0.1">
+            </label>
+            <label class="field"><span>Vmp <span class="unit">V</span></span>
+              <input id="solar-vmp" type="number" value="18" min="0.1" step="0.1">
+            </label>
+            <label class="field"><span>Imp <span class="unit">A</span></span>
+              <input id="solar-imp" type="number" value="11.1" min="0.1" step="0.1">
+            </label>
+            <label class="field"><span>Module efficiency <span class="unit">%</span></span>
+              <input id="solar-eff" type="number" value="21" min="1" max="100" step="0.1">
             </label>
             <label class="field"><span>Panels</span>
               <input id="solar-count" type="number" value="4" min="1" step="1">
@@ -348,6 +360,6 @@
   </div>
 </footer>
 
-<script type="module" src="js/calculators.js"></script>
+<script type="module" src="js/calculators.js?v=20261024"></script>
 </body>
 </html>

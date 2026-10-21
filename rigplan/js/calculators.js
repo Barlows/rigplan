@@ -390,43 +390,67 @@ function initBudget() {
 // Solar / MPPT
 // ---------------------------------------------------------------------------
 function initSolar() {
-  if (!$('#solar-watts')) return;
+  if (!$('#solar-pmax')) return;
 
   function update() {
-    const watts = Math.max(1, num($('#solar-watts').value, 1));
-    const vmp = Math.max(1, num($('#solar-vmp').value, 18));
+    const pmax = Math.max(1, num($('#solar-pmax').value, 200));
+    const voc = Math.max(0.1, num($('#solar-voc').value, 22.5));
+    const isc = Math.max(0.1, num($('#solar-isc').value, 11.8));
+    const vmp = Math.max(0.1, num($('#solar-vmp').value, 18));
+    const imp = Math.max(0.1, num($('#solar-imp').value, 11.1));
+    const efficiency = clamp(num($('#solar-eff').value, 21), 1, 100);
     const count = Math.max(1, Math.round(num($('#solar-count').value, 1)));
     const series = clamp(Math.round(num($('#solar-series').value, 1)), 1, count);
     const systemV = Math.max(1, num($('#solar-system-v').value, 12));
     const maxPv = Math.max(1, num($('#solar-maxpv').value, 100));
 
-    const arrayW = watts * count;
+    const arrayW = pmax * count;
     const parallel = Math.ceil(count / series);
+    const arrayVoc = voc * series;
+    const arrayIsc = isc * parallel;
     const arrayVmp = vmp * series;
-    const arrayImp = arrayW / arrayVmp;
+    const arrayImp = imp * parallel;
+    const coldVoc = arrayVoc * 1.25;
     const outputA = (arrayW * 0.95) / systemV;
     const ratings = [10, 15, 20, 30, 40, 50, 60, 70, 80, 100, 120, 150];
     const controller = ratings.find((r) => r >= outputA) ?? 150;
-    const voc = vmp * 1.25 * series;
+    const areaEach = pmax / (1000 * (efficiency / 100));
+    const arrayArea = areaEach * count;
+
+    const specOk = voc >= vmp && isc >= imp;
+    const mismatch = Math.abs((vmp * imp) - pmax) / pmax;
+    const badgeKind = coldVoc > maxPv ? 'bad' : specOk ? 'ok' : 'warn';
+    const badgeText = coldVoc > maxPv ? 'voltage too high' : specOk ? 'controller OK' : 'check nameplate';
+
+    let note = 'MPPT output current is estimated at 95% conversion. The cold Voc check applies a ×1.25 safety factor, and module area is Pmax ÷ (1000 W/m² × efficiency).';
+    if (coldVoc > maxPv) {
+      note = `Cold-weather open-circuit voltage may exceed the controller's ${maxPv} V limit. Reduce the number in series.`;
+    } else if (!specOk) {
+      note = 'Check the nameplate: Voc must be at least Vmp, and Isc at least Imp.';
+    } else if (mismatch > 0.1) {
+      note = `Pmax, Vmp and Imp do not agree: Vmp × Imp = ${round(vmp * imp)} W, but Pmax is ${round(pmax)} W. Array current uses Imp; check the panel label.`;
+    }
 
     render($('#solar-result'), {
       big: `${round(arrayW)} W`,
-      qual: `${count} panel${count === 1 ? '' : 's'} · ${series}S${parallel}P`,
-      badge: badge(voc <= maxPv ? 'ok' : 'bad', voc <= maxPv ? 'controller OK' : 'voltage too high'),
+      qual: `${count} × ${round(pmax)} W · ${series}S${parallel}P`,
+      badge: badge(badgeKind, badgeText),
       rows: [
+        ['Array Voc', `${round(arrayVoc, 1)} V`],
+        ['Array Isc', `${round(arrayIsc, 1)} A`],
         ['Array Vmp', `${round(arrayVmp, 1)} V`],
         ['Array Imp', `${round(arrayImp, 1)} A`],
-        ['Estimated Voc (cold)', `${round(voc, 0)} V`],
+        ['Cold Voc estimate', `${round(coldVoc, 0)} V`],
         ['Controller output', `${round(outputA, 1)} A at ${round(systemV, 1)} V`],
         ['Suggested MPPT', `${controller} A`],
+        ['Panel / array area', `${round(areaEach, 2)} m² each · ${round(arrayArea, 1)} m² total`],
       ],
-      note: voc > maxPv
-        ? `Cold-weather open-circuit voltage may exceed the controller's ${maxPv} V limit. Reduce the number in series.`
-        : 'MPPT output current is estimated at 95% conversion. Leave headroom for cold mornings and cloud-edge gain.',
+      note,
     });
   }
 
-  ['#solar-watts', '#solar-vmp', '#solar-count', '#solar-series', '#solar-system-v', '#solar-maxpv'].forEach((id) => $(id).addEventListener('input', update));
+  ['#solar-pmax', '#solar-voc', '#solar-isc', '#solar-vmp', '#solar-imp', '#solar-eff',
+    '#solar-count', '#solar-series', '#solar-system-v', '#solar-maxpv'].forEach((id) => $(id).addEventListener('input', update));
   update();
 }
 
