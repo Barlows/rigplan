@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Electrical calculators — RigPlan</title>
+<meta name="description" content="Free campervan, RV and boat electrical calculators: cable size, fuse size, AWG conversion, battery banks, energy budgets, solar, inverters, DC-DC and shore charging.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231d2b3a'/%3E%3Cpath d='M8 20 L14 12 L18 18 L24 10' stroke='%230e7c86' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/site.css">
+</head>
+<body>
+
+<header class="site-head">
+  <div class="wrap">
+    <a class="brand" href="index.html">
+      <span class="brand-mark">RP</span>
+      <span class="brand-name">Rig<span>Plan</span></span>
+    </a>
+    <nav class="nav">
+      <a href="index.html#features">Features</a>
+      <a href="index.html#standards">Standards</a>
+      <a href="calculators.html">Calculators</a>
+      <a class="btn accent" href="app.html">Open the editor</a>
+    </nav>
+  </div>
+</header>
+
+<main class="calc-shell">
+  <div class="wrap">
+    <div class="calc-intro">
+      <span class="kicker">Free planning tools</span>
+      <h1>Electrical calculators for mobile rigs.</h1>
+      <p>These use the same sizing engine as the diagram editor. Pick a standard, enter real numbers, and read the result with its reasoning — no sign-up and nothing sent anywhere.</p>
+    </div>
+
+    <nav class="calc-nav" aria-label="Calculators">
+      <a href="#cable">Cable size</a>
+      <a href="#fuse">Fuse size</a>
+      <a href="#awg">AWG ↔ mm²</a>
+      <a href="#bank">Battery bank</a>
+      <a href="#budget">Energy budget</a>
+      <a href="#solar">Solar &amp; MPPT</a>
+      <a href="#inverter">Inverter</a>
+      <a href="#dcdc">DC-DC charger</a>
+      <a href="#shore">Shore charging</a>
+      <a href="#soc">State of charge</a>
+    </nav>
+
+    <div class="calc-grid">
+
+      <!-- cable ------------------------------------------------------------ -->
+      <section class="calc wide" id="cable">
+        <h2>Cable size</h2>
+        <p class="sub">Ampacity and voltage drop against the selected standard. The smallest passing size wins.</p>
+        <form onsubmit="return false">
+          <div class="fields three">
+            <label class="field"><span>Standard</span>
+              <select id="cable-standard"></select>
+            </label>
+            <label class="field"><span>System voltage <span class="unit">V</span></span>
+              <input id="cable-voltage" type="number" value="12" min="1" step="0.1">
+            </label>
+            <label class="field"><span>Load current <span class="unit">A</span></span>
+              <input id="cable-current" type="number" value="40" min="0.1" step="0.1">
+            </label>
+            <label class="field"><span>One-way length <span class="unit">m</span></span>
+              <input id="cable-length" type="number" value="5" min="0" step="0.1">
+            </label>
+            <label class="field"><span>Conductor rating <span class="unit">°C</span></span>
+              <select id="cable-temp"></select>
+            </label>
+            <label class="field"><span>Ambient <span class="unit">°C</span></span>
+              <select id="cable-ambient"></select>
+            </label>
+            <label class="field"><span>Installation method</span>
+              <select id="cable-method"></select>
+            </label>
+            <label class="field"><span>Grouped circuits</span>
+              <input id="cable-grouping" type="number" value="1" min="1" max="10" step="1">
+            </label>
+            <label class="field"><span>Voltage-drop target</span>
+              <select id="cable-vd"></select>
+            </label>
+            <label class="field"><span>Units</span>
+              <select id="cable-units">
+                <option value="mm2">mm²</option>
+                <option value="AWG">AWG</option>
+              </select>
+            </label>
+            <label class="field check"><input id="cable-continuous" type="checkbox" checked><span>Continuous load (×1.25)</span></label>
+          </div>
+        </form>
+        <div class="result" id="cable-result"></div>
+        <div class="mini-table" id="cable-table"></div>
+        <p class="note">Voltage drop is calculated on the round trip (2 × length). Ambient, grouping and method derate the published ampacity before the comparison.</p>
+      </section>
+
+      <!-- fuse ------------------------------------------------------------- -->
+      <section class="calc" id="fuse">
+        <h2>Fuse size</h2>
+        <p class="sub">The next standard rating above the continuous design current, inside a family that suits the job.</p>
+        <form onsubmit="return false">
+          <div class="fields">
+            <label class="field"><span>Load current <span class="unit">A</span></span>
+              <input id="fuse-current" type="number" value="35" min="0.1" step="0.1">
+            </label>
+            <label class="field"><span>Fuse family</span>
+              <select id="fuse-family"></select>
+            </label>
+            <label class="field"><span>Cable ampacity <span class="unit">A (optional)</span></span>
+              <input id="fuse-ampacity" type="number" value="60" min="0" step="0.1">
+            </label>
+            <label class="field check"><input id="fuse-continuous" type="checkbox" checked><span>Continuous load (×1.25)</span></label>
+          </div>
+        </form>
+        <div class="result" id="fuse-result"></div>
+      </section>
+
+      <!-- awg -------------------------------------------------------------- -->
+      <section class="calc" id="awg">
+        <h2>AWG ↔ mm²</h2>
+        <p class="sub">Convert between imperial and metric conductor sizes, with the nearest standard size.</p>
+        <form onsubmit="return false">
+          <div class="fields">
+            <label class="field"><span>Value</span>
+              <input id="awg-value" type="number" value="16" min="0" step="0.01">
+            </label>
+            <label class="field"><span>Input unit</span>
+              <select id="awg-unit">
+                <option value="AWG">AWG</option>
+                <option value="mm2">mm²</option>
+              </select>
+            </label>
+          </div>
+        </form>
+        <div class="result" id="awg-result"></div>
+        <div class="mini-table" id="awg-table"></div>
+      </section>
+
+      <!-- battery bank ----------------------------------------------------- -->
+      <section class="calc" id="bank">
+        <h2>Battery bank</h2>
+        <p class="sub">Series and parallel layout, total capacity and usable energy for a chosen depth of discharge.</p>
+        <form onsubmit="return false">
+          <div class="fields three">
+            <label class="field"><span>Battery voltage <span class="unit">V</span></span>
+              <input id="bank-battery-v" type="number" value="12.8" min="1" step="0.1">
+            </label>
+            <label class="field"><span>Capacity each <span class="unit">Ah</span></span>
+              <input id="bank-ah" type="number" value="100" min="1" step="1">
+            </label>
+            <label class="field"><span>Number of batteries</span>
+              <input id="bank-count" type="number" value="4" min="1" step="1">
+            </label>
+            <label class="field"><span>System voltage <span class="unit">V</span></span>
+              <input id="bank-system-v" type="number" value="12" min="1" step="0.1">
+            </label>
+            <label class="field"><span>Depth of discharge <span class="unit">%</span></span>
+              <input id="bank-dod" type="number" value="80" min="1" max="100" step="1">
+            </label>
+          </div>
+        </form>
+        <div class="result" id="bank-result"></div>
+      </section>
+
+      <!-- energy budget ---------------------------------------------------- -->
+      <section class="calc wide" id="budget">
+        <h2>Energy budget</h2>
+        <p class="sub">Add the loads you expect to run, then size the bank and the solar array around them.</p>
+        <form onsubmit="return false">
+          <div class="fields three">
+            <label class="field"><span>System voltage <span class="unit">V</span></span>
+              <input id="budget-voltage" type="number" value="12" min="1" step="0.1">
+            </label>
+            <label class="field"><span>Days of autonomy</span>
+              <input id="budget-days" type="number" value="2" min="0.5" step="0.5">
+            </label>
+            <label class="field"><span>Peak sun hours <span class="unit">h/day</span></span>
+              <input id="budget-sun" type="number" value="4" min="0.5" step="0.1">
+            </label>
+            <label class="field"><span>Depth of discharge <span class="unit">%</span></span>
+              <input id="budget-dod" type="number" value="80" min="1" max="100" step="1">
+            </label>
+            <label class="field"><span>System losses <span class="unit">%</span></span>
+              <input id="budget-losses" type="number" value="25" min="0" max="60" step="1">
+            </label>
+          </div>
+          <div class="loads" id="budget-loads"></div>
+          <button class="add-load" type="button" id="budget-add">+ Add load</button>
+        </form>
+        <div class="result" id="budget-result"></div>
+      </section>
+
+      <!-- solar ------------------------------------------------------------ -->
+      <section class="calc" id="solar">
+        <h2>Solar array &amp; MPPT</h2>
+        <p class="sub">Array output, controller current and the next sensible MPPT rating.</p>
+        <form onsubmit="return false">
+          <div class="fields three">
+            <label class="field"><span>Watts per panel <span class="unit">W</span></span>
+              <input id="solar-watts" type="number" value="200" min="1" step="1">
+            </label>
+            <label class="field"><span>Panel Vmp <span class="unit">V</span></span>
+              <input id="solar-vmp" type="number" value="18" min="1" step="0.1">
+            </label>
+            <label class="field"><span>Panels</span>
+              <input id="solar-count" type="number" value="4" min="1" step="1">
+            </label>
+            <label class="field"><span>In series</span>
+              <input id="solar-series" type="number" value="2" min="1" step="1">
+            </label>
+            <label class="field"><span>System voltage <span class="unit">V</span></span>
+              <input id="solar-system-v" type="number" value="12" min="1" step="0.1">
+            </label>
+            <label class="field"><span>Controller max PV <span class="unit">V</span></span>
+              <input id="solar-maxpv" type="number" value="100" min="1" step="1">
+            </label>
+          </div>
+        </form>
+        <div class="result" id="solar-result"></div>
+      </section>
+
+      <!-- inverter --------------------------------------------------------- -->
+      <section class="calc" id="inverter">
+        <h2>Inverter DC feed</h2>
+        <p class="sub">Battery current, cable size and fuse for an inverter at a known AC load.</p>
+        <form onsubmit="return false">
+          <div class="fields three">
+            <label class="field"><span>AC load <span class="unit">W</span></span>
+              <input id="inverter-watts" type="number" value="2000" min="1" step="1">
+            </label>
+            <label class="field"><span>Efficiency <span class="unit">%</span></span>
+              <input id="inverter-eff" type="number" value="90" min="50" max="100" step="1">
+            </label>
+            <label class="field"><span>System voltage <span class="unit">V</span></span>
+              <input id="inverter-voltage" type="number" value="12.8" min="1" step="0.1">
+            </label>
+            <label class="field"><span>One-way cable length <span class="unit">m</span></span>
+              <input id="inverter-length" type="number" value="1.5" min="0" step="0.1">
+            </label>
+            <label class="field"><span>Standard</span>
+              <select id="inverter-standard"></select>
+            </label>
+          </div>
+        </form>
+        <div class="result" id="inverter-result"></div>
+      </section>
+
+      <!-- dcdc ------------------------------------------------------------- -->
+      <section class="calc" id="dcdc">
+        <h2>DC-DC charger</h2>
+        <p class="sub">Input current, cable and fusing on both sides of a battery-to-battery charger.</p>
+        <form onsubmit="return false">
+          <div class="fields three">
+            <label class="field"><span>Output current <span class="unit">A</span></span>
+              <input id="dcdc-out-a" type="number" value="30" min="0.1" step="0.1">
+            </label>
+            <label class="field"><span>Output voltage <span class="unit">V</span></span>
+              <input id="dcdc-out-v" type="number" value="12.8" min="1" step="0.1">
+            </label>
+            <label class="field"><span>Input voltage <span class="unit">V</span></span>
+              <input id="dcdc-in-v" type="number" value="14.4" min="1" step="0.1">
+            </label>
+            <label class="field"><span>Efficiency <span class="unit">%</span></span>
+              <input id="dcdc-eff" type="number" value="90" min="50" max="100" step="1">
+            </label>
+            <label class="field"><span>Input length <span class="unit">m</span></span>
+              <input id="dcdc-in-len" type="number" value="4" min="0" step="0.1">
+            </label>
+            <label class="field"><span>Output length <span class="unit">m</span></span>
+              <input id="dcdc-out-len" type="number" value="2" min="0" step="0.1">
+            </label>
+          </div>
+        </form>
+        <div class="result" id="dcdc-result"></div>
+      </section>
+
+      <!-- shore ------------------------------------------------------------ -->
+      <section class="calc" id="shore">
+        <h2>Shore charging</h2>
+        <p class="sub">DC charge current, AC draw and how long a bank takes to recharge from a given charger.</p>
+        <form onsubmit="return false">
+          <div class="fields three">
+            <label class="field"><span>Bank capacity <span class="unit">Ah</span></span>
+              <input id="shore-ah" type="number" value="300" min="1" step="1">
+            </label>
+            <label class="field"><span>Charger output <span class="unit">A</span></span>
+              <input id="shore-charger-a" type="number" value="30" min="0.1" step="0.1">
+            </label>
+            <label class="field"><span>System voltage <span class="unit">V</span></span>
+              <input id="shore-system-v" type="number" value="12.8" min="1" step="0.1">
+            </label>
+            <label class="field"><span>Charger efficiency <span class="unit">%</span></span>
+              <input id="shore-eff" type="number" value="90" min="50" max="100" step="1">
+            </label>
+            <label class="field"><span>Shore voltage <span class="unit">V</span></span>
+              <input id="shore-ac-v" type="number" value="230" min="100" step="1">
+            </label>
+            <label class="field"><span>Recharge from <span class="unit">% DoD</span></span>
+              <input id="shore-dod" type="number" value="60" min="1" max="100" step="1">
+            </label>
+          </div>
+        </form>
+        <div class="result" id="shore-result"></div>
+      </section>
+
+      <!-- soc -------------------------------------------------------------- -->
+      <section class="calc" id="soc">
+        <h2>State of charge</h2>
+        <p class="sub">Resting-voltage estimate for a 12 V pack. Give the battery half an hour of rest for a useful reading.</p>
+        <form onsubmit="return false">
+          <div class="fields three">
+            <label class="field"><span>Chemistry</span>
+              <select id="soc-chem">
+                <option value="lifepo4">LiFePO4</option>
+                <option value="agm">AGM / gel</option>
+                <option value="flooded">Flooded lead-acid</option>
+              </select>
+            </label>
+            <label class="field"><span>Bank capacity <span class="unit">Ah</span></span>
+              <input id="soc-ah" type="number" value="300" min="1" step="1">
+            </label>
+            <label class="field"><span>Resting voltage <span class="unit">V</span></span>
+              <input id="soc-voltage" type="number" value="13.1" min="1" step="0.01">
+            </label>
+          </div>
+        </form>
+        <div class="result" id="soc-result"></div>
+      </section>
+
+    </div>
+
+    <p style="margin:34px 0 0;color:var(--muted);font-size:13px;max-width:56em">These calculators are planning aids. Published tables are simplified to a single installation method and a conservative set of derating factors. Check the final design against the current edition of the standard and the equipment manufacturer's instructions.</p>
+  </div>
+</main>
+
+<footer class="site-foot">
+  <div class="wrap">
+    <a class="brand" href="index.html" style="font-size:14px">
+      <span class="brand-mark" style="width:28px;height:28px;font-size:10px">RP</span>
+      <span class="brand-name" style="font-size:15px">Rig<span>Plan</span></span>
+    </a>
+    <p>Planning aid only — not a substitute for a qualified electrical design.</p>
+    <div class="links">
+      <a href="app.html">Editor</a>
+      <a href="index.html">Home</a>
+    </div>
+  </div>
+</footer>
+
+<script type="module" src="js/calculators.js"></script>
+</body>
+</html>

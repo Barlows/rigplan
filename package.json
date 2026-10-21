@@ -1,0 +1,11 @@
+{
+  "name": "rigplan",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Wiring diagram planner for campervans, RVs, boats and off-grid systems.",
+  "scripts": {
+    "start": "node test/serve.mjs",
+    "test": "node test/engine.test.mjs"
+  }
+}

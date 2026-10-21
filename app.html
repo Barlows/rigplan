@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RigPlan — wiring diagram editor</title>
+<meta name="description" content="Draw a campervan, RV or boat wiring diagram and get every cable and fuse sized as you go.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231d2b3a'/%3E%3Cpath d='M8 20 L14 12 L18 18 L24 10' stroke='%230e7c86' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <a class="brand" href="index.html" title="RigPlan home">
+      <span class="brand-mark">RP</span>
+      <span class="brand-name">Rig<span>Plan</span></span>
+    </a>
+
+    <input class="project-name" id="project-name" value="Untitled system" aria-label="Diagram name" spellcheck="false">
+
+    <span class="save-state" id="save-state">Saved</span>
+
+    <div class="spacer"></div>
+
+    <div class="tool-group" role="group" aria-label="Tools">
+      <button class="icon-btn active" id="tool-select" title="Select (V)" data-tool="select">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 3l14 9-6 1.5L10 20z"/></svg>
+      </button>
+      <button class="icon-btn" id="tool-wire" title="Draw cable (W)" data-tool="wire">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 6h6a4 4 0 014 4v4"/></svg>
+      </button>
+      <div class="divider"></div>
+      <button class="icon-btn" id="btn-undo" title="Undo (⌘Z)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 7L4 12l5 5"/><path d="M4 12h9a6 6 0 010 12h-1"/></svg>
+      </button>
+      <button class="icon-btn" id="btn-redo" title="Redo (⇧⌘Z)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M15 7l5 5-5 5"/><path d="M20 12h-9a6 6 0 000 12h1"/></svg>
+      </button>
+      <div class="divider"></div>
+      <button class="icon-btn" id="btn-fit" title="Fit to drawing (F)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+      </button>
+      <button class="icon-btn" id="btn-zoom-out" title="Zoom out">−</button>
+      <button class="icon-btn" id="btn-zoom-in" title="Zoom in">+</button>
+    </div>
+
+    <div class="menu-wrap">
+      <button class="btn" id="btn-export">
+        Export
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+      <div class="menu" id="export-menu">
+        <button data-export="png">PNG image <kbd>⇧⌘P</kbd></button>
+        <button data-export="svg">SVG drawing</button>
+        <button data-export="pdf">PDF / print <kbd>⌘P</kbd></button>
+        <div class="menu-sep"></div>
+        <button data-export="bom">Bill of materials (CSV)</button>
+        <button data-export="cables">Cable schedule (CSV)</button>
+        <button data-export="fuses">Fuse schedule (CSV)</button>
+        <div class="menu-sep"></div>
+        <button data-export="json">Project file (JSON)</button>
+        <button data-export="import">Import project…</button>
+      </div>
+    </div>
+
+    <button class="btn accent" id="btn-new">New diagram</button>
+  </header>
+
+  <main class="workspace">
+    <aside class="library" id="library">
+      <div class="panel-head">
+        <span class="panel-title">Components</span>
+        <span class="panel-count" id="lib-count"></span>
+      </div>
+      <div class="search-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+        <input id="lib-search" placeholder="Search parts…" aria-label="Search components">
+      </div>
+      <div class="lib-scroll" id="library-list"></div>
+      <div class="lib-hint">Drag a part onto the drawing, or click to place it in the middle. Click a terminal and then another to run a cable.</div>
+    </aside>
+
+    <section class="canvas-wrap">
+      <div class="canvas-tools">
+        <button class="icon-btn" id="ct-select" data-tool="select" title="Select">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 3l14 9-6 1.5L10 20z"/></svg>
+        </button>
+        <button class="icon-btn" id="ct-wire" data-tool="wire" title="Cable">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 6h6a4 4 0 014 4v4"/></svg>
+        </button>
+        <div class="divider"></div>
+        <button class="icon-btn" id="ct-fit" title="Fit">Fit</button>
+      </div>
+
+      <svg id="canvas" role="application" aria-label="Wiring diagram canvas"></svg>
+
+      <div class="statusbar">
+        <span class="status-chip">STANDARD <strong id="status-standard">ABYC E-11</strong></span>
+        <span class="status-chip">PARTS <strong id="status-parts">0</strong></span>
+        <span class="status-chip">CABLES <strong id="status-cables">0</strong></span>
+        <span class="status-chip crit" id="status-critical" hidden><span class="status-dot"></span><strong>0</strong> critical</span>
+        <span class="status-chip warn" id="status-warning" hidden><span class="status-dot"></span><strong>0</strong> to check</span>
+        <span class="status-chip ok" id="status-ok" hidden><span class="status-dot"></span>All checks pass</span>
+        <span style="margin-left:auto" id="status-zoom">62%</span>
+      </div>
+    </section>
+
+    <aside class="inspector">
+      <nav class="tabs" role="tablist">
+        <button class="tab active" data-tab="inspector" role="tab">Inspector</button>
+        <button class="tab" data-tab="checks" role="tab">Checks <span class="pill" id="check-pill" hidden>0</span></button>
+        <button class="tab" data-tab="bom" role="tab">BOM</button>
+        <button class="tab" data-tab="project" role="tab">Project</button>
+        <button class="tab" data-tab="help" role="tab">?</button>
+      </nav>
+
+      <div class="tab-panel" data-panel="inspector" id="inspector-panel"></div>
+      <div class="tab-panel" data-panel="checks" id="checks-panel" hidden></div>
+      <div class="tab-panel" data-panel="bom" id="bom-panel" hidden></div>
+      <div class="tab-panel" data-panel="project" id="project-panel" hidden></div>
+      <div class="tab-panel" data-panel="help" id="help-panel" hidden>
+        <div class="section">
+          <h3 class="section-title">How this works</h3>
+          <p class="hint" style="font-size:12.5px">Place parts, then click one terminal and another to run a cable. Set the run length in the inspector; every cable is sized for ampacity and voltage drop against the selected standard.</p>
+          <div class="reason">
+            <strong style="font-size:12px">Keyboard</strong>
+            <ul>
+              <li><span class="mono">V</span> select · <span class="mono">W</span> cable</li>
+              <li><span class="mono">F</span> fit · wheel to zoom · space-drag to pan</li>
+              <li><span class="mono">⌘Z</span> undo · <span class="mono">⇧⌘Z</span> redo</li>
+              <li><span class="mono">⌘D</span> duplicate · <span class="mono">⌫</span> delete</li>
+            </ul>
+          </div>
+        </div>
+        <div class="section">
+          <h3 class="section-title">Sizing method</h3>
+          <p class="hint" style="font-size:12.5px">Design current includes the standard's continuous-load factor. Cable ampacity comes from the published table, derated for ambient temperature, grouping and installation method. The smallest cable that passes both ampacity and voltage drop wins.</p>
+          <p class="hint" style="font-size:12.5px;margin-top:8px">Every suggestion is a starting point for a qualified person to check — not a certification.</p>
+        </div>
+        <div class="section">
+          <h3 class="section-title">Quick calculators</h3>
+          <p class="hint" style="font-size:12.5px">Need one number without drawing a diagram? The <a href="calculators.html">standalone calculators</a> use the same engine for cable size, fusing, battery banks, solar, inverters and charging.</p>
+        </div>
+        <div class="section">
+          <h3 class="section-title">About</h3>
+          <p class="hint" style="font-size:12.5px">RigPlan is an independent implementation built for this workspace. It is not affiliated with any other wiring product.</p>
+        </div>
+      </div>
+    </aside>
+  </main>
+</div>
+
+<div class="toast-host" id="toasts"></div>
+<input type="file" id="file-input" accept="application/json,.json" hidden>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
