@@ -226,3 +226,53 @@ test('an unused ground point can be bonded instead of deleted', () => {
   assert.equal(finding(doc, 'ground-unused'), null);
   assert.ok(doc.wires.some((w) => w.from.node === ground.id || w.to.node === ground.id));
 });
+
+function combinerSystem({ bondSpd = false, ground = true } = {}) {
+  const nodes = [
+    makeNode('solar-panel', 100, 100, { id: 'p1' }),
+    makeNode('solar-panel', 100, 300, { id: 'p2' }),
+    makeNode('pv-combiner', 400, 100, { id: 'comb' }),
+    makeNode('hybrid-inverter', 780, 100, { id: 'hybrid', props: { watts: 3000, efficiency: 0.93, chargeA: 50 } }),
+    makeNode('battery-lifepo4', 780, 420, { id: 'bat', props: { hasBMS: true, supplyA: 100, capacityAh: 100 } }),
+    makeNode('class-t-fuse', 560, 520, { id: 'fuse', props: { ratingA: 400 } }),
+  ];
+  if (ground) nodes.push(makeNode('chassis-ground', 100, 600, { id: 'gnd' }));
+  const wires = [
+    { id: 'p1pos', from: { node: 'p1', terminal: 'pvpos' }, to: { node: 'comb', terminal: 'in1pos' }, lengthM: 2 },
+    { id: 'p1neg', from: { node: 'p1', terminal: 'pvneg' }, to: { node: 'comb', terminal: 'in1neg' }, lengthM: 2 },
+    { id: 'p2pos', from: { node: 'p2', terminal: 'pvpos' }, to: { node: 'comb', terminal: 'in2pos' }, lengthM: 2 },
+    { id: 'p2neg', from: { node: 'p2', terminal: 'pvneg' }, to: { node: 'comb', terminal: 'in2neg' }, lengthM: 2 },
+    { id: 'trunkpos', from: { node: 'comb', terminal: 'outpos' }, to: { node: 'hybrid', terminal: 'pvpos' }, lengthM: 3 },
+    { id: 'trunkneg', from: { node: 'comb', terminal: 'outneg' }, to: { node: 'hybrid', terminal: 'pvneg' }, lengthM: 3 },
+    { id: 'bat-fuse', from: { node: 'bat', terminal: 'pos' }, to: { node: 'fuse', terminal: 'in' }, lengthM: 0.5 },
+    { id: 'fuse-hybrid', from: { node: 'fuse', terminal: 'out' }, to: { node: 'hybrid', terminal: 'pos' }, lengthM: 1 },
+    { id: 'bat-hybridneg', from: { node: 'bat', terminal: 'neg' }, to: { node: 'hybrid', terminal: 'neg' }, lengthM: 1 },
+  ];
+  if (ground) wires.push({ id: 'bat-gnd', from: { node: 'bat', terminal: 'neg' }, to: { node: 'gnd', terminal: 'gnd' }, lengthM: 0.5 });
+  if (bondSpd) wires.push({ id: 'spd', from: { node: 'comb', terminal: 'gnd' }, to: { node: 'gnd', terminal: 'gnd' }, lengthM: 1 });
+  return { nodes, wires, settings: { ...DEFAULT_SETTINGS } };
+}
+
+test('the PV combiner SPD repair bonds it to an existing earth point', () => {
+  const original = combinerSystem();
+  const check = finding(original, 'pv-combiner-spd');
+  assert.ok(check, 'fixture should have a floating SPD');
+
+  const { doc } = applyFix(original, check);
+  assert.equal(finding(doc, 'pv-combiner-spd'), null);
+  const combiner = doc.nodes.find((n) => n.type === 'pv-combiner');
+  assert.ok(doc.wires.some((w) => (
+    (w.from.node === combiner.id && w.from.terminal === 'gnd')
+    || (w.to.node === combiner.id && w.to.terminal === 'gnd')
+  )), 'SPD GND should have a cable after the repair');
+});
+
+test('the PV combiner SPD repair adds an earth point when none exists', () => {
+  const original = combinerSystem({ ground: false });
+  const check = finding(original, 'pv-combiner-spd');
+  assert.ok(check, 'fixture should have a floating SPD and no earth');
+
+  const { doc } = applyFix(original, check);
+  assert.equal(finding(doc, 'pv-combiner-spd'), null);
+  assert.ok(doc.nodes.some((n) => n.type === 'chassis-ground'), 'an earth point is added');
+});

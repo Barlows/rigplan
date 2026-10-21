@@ -7,7 +7,7 @@ import {
   STANDARDS, FUSE_FAMILIES, FUSE_RATINGS, METRIC_SIZES, AWG_SIZES, AWG_AREA,
   TERMINAL_KINDS, resistancePerMetre, metricArea, formatSize,
 } from '../data/standards.js';
-import { CATALOG_BY_ID } from '../data/catalog.js';
+import { CATALOG_BY_ID } from '../data/catalog.js?v=20261043';
 
 export const DEFAULT_SETTINGS = {
   standard: 'abyc',
@@ -218,6 +218,10 @@ function isSolarPanel(node) {
     || CATALOG_BY_ID[node.type]?.symbol === 'panel');
 }
 
+function isPvCombiner(node) {
+  return node?.type === 'pv-combiner';
+}
+
 function isProtectionNode(node) {
   return (CATALOG_BY_ID[node.type]?.roles || []).includes('protection');
 }
@@ -346,6 +350,15 @@ function panelVmp(panel) {
   return watts > 0 && amps > 0 ? watts / amps : 0;
 }
 
+/** Open-circuit voltage of a panel, used to check equipment voltage ratings. */
+function panelVoc(panel) {
+  const props = panel?.props || {};
+  const volts = Number(props.voc);
+  if (volts > 0) return volts;
+  const vmp = panelVmp(panel);
+  return vmp > 0 ? vmp * 1.2 : 0;
+}
+
 /**
  * Work out the series strings in the array attached to a charger. Panels joined
  * by a direct pv+ to pv- link are in series; every remaining panel starts its
@@ -394,11 +407,16 @@ function pvArraySummary(graph, startId) {
   const panelVoltage = new Map();
   let totalIsc = 0;
   let minStringVoltage = 0;
+  let maxStringVoc = 0;
+  let maxStringIsc = 0;
   for (const group of groups.values()) {
     const rated = group.map(panelIsc).filter((amps) => amps > 0);
     const stringIsc = rated.length ? Math.min(...rated) : 0;
     const stringVoltage = group.reduce((sum, panel) => sum + panelVmp(panel), 0);
+    const stringVoc = group.reduce((sum, panel) => sum + panelVoc(panel), 0);
     totalIsc += stringIsc;
+    if (stringIsc > maxStringIsc) maxStringIsc = stringIsc;
+    if (stringVoc > maxStringVoc) maxStringVoc = stringVoc;
     if (stringVoltage > 0) {
       minStringVoltage = minStringVoltage > 0 ? Math.min(minStringVoltage, stringVoltage) : stringVoltage;
     }
@@ -410,7 +428,7 @@ function pvArraySummary(graph, startId) {
 
   return {
     ...component, panels, seriesLinks, panelCurrent, panelVoltage,
-    totalIsc, strings: groups.size, minStringVoltage,
+    totalIsc, strings: groups.size, minStringVoltage, maxStringVoc, maxStringIsc,
   };
 }
 
@@ -710,10 +728,32 @@ export function runChecks(diagram, sizing) {
           { nodeIds: [charger.id] }));
       }
     }
-    if (!traceFamily(graph, charger.id, 'pv+', (n) => n && n.type === 'main-switch')) {
+    if (!traceFamily(graph, charger.id, 'pv+', (n) => n && (n.type === 'main-switch' || isPvCombiner(n)))) {
       out.push(finding('pv-no-isolator', 'warning', 'No PV isolator',
         'Add a DC isolator between the array and the solar charger so the panels can be isolated for service.',
         { nodeIds: [charger.id] }));
+    }
+  }
+  for (const combiner of nodes.filter(isPvCombiner)) {
+    const summary = pvArraySummary(graph, combiner.id);
+    const arrayVoc = summary?.maxStringVoc || 0;
+    const arrayIsc = summary?.totalIsc || 0;
+    const maxPvVoc = Number(combiner.props?.maxPvVoc) || 0;
+    const outBreakerA = Number(combiner.props?.outBreakerA) || 0;
+    if (maxPvVoc > 0 && arrayVoc > maxPvVoc + 0.5) {
+      out.push(finding('pv-combiner-voltage', 'warning', 'Combiner box voltage rating below array Voc',
+        `${combiner.label} is rated ${maxPvVoc} V but the string Voc is ${round(arrayVoc, 1)} V, about ${Math.round(arrayVoc * 1.25)} V cold. Fit a higher-rated combiner or shorten the string.`,
+        { nodeIds: [combiner.id] }));
+    }
+    if (outBreakerA > 0 && arrayIsc > outBreakerA + 0.01) {
+      out.push(finding('pv-combiner-current', 'warning', 'Combiner output breaker below array current',
+        `${combiner.label}'s outgoing MCB is ${outBreakerA} A but the combined array Isc is ${round(arrayIsc, 1)} A. Raise the breaker or split the array.`,
+        { nodeIds: [combiner.id] }));
+    }
+    if (combiner.props?.hasSpd !== false && !wiredTerminals.has(`${combiner.id}:gnd`)) {
+      out.push(finding('pv-combiner-spd', 'warning', 'PV combiner SPD is not earthed',
+        `${combiner.label} has surge protection but nothing on SPD GND. Bond it to the system earth so a surge has a path to ground.`,
+        { nodeIds: [combiner.id] }));
     }
   }
   if (panels.length >= 2) {

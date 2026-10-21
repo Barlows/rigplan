@@ -4,8 +4,8 @@
 // ordinary store mutations, so they are undoable and are saved with the
 // project just like a manual edit.
 
-import { CATALOG_BY_ID, makeNode } from '../data/catalog.js?v=20261041';
-import { evaluateDiagram, sizeRun, sizeOptions } from './engine.js?v=20261041';
+import { CATALOG_BY_ID, makeNode } from '../data/catalog.js?v=20261043';
+import { evaluateDiagram, sizeRun, sizeOptions } from './engine.js?v=20261043';
 import { FUSE_RATINGS, STANDARDS, metricArea } from '../data/standards.js';
 
 const SHEET_W = 1800;
@@ -421,6 +421,31 @@ const FIXES = {
         }
         if (!last) return null;
         return { notice: `Fitted ${count} PV string fuse${count === 1 ? '' : 's'}.`, selectNodeId: last.id };
+      },
+    };
+  },
+
+  'pv-combiner-spd': (check, doc) => {
+    const combiner = nodeById(doc, check.nodeIds?.[0]);
+    if (!combiner) return null;
+    const ground = doc.nodes.find((n) => n.type === 'chassis-ground' && n.id !== combiner.id)
+      || doc.nodes.find((n) => n.type === 'earth-bar' && n.id !== combiner.id);
+    return {
+      label: 'Bond SPD earth',
+      run(d) {
+        const live = nodeById(d, combiner.id);
+        if (!live) return null;
+        const target = ground ? nodeById(d, ground.id) : null;
+        if (target) {
+          const terminals = CATALOG_BY_ID[target.type]?.terminals || [];
+          const terminalId = (terminals.find((t) => !hasWire(d, target.id, t.id)) || terminals[0])?.id;
+          if (!terminalId) return null;
+          addWire(d, { node: live.id, terminal: 'gnd' }, { node: target.id, terminal: terminalId }, 1);
+          return { notice: `Bonded the ${live.label} SPD to ${target.label}.`, selectNodeId: live.id };
+        }
+        const g = addPart(d, 'chassis-ground', live.x + live.w + 40, live.y + live.h + 50, {}, 'Chassis ground');
+        addWire(d, { node: live.id, terminal: 'gnd' }, { node: g.id, terminal: 'gnd' }, 1);
+        return { notice: `Added an earth point for the ${live.label} SPD.`, selectNodeId: g.id };
       },
     };
   },

@@ -275,6 +275,23 @@ export const CATALOG = [
       { id: 'outn', x: 0.85, y: 0, kind: 'ac-n', label: 'OUT N' },
     ],
   },
+  {
+    id: 'pv-combiner', cat: 'Protection', label: 'PV combiner box (2 in, 1 out)', symbol: 'pvcombiner', w: 230, h: 160,
+    roles: ['protection'], price: 180,
+    defaults: {
+      maxPvVoc: 500, stringFuseA: 20, outBreakerA: 32,
+      hasSpd: true, spdType: 'Type 2',
+    },
+    terminals: [
+      { id: 'in1pos', x: 0, y: 0.22, kind: 'pv+', label: 'STRING 1 +' },
+      { id: 'in1neg', x: 0, y: 0.4, kind: 'pv-', label: 'STRING 1 −' },
+      { id: 'in2pos', x: 0, y: 0.6, kind: 'pv+', label: 'STRING 2 +' },
+      { id: 'in2neg', x: 0, y: 0.78, kind: 'pv-', label: 'STRING 2 −' },
+      { id: 'outpos', x: 1, y: 0.34, kind: 'pv+', label: 'OUT +' },
+      { id: 'outneg', x: 1, y: 0.68, kind: 'pv-', label: 'OUT −' },
+      { id: 'gnd', x: 0.6, y: 1, kind: 'gnd', label: 'SPD GND' },
+    ],
+  },
 
   // ------------------------------------------------------------------ loads
   {

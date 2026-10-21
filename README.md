@@ -21,9 +21,10 @@ Any static file server works; there is no compile step.
 
 ### Drawing
 
-- 42-component library: batteries, solar panels (including 465 W and 450 W
+- 43-component library: batteries, solar panels (including 465 W and 450 W
   presets), alternators, MPPTs, DC-DC chargers, inverter/chargers, hybrid
-  inverter/chargers with a PV MPPT input, fuse boxes, busbars, switches, shunts,
+  inverter/chargers with a PV MPPT input, PV combiner boxes with string fuses,
+  an SPD and an outgoing DC MCB, fuse boxes, busbars, switches, shunts,
   AC panels, RCDs, sockets, appliances and grounding.
 - Drag-and-drop placement, multi-select, duplicate, delete, undo/redo.
 - Terminal-to-terminal cable drawing with polarity awareness. A cable between
@@ -54,7 +55,8 @@ Any static file server works; there is no compile step.
   undersized cable, fuse above cable ampacity, shore power without an RCD, no
   ground point, reverse-polarity cable, AC and DC on one cable, load exceeding
   the battery's capability.
-- **Warning** — missing PV isolator, unprotected MPPT output, large lithium bank
+- **Warning** — missing PV isolator, unprotected MPPT output, PV combiner SPD
+  not earthed, combiner under-rated for the array, large lithium bank
   without high-interrupt protection, voltage drop above target, fuse below the
   continuous load, mixed chemistries or voltages, alternator charging lithium
   directly, parallel PV strings without string fuses, busbar/fuse-box overload.
@@ -65,7 +67,8 @@ Each finding explains the rule and can centre the editor on the offending part.
 
 Where a safe, deterministic repair exists, the finding also has a one-click
 action: fit a battery isolator, add a primary fuse, install a shore RCBO, add a
-PV isolator, upsize a cable, remove a shorted run, and so on. The repair inserts
+PV isolator, bond a combiner SPD to earth, upsize a cable, remove a shorted run,
+and so on. The repair inserts
 real catalogue parts and reconnects the existing circuit, rather than only
 silencing the check. Repairs are ordinary edits, so they can be undone and are
 included in project exports. Findings that need a design decision (mixed
@@ -114,7 +117,7 @@ js/core/engine.js        sizing, current tracing, checks, BOM
 js/core/fixes.js         deterministic one-click repairs for check findings
 js/core/store.js         document store, undo/redo, persistence, versions
 js/ui/editor.js          SVG canvas, drag, wiring, pan/zoom, export
-js/ui/symbols.js         original SVG artwork for the 42 components
+js/ui/symbols.js         original SVG artwork for the 43 components
 js/data/catalog.js       component definitions, terminals, defaults, prices
 js/data/standards.js     ampacity tables, derating, fuses, wire sizes
 js/data/templates.js     campervan, simple and solar starter diagrams

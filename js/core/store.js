@@ -1,6 +1,6 @@
 // Document store: undo/redo, local persistence, named versions.
 
-import { DEFAULT_SETTINGS } from './engine.js';
+import { DEFAULT_SETTINGS } from './engine.js?v=20261043';
 
 const KEY = 'rigplan.library.v1';
 const MAX_UNDO = 60;

@@ -155,6 +155,41 @@ const SYMBOLS = {
     return rect(10, 12, w - 20, h - 30, 6) + toggles + text(w / 2, 12, 'AC DISTRIBUTION', 8, MUTED, 'middle', 700);
   },
 
+  pvcombiner: (w, h, node) => {
+    const busX = 138;
+    const negX = 116;
+    const plusYs = [0.22, 0.6].map((p) => Math.round(p * h));
+    const fuses = plusYs.map((y) => line(0, y, 40, y, INK, 1.4)
+      + rect(40, y - 8, 34, 16, 3, '#f2f5f8', '#c3ced9', 1.1)
+      + line(46, y, 68, y, ACCENT, 1.8)
+      + line(74, y, busX, y, INK, 1.4)).join('');
+    const negA = Math.round(0.4 * h);
+    const negB = Math.round(0.78 * h);
+    const oy = Math.round(0.34 * h);
+    const ny = Math.round(0.68 * h);
+    const sun = `<circle cx="${w - 26}" cy="24" r="6" fill="#f6c453"/>`;
+    const spdTop = h - 44;
+    return rect(10, 14, w - 20, h - 30, 6)
+      + text(w / 2, 24, 'PV COMBINER', 8, MUTED, 'middle', 700)
+      + fuses
+      + line(0, negA, negX, negA, INK, 1.4)
+      + line(0, negB, negX, negB, INK, 1.4)
+      + line(negX, negA, negX, negB, ACCENT, 2)
+      + line(busX, plusYs[0], busX, spdTop, ACCENT, 2)
+      + sun
+      + line(busX, oy, 152, oy, INK, 1.4)
+      + circle(154, oy, 3, PAPER, INK, 1.4)
+      + line(158, oy - 6, 188, oy + 6, INK, 2.2)
+      + circle(190, oy, 3, PAPER, INK, 1.4)
+      + line(193, oy, w, oy, INK, 1.4)
+      + text(172, oy - 12, 'MCB', 7, MUTED, 'middle', 700)
+      + line(negX, ny, w, ny, INK, 1.4)
+      + rect(busX - 18, spdTop, 36, 20, 3, '#f2f5f8', '#c3ced9', 1.1)
+      + text(busX, spdTop + 13, 'SPD', 8, WARM, 'middle', 700)
+      + line(busX, spdTop + 20, busX, h - 10, INK, 1.4)
+      + line(busX - 12, h - 10, busX + 12, h - 10, INK, 2);
+  },
+
   switch: (w, h, node) => circle(w / 2 - 24, h / 2, 4) + circle(w / 2 + 24, h / 2, 4) +
     line(w / 2 - 22, h / 2 - 1, w / 2 + 18, h / 2 - 15, INK, 2.4) +
     text(w / 2, h - 10, `${node.props?.ratedA ?? 275} A`, 9, MUTED, 'middle', 600),

@@ -1,9 +1,9 @@
-import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js?v=20261041';
-import { TEMPLATES, templateCampervan } from './data/templates.js?v=20261041';
-import { createStore, emptyProject } from './core/store.js?v=20261022';
-import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js?v=20261041';
-import { fixForCheck } from './core/fixes.js?v=20261041';
-import { createEditor } from './ui/editor.js?v=20261041';
+import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js?v=20261043';
+import { TEMPLATES, templateCampervan } from './data/templates.js?v=20261043';
+import { createStore, emptyProject } from './core/store.js?v=20261043';
+import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js?v=20261043';
+import { fixForCheck } from './core/fixes.js?v=20261043';
+import { createEditor } from './ui/editor.js?v=20261043';
 import {
   STANDARDS, TEMP_RATINGS, FUSE_FAMILIES, FUSE_RATINGS,
   formatSize, TERMINAL_KINDS, WIRE_COLORS, metricArea,
@@ -31,6 +31,7 @@ const editor = createEditor({
 // Library
 // ---------------------------------------------------------------------------
 function libraryTag(item) {
+  if (item.id === 'pv-combiner') return '2 \u2192 1';
   if (item.symbol === 'panel') return `${item.defaults.watts ?? ''} W`;
   return item.defaults.voltage ? `${item.defaults.voltage}V` : '';
 }
@@ -98,6 +99,7 @@ const ENUMS = {
   family: Object.keys(FUSE_FAMILIES),
   polarity: ['positive', 'negative'],
   curve: ['B', 'C', 'D'],
+  spdType: ['Type 1', 'Type 2', 'Type 3'],
 };
 
 // A few components use generic prop keys that need a domain-specific label.
@@ -119,6 +121,13 @@ const PROP_LABELS = {
     acOutA: 'AC output current',
     efficiency: 'Inverter efficiency',
   },
+  'pv-combiner': {
+    maxPvVoc: 'Max PV Voc',
+    stringFuseA: 'String fuse per input',
+    outBreakerA: 'Outgoing DC MCB',
+    hasSpd: 'Surge protection (SPD)',
+    spdType: 'SPD type',
+  },
 };
 
 const CONNECTION_HINTS = {
@@ -126,6 +135,7 @@ const CONNECTION_HINTS = {
   mppt: 'PV IN takes the solar string. BAT OUT goes to the battery bus.',
   inverter: 'DC IN is the battery feed. AC OUT feeds the AC distribution panel.',
   'hybrid-inverter': 'PV IN is the built-in MPPT input. BAT is the battery bus, AC IN is shore or generator, AC OUT is the load panel, and PE is shared.',
+  'pv-combiner': 'Each string lands on its own fused input with a surge arrester. OUT + / OUT − is the combined feed to the inverter PV input, and SPD GND bonds to the system earth.',
 };
 
 const propLabel = (type, key) => {

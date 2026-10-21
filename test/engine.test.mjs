@@ -202,6 +202,10 @@ const mpptNode = (id, extra = {}) => ({
   id, type: 'mppt', label: 'MPPT', x: 400, y: 0, w: 165, h: 96,
   props: { voltage: 12.8, outputA: 30, maxPvVoc: 100, maxPvA: 35, ...extra },
 });
+const combinerNode = (id, extra = {}) => ({
+  id, type: 'pv-combiner', label: 'PV combiner', x: 250, y: 0, w: 230, h: 160,
+  props: { maxPvVoc: 500, stringFuseA: 20, outBreakerA: 32, hasSpd: true, spdType: 'Type 2', ...extra },
+});
 
 test('two panels joined pv+ to pv- are a valid series string', () => {
   const diagram = doc();
@@ -342,6 +346,91 @@ test('a hybrid inverter accepts a PV array and a battery on one part', () => {
   assert.ok(result.checks.some((c) => c.id === 'pv-no-isolator' && c.nodeIds.includes('hybrid')));
   assert.equal(result.checks.some((c) => c.id === 'short'), false);
   assert.deepEqual(result.checks.filter((c) => c.severity === 'critical'), []);
+});
+
+test('a PV combiner box fuses two strings and feeds a hybrid inverter', () => {
+  const def = CATALOG_BY_ID['pv-combiner'];
+  assert.ok(def, 'the combiner box is in the catalogue');
+  assert.deepEqual(def.roles, ['protection']);
+  assert.deepEqual(
+    def.terminals.map((t) => t.id),
+    ['in1pos', 'in1neg', 'in2pos', 'in2neg', 'outpos', 'outneg', 'gnd'],
+  );
+  assert.equal(def.terminals.filter((t) => t.kind.startsWith('pv')).length, 6, 'six PV conductors');
+
+  const diagram = doc();
+  diagram.nodes = [
+    solarPanel('p1'), solarPanel('p2'), solarPanel('p3'), solarPanel('p4'),
+    combinerNode('comb'),
+    makeNode('hybrid-inverter', 600, 0, { id: 'hybrid', props: { watts: 3000, efficiency: 0.93, chargeA: 50 } }),
+    makeNode('battery-lifepo4', 600, 400, { id: 'bat', props: { hasBMS: true, supplyA: 100, capacityAh: 100 } }),
+    makeNode('class-t-fuse', 600, 550, { id: 'fuse', props: { ratingA: 400 } }),
+    makeNode('chassis-ground', 100, 700, { id: 'gnd' }),
+  ];
+  diagram.wires = [
+    // string A: p1 and p2 in series
+    { id: 'a1', from: { node: 'p1', terminal: 'pvpos' }, to: { node: 'p2', terminal: 'pvneg' }, lengthM: 0.5 },
+    { id: 'a2', from: { node: 'p2', terminal: 'pvpos' }, to: { node: 'comb', terminal: 'in1pos' }, lengthM: 2 },
+    { id: 'a3', from: { node: 'p1', terminal: 'pvneg' }, to: { node: 'comb', terminal: 'in1neg' }, lengthM: 2 },
+    // string B: p3 and p4 in series
+    { id: 'b1', from: { node: 'p3', terminal: 'pvpos' }, to: { node: 'p4', terminal: 'pvneg' }, lengthM: 0.5 },
+    { id: 'b2', from: { node: 'p4', terminal: 'pvpos' }, to: { node: 'comb', terminal: 'in2pos' }, lengthM: 2 },
+    { id: 'b3', from: { node: 'p3', terminal: 'pvneg' }, to: { node: 'comb', terminal: 'in2neg' }, lengthM: 2 },
+    // combined feed to the hybrid PV input
+    { id: 'trunkpos', from: { node: 'comb', terminal: 'outpos' }, to: { node: 'hybrid', terminal: 'pvpos' }, lengthM: 3 },
+    { id: 'trunkneg', from: { node: 'comb', terminal: 'outneg' }, to: { node: 'hybrid', terminal: 'pvneg' }, lengthM: 3 },
+    // battery, earth and the bonded SPD
+    { id: 'bat-fuse', from: { node: 'bat', terminal: 'pos' }, to: { node: 'fuse', terminal: 'in' }, lengthM: 0.5 },
+    { id: 'fuse-hybrid', from: { node: 'fuse', terminal: 'out' }, to: { node: 'hybrid', terminal: 'pos' }, lengthM: 1 },
+    { id: 'bat-hybridneg', from: { node: 'bat', terminal: 'neg' }, to: { node: 'hybrid', terminal: 'neg' }, lengthM: 1 },
+    { id: 'bat-gnd', from: { node: 'bat', terminal: 'neg' }, to: { node: 'gnd', terminal: 'gnd' }, lengthM: 0.5 },
+    { id: 'spd', from: { node: 'comb', terminal: 'gnd' }, to: { node: 'gnd', terminal: 'gnd' }, lengthM: 1 },
+  ];
+  const result = evaluateDiagram(diagram);
+  for (const id of ['a2', 'a3', 'b2', 'b3']) {
+    assert.equal(result.wires.get(id).currentA, 11.8, `${id} carries one string Isc`);
+    assert.equal(result.wires.get(id).voltage, 36, `${id} is sized at the string Vmp`);
+  }
+  for (const id of ['trunkpos', 'trunkneg']) {
+    assert.equal(result.wires.get(id).currentA, 23.6, `${id} carries the combined array`);
+  }
+  const ids = result.checks.map((c) => c.id);
+  assert.equal(ids.includes('pv-string-fuse'), false, 'the combiner fuses the strings');
+  assert.equal(ids.includes('pv-no-isolator'), false, 'the combiner output MCB isolates the array');
+  assert.equal(ids.includes('pv-combiner-spd'), false, 'the SPD is bonded');
+  assert.equal(ids.includes('pv-combiner-current'), false);
+  assert.equal(ids.includes('pv-combiner-voltage'), false);
+  assert.equal(ids.includes('short'), false);
+  assert.deepEqual(result.checks.filter((c) => c.severity === 'critical'), []);
+});
+
+test('the PV combiner flags a floating SPD and an undersized output breaker', () => {
+  const diagram = doc();
+  diagram.nodes = [
+    solarPanel('p1'), solarPanel('p2'),
+    combinerNode('comb', { outBreakerA: 20 }),
+    makeNode('hybrid-inverter', 600, 0, { id: 'hybrid', props: { watts: 3000, efficiency: 0.93, chargeA: 50 } }),
+    makeNode('battery-lifepo4', 600, 400, { id: 'bat', props: { hasBMS: true, supplyA: 100, capacityAh: 100 } }),
+    makeNode('class-t-fuse', 600, 550, { id: 'fuse', props: { ratingA: 400 } }),
+    makeNode('chassis-ground', 100, 700, { id: 'gnd' }),
+  ];
+  diagram.wires = [
+    { id: 'p1pos', from: { node: 'p1', terminal: 'pvpos' }, to: { node: 'comb', terminal: 'in1pos' }, lengthM: 2 },
+    { id: 'p1neg', from: { node: 'p1', terminal: 'pvneg' }, to: { node: 'comb', terminal: 'in1neg' }, lengthM: 2 },
+    { id: 'p2pos', from: { node: 'p2', terminal: 'pvpos' }, to: { node: 'comb', terminal: 'in2pos' }, lengthM: 2 },
+    { id: 'p2neg', from: { node: 'p2', terminal: 'pvneg' }, to: { node: 'comb', terminal: 'in2neg' }, lengthM: 2 },
+    { id: 'trunkpos', from: { node: 'comb', terminal: 'outpos' }, to: { node: 'hybrid', terminal: 'pvpos' }, lengthM: 3 },
+    { id: 'trunkneg', from: { node: 'comb', terminal: 'outneg' }, to: { node: 'hybrid', terminal: 'pvneg' }, lengthM: 3 },
+    { id: 'bat-fuse', from: { node: 'bat', terminal: 'pos' }, to: { node: 'fuse', terminal: 'in' }, lengthM: 0.5 },
+    { id: 'fuse-hybrid', from: { node: 'fuse', terminal: 'out' }, to: { node: 'hybrid', terminal: 'pos' }, lengthM: 1 },
+    { id: 'bat-hybridneg', from: { node: 'bat', terminal: 'neg' }, to: { node: 'hybrid', terminal: 'neg' }, lengthM: 1 },
+    { id: 'bat-gnd', from: { node: 'bat', terminal: 'neg' }, to: { node: 'gnd', terminal: 'gnd' }, lengthM: 0.5 },
+  ];
+  const result = evaluateDiagram(diagram);
+  const ids = result.checks.map((c) => c.id);
+  assert.ok(ids.includes('pv-combiner-spd'), 'an unbonded SPD is reported');
+  assert.ok(ids.includes('pv-combiner-current'), '2 x 11.8 A exceeds a 20 A breaker');
+  assert.equal(ids.includes('pv-combiner-voltage'), false, 'the voltage rating is ample');
 });
 
 test('an unconnected ground point is a note, not a failure', () => {

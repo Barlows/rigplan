@@ -35,7 +35,7 @@ component database.
 | Automatic safety checks with explanations | **Built** | 34 distinct findings; each has a rule, severity and jump-to item. |
 | One-click automatic repairs | **Built** | Deterministic fixes insert parts and rewire the circuit; unsupported design decisions stay manual. |
 | Templates / worked examples | **Partial** | 3 original templates vs 41 on Wireframe; same idea, different catalogue. |
-| Branded component catalogue | **Partial** | 42 generic, fully modelled components, including 465 W and 450 W solar panel presets and a hybrid inverter/charger with a PV MPPT input. No Victron/Renogy/Blue Sea part numbers or logos. |
+| Branded component catalogue | **Partial** | 43 generic, fully modelled components, including 465 W and 450 W solar panel presets, a hybrid inverter/charger with a PV MPPT input, and a 2-in/1-out PV combiner box with string fuses, an SPD and an outgoing DC MCB. No Victron/Renogy/Blue Sea part numbers or logos. |
 | Search the library | **Built** | Filters by name, category and tag. |
 | Quick-add shortcuts | **Built** | Battery, fuse box, MPPT, load. |
 | Title block (client, drawing no., revision, date) | **Built** | Editable in the Project tab and printed on the sheet. |
