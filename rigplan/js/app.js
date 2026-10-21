@@ -1,6 +1,6 @@
 import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js';
 import { TEMPLATES, templateCampervan } from './data/templates.js';
-import { createStore, emptyProject } from './core/store.js';
+import { createStore, emptyProject } from './core/store.js?v=20261022';
 import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js';
 import { createEditor } from './ui/editor.js?v=20261021';
 import {
@@ -811,6 +811,10 @@ refresh();
 editor.fit();
 updateStatus();
 requestAnimationFrame(() => { editor.fit(); updateStatus(); });
+if (store.get().recoveredNodes) {
+  const count = store.get().recoveredNodes;
+  toast(`Recovered ${count} component${count === 1 ? '' : 's'} that had been dragged off the sheet.`);
+}
 
 // Exposed for the browser console and the automated smoke test.
 window.__rigplan = { store, editor, get evaluation() { return evaluation; } };

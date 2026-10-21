@@ -4,6 +4,35 @@ import { DEFAULT_SETTINGS } from './engine.js';
 
 const KEY = 'rigplan.library.v1';
 const MAX_UNDO = 60;
+const SHEET_W = 1800;
+const SHEET_H = 1100;
+const SHEET_MARGIN = 120;
+
+/** Pull back nodes whose whole body sits far outside the drawing sheet.
+ *  Older builds could compound drag deltas and save a component at x=50000;
+ *  without this the drawing opens zoomed out around a single stray part.
+ */
+export function recoverOffSheet(diagram) {
+  let count = 0;
+  for (const node of diagram?.nodes || []) {
+    const w = Number(node.w) || 0;
+    const h = Number(node.h) || 0;
+    const x = Number(node.x);
+    const y = Number(node.y);
+    const invalid = !Number.isFinite(x) || !Number.isFinite(y);
+    const outside = !invalid && (
+      x + w < -SHEET_MARGIN || x > SHEET_W + SHEET_MARGIN
+      || y + h < -SHEET_MARGIN || y > SHEET_H + SHEET_MARGIN
+    );
+    if (!invalid && !outside) continue;
+    const safeX = Number.isFinite(x) ? x : 40;
+    const safeY = Number.isFinite(y) ? y : 40;
+    node.x = Math.round(Math.min(Math.max(safeX, 40), Math.max(40, SHEET_W - w - 40)));
+    node.y = Math.round(Math.min(Math.max(safeY, 40), Math.max(40, SHEET_H - h - 40)));
+    count++;
+  }
+  return count;
+}
 
 const clone = (v) => (typeof structuredClone === 'function' ? structuredClone(v) : JSON.parse(JSON.stringify(v)));
 
@@ -47,7 +76,9 @@ function saveLibrary(lib) {
 
 export function createStore(initialDoc) {
   const library = loadLibrary() || { activeId: null, projects: [], versions: {} };
-  let doc = library.projects.find((p) => p.id === library.activeId)?.diagram || initialDoc || emptyProject();
+  const saved = library.projects.find((p) => p.id === library.activeId)?.diagram;
+  const recoveredNodes = saved ? recoverOffSheet(saved) : 0;
+  let doc = saved || initialDoc || emptyProject();
   let undo = [];
   let redo = [];
   const listeners = new Set();
@@ -74,7 +105,7 @@ export function createStore(initialDoc) {
   }
 
   function state() {
-    return { doc, canUndo: undo.length > 0, canRedo: redo.length > 0, dirty,
+    return { doc, canUndo: undo.length > 0, canRedo: redo.length > 0, dirty, recoveredNodes,
       versions: library.versions[doc.id] || [], projects: library.projects.map(({ id, name, updatedAt }) => ({ id, name, updatedAt })) };
   }
 
