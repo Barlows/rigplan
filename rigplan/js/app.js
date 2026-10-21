@@ -1,8 +1,8 @@
-import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js';
-import { TEMPLATES, templateCampervan } from './data/templates.js';
+import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js?v=20261025';
+import { TEMPLATES, templateCampervan } from './data/templates.js?v=20261025';
 import { createStore, emptyProject } from './core/store.js?v=20261022';
 import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js';
-import { createEditor } from './ui/editor.js?v=20261021';
+import { createEditor } from './ui/editor.js?v=20261025';
 import {
   STANDARDS, TEMP_RATINGS, FUSE_FAMILIES, FUSE_RATINGS,
   formatSize, TERMINAL_KINDS, metricArea,
@@ -80,6 +80,7 @@ svg.addEventListener('drop', (e) => {
 // ---------------------------------------------------------------------------
 const UNITS = {
   voltage: 'V', supplyA: 'A', capacityAh: 'Ah', maxChargeA: 'A', watts: 'W', voc: 'V',
+  isc: 'A', moduleEfficiency: '%',
   outputA: 'A', chargeA: 'A', inputA: 'A', ratedA: 'A', drawA: 'A', ratingA: 'A',
   maxPvVoc: 'V', maxPvA: 'A', inputV: 'V', acOutA: 'A', tripMa: 'mA', resistanceOhm: 'Ω',
   efficiency: '', powerFactor: '', circuits: '', maxDischargeA: 'A',
@@ -92,6 +93,20 @@ const ENUMS = {
   polarity: ['positive', 'negative'],
   curve: ['B', 'C', 'D'],
 };
+
+// A few components use generic prop keys that need a domain-specific label.
+const PROP_LABELS = {
+  'solar-panel': {
+    watts: 'Pmax (max power)',
+    voc: 'Voc (open-circuit)',
+    isc: 'Isc (short-circuit)',
+    voltage: 'Vmp (max power)',
+    supplyA: 'Imp (max power)',
+    moduleEfficiency: 'Module efficiency',
+  },
+};
+
+const propLabel = (type, key) => PROP_LABELS[type]?.[key] || humanize(key);
 
 function humanize(key) {
   return key
@@ -159,16 +174,17 @@ function renderInspector() {
     const def = CATALOG_BY_ID[node.type];
     const props = Object.entries(def.defaults).map(([key, value]) => {
       const unit = UNITS[key] ?? '';
+      const current = node.props[key] ?? value;
       if (typeof value === 'boolean') {
         return `<label class="field" style="flex-direction:row;align-items:center;gap:8px;height:32px">
-          <input type="checkbox" data-prop="${key}" ${node.props[key] ? 'checked' : ''} style="width:15px;height:15px;flex:0 0 auto">
-          <span>${humanize(key)}</span></label>`;
+          <input type="checkbox" data-prop="${key}" ${current ? 'checked' : ''} style="width:15px;height:15px;flex:0 0 auto">
+          <span>${propLabel(node.type, key)}</span></label>`;
       }
       if (ENUMS[key]) {
-        return field(humanize(key), `<select data-prop="${key}">${ENUMS[key].map((v) => `<option value="${v}" ${String(node.props[key]) === v ? 'selected' : ''}>${v}</option>`).join('')}</select>`);
+        return field(propLabel(node.type, key), `<select data-prop="${key}">${ENUMS[key].map((v) => `<option value="${v}" ${String(current) === v ? 'selected' : ''}>${v}</option>`).join('')}</select>`);
       }
-      return field(`${humanize(key)}${unit ? ` <span class="mono" style="opacity:.6">${unit}</span>` : ''}`,
-        `<input type="number" step="any" data-prop="${key}" value="${node.props[key] ?? ''}">`);
+      return field(`${propLabel(node.type, key)}${unit ? ` <span class="mono" style="opacity:.6">${unit}</span>` : ''}`,
+        `<input type="number" step="any" data-prop="${key}" value="${current}">`);
     }).join('');
 
     panel.innerHTML = `
