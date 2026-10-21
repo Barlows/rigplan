@@ -55,6 +55,7 @@ component database.
 | 12 / 24 / 48 V systems | **Built** | Voltage is per component and per run. |
 | AC circuits (shore, inverter output, sockets) | **Built** | AC L/N/PE conductors with separate colours and checks. |
 | PV minimum cable size | **Built** | 2.5 mm² minimum enforced for PV conductors. |
+| Series / parallel PV arrays | **Built** | Panels joined pv+ to pv− form a series string; parallel branches add at a combiner; cable current uses string Isc and voltage drop uses string Vmp. |
 | Fuse family selection | **Built** | Blade, MIDI, ANL, MEGA, Class-T, MRBF, DC breaker, RCBO. |
 | Fuse/cable coordination (fuse ≤ derated ampacity) | **Built** | The cable is automatically stepped up, or the conflict is reported. |
 | Real product fuse ratings | **Built** | Standard rating ladder from 1 A to 600 A. |

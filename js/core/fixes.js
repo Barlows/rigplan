@@ -5,7 +5,7 @@
 // project just like a manual edit.
 
 import { CATALOG_BY_ID, makeNode } from '../data/catalog.js?v=20261028';
-import { evaluateDiagram, sizeRun, sizeOptions } from './engine.js?v=20261028';
+import { evaluateDiagram, sizeRun, sizeOptions } from './engine.js?v=20261038';
 import { FUSE_RATINGS, STANDARDS, metricArea } from '../data/standards.js';
 
 const SHEET_W = 1800;

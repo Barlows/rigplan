@@ -1,8 +1,8 @@
 import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js?v=20261027';
 import { TEMPLATES, templateCampervan } from './data/templates.js?v=20261027';
 import { createStore, emptyProject } from './core/store.js?v=20261022';
-import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js?v=20261028';
-import { fixForCheck } from './core/fixes.js?v=20261037';
+import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js?v=20261038';
+import { fixForCheck } from './core/fixes.js?v=20261038';
 import { createEditor } from './ui/editor.js?v=20261027';
 import {
   STANDARDS, TEMP_RATINGS, FUSE_FAMILIES, FUSE_RATINGS,

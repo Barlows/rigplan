@@ -187,8 +187,16 @@ export function terminalKind(node, terminalId) {
 }
 
 export function wireKind(diagram, wire) {
-  const node = diagram.nodes.find((n) => n.id === wire.from.node);
-  return node ? terminalKind(node, wire.from.terminal) : 'dc+';
+  const from = diagram.nodes.find((n) => n.id === wire.from.node);
+  if (!from) return 'dc+';
+  const to = diagram.nodes.find((n) => n.id === wire.to.node);
+  const fromKind = terminalKind(from, wire.from.terminal);
+  const toKind = to ? terminalKind(to, wire.to.terminal) : '';
+  // A PV run through a generic busbar keeps its PV identity.
+  if (fromKind.startsWith('pv') && toKind.startsWith('pv')) return fromKind;
+  if (fromKind.startsWith('pv')) return fromKind;
+  if (toKind.startsWith('pv')) return toKind;
+  return fromKind;
 }
 
 export function isAcKind(kind) {
@@ -273,11 +281,157 @@ function traceFamily(graph, startId, family, stop) {
 }
 
 function wireFamily(wire, graph) {
-  const node = graph.nodeById.get(wire.from.node);
-  if (!node) return 'dc+';
-  const def = CATALOG_BY_ID[node.type];
-  const term = def?.terminals.find((t) => t.id === wire.from.terminal);
-  return familyOf(term?.kind || 'dc+');
+  const from = graph.nodeById.get(wire.from.node);
+  if (!from) return 'dc+';
+  const to = graph.nodeById.get(wire.to.node);
+  const fromKind = terminalKind(from, wire.from.terminal);
+  const toKind = to ? terminalKind(to, wire.to.terminal) : '';
+  // A PV conductor sometimes lands on a generic DC terminal (for example a
+  // busbar used as a combiner). Keep it in the PV family if either end is PV.
+  if (fromKind.startsWith('pv') && toKind.startsWith('pv')) return fromKind;
+  if (fromKind.startsWith('pv')) return fromKind;
+  if (toKind.startsWith('pv')) return toKind;
+  return fromKind;
+}
+
+/** All wires in the PV circuit attached to a charger, including series links. */
+function pvComponent(graph, startId) {
+  const nodes = new Set([startId]);
+  const wires = new Set();
+  const queue = [startId];
+  while (queue.length) {
+    const id = queue.shift();
+    for (const edge of graph.byNode.get(id) || []) {
+      if (!wireFamily(edge.wire, graph).startsWith('pv')) continue;
+      wires.add(edge.wire);
+      if (!nodes.has(edge.other)) {
+        nodes.add(edge.other);
+        queue.push(edge.other);
+      }
+    }
+  }
+  return { nodes, wires };
+}
+
+function isSeriesPvLink(from, to, fromKind, toKind) {
+  return from?.type === 'solar-panel' && to?.type === 'solar-panel' && from.id !== to.id
+    && ((fromKind === 'pv+' && toKind === 'pv-') || (fromKind === 'pv-' && toKind === 'pv+'));
+}
+
+/** Short-circuit current used for PV conductor sizing. */
+function panelIsc(panel) {
+  const props = panel?.props || {};
+  const isc = Number(props.isc);
+  if (isc > 0) return isc;
+  const imp = Number(props.supplyA);
+  if (imp > 0) return imp;
+  const watts = Number(props.watts);
+  const volts = Number(props.voltage);
+  return watts > 0 && volts > 0 ? watts / volts : 0;
+}
+
+/** Nominal maximum-power voltage of a panel, used for PV voltage drop. */
+function panelVmp(panel) {
+  const props = panel?.props || {};
+  const volts = Number(props.voltage);
+  if (volts > 0) return volts;
+  const watts = Number(props.watts);
+  const amps = Number(props.supplyA) || Number(props.isc);
+  return watts > 0 && amps > 0 ? watts / amps : 0;
+}
+
+/**
+ * Work out the series strings in the array attached to a charger. Panels joined
+ * by a direct pv+ to pv- link are in series; every remaining panel starts its
+ * own parallel string. Branch and string current is the lowest Isc in the
+ * string, while the combined trunk current is the sum of every string.
+ */
+function pvArraySummary(graph, startId) {
+  const component = pvComponent(graph, startId);
+  const panels = [...component.nodes]
+    .map((id) => graph.nodeById.get(id))
+    .filter((node) => node?.type === 'solar-panel');
+  if (!panels.length) return null;
+
+  const seriesLinks = [...component.wires].filter((wire) => {
+    const from = graph.nodeById.get(wire.from.node);
+    const to = graph.nodeById.get(wire.to.node);
+    return isSeriesPvLink(from, to, terminalKind(from, wire.from.terminal), terminalKind(to, wire.to.terminal));
+  });
+
+  const parent = new Map(panels.map((panel) => [panel.id, panel.id]));
+  const find = (id) => {
+    let root = id;
+    while (parent.get(root) !== root) root = parent.get(root);
+    while (parent.get(id) !== root) {
+      const next = parent.get(id);
+      parent.set(id, root);
+      id = next;
+    }
+    return root;
+  };
+  const union = (a, b) => {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA !== rootB) parent.set(rootB, rootA);
+  };
+  for (const wire of seriesLinks) union(wire.from.node, wire.to.node);
+
+  const groups = new Map();
+  for (const panel of panels) {
+    const root = find(panel.id);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push(panel);
+  }
+
+  const panelCurrent = new Map();
+  const panelVoltage = new Map();
+  let totalIsc = 0;
+  let minStringVoltage = 0;
+  for (const group of groups.values()) {
+    const rated = group.map(panelIsc).filter((amps) => amps > 0);
+    const stringIsc = rated.length ? Math.min(...rated) : 0;
+    const stringVoltage = group.reduce((sum, panel) => sum + panelVmp(panel), 0);
+    totalIsc += stringIsc;
+    if (stringVoltage > 0) {
+      minStringVoltage = minStringVoltage > 0 ? Math.min(minStringVoltage, stringVoltage) : stringVoltage;
+    }
+    for (const panel of group) {
+      panelCurrent.set(panel.id, stringIsc);
+      panelVoltage.set(panel.id, stringVoltage);
+    }
+  }
+
+  return {
+    ...component, panels, seriesLinks, panelCurrent, panelVoltage,
+    totalIsc, strings: groups.size, minStringVoltage,
+  };
+}
+
+/** Add PV conductor currents and voltages: branches get string values, trunks get totals. */
+function addPvArrayCurrents(summary, mppt, add, voltages) {
+  if (!summary || summary.totalIsc <= 0) return;
+  const panelIds = new Set(summary.panels.map((panel) => panel.id));
+  for (const wire of summary.wires) {
+    const fromPanel = panelIds.has(wire.from.node);
+    const toPanel = panelIds.has(wire.to.node);
+    let amps = summary.totalIsc;
+    let volts = summary.minStringVoltage;
+    if (fromPanel || toPanel) {
+      const panelId = fromPanel ? wire.from.node : wire.to.node;
+      amps = summary.panelCurrent.get(panelId) || 0;
+      volts = summary.panelVoltage.get(panelId) || volts;
+      // A direct link between two strings can carry both string currents.
+      if (fromPanel && toPanel) {
+        const otherId = fromPanel ? wire.to.node : wire.from.node;
+        amps = Math.max(amps, summary.panelCurrent.get(otherId) || 0);
+        const otherVolts = summary.panelVoltage.get(otherId) || volts;
+        if (otherVolts > 0) volts = volts > 0 ? Math.min(volts, otherVolts) : otherVolts;
+      }
+    }
+    if (amps > 0) add(wire, amps, `${mppt.label} PV array ${round(amps, 1)} A`);
+    if (volts > 0) voltages.set(wire.id, volts);
+  }
 }
 
 const SUPPLY_FAMILIES = ['dc+', 'pv+', 'ac-l'];
@@ -287,6 +441,8 @@ export function computeCurrents(diagram) {
   const graph = buildGraph(diagram);
   const currents = new Map((diagram.wires || []).map((w) => [w.id, 0]));
   const reasons = new Map();
+  const voltages = new Map();
+  const pvArraysDone = new Set();
 
   const add = (wire, amps, reason) => {
     currents.set(wire.id, (currents.get(wire.id) || 0) + amps);
@@ -347,12 +503,14 @@ export function computeCurrents(diagram) {
     }
 
     if (node.type === 'mppt') {
-      const panelV = Number(diagram.nodes.find((p) => p.type === 'solar-panel')?.props?.voltage) || 18;
-      const pvA = outputA * ((Number(props.voltage) || 12.8) / panelV);
-      const path = traceFamily(graph, node.id, 'pv+', (n) => n && n.id !== node.id && n.type === 'solar-panel');
-      if (path && pvA > 0) for (const wire of path.wires) add(wire, pvA, `${node.label} PV input ${round(pvA, 1)} A`);
-      const ret = traceFamily(graph, node.id, 'pv-', (n) => n && n.id !== node.id && n.type === 'solar-panel');
-      if (ret && pvA > 0) for (const wire of ret.wires) add(wire, pvA, `${node.label} PV return ${round(pvA, 1)} A`);
+      const summary = pvArraySummary(graph, node.id);
+      if (summary) {
+        const key = summary.panels.map((panel) => panel.id).sort().join('|');
+        if (!pvArraysDone.has(key)) {
+          pvArraysDone.add(key);
+          addPvArrayCurrents(summary, node, add, voltages);
+        }
+      }
     }
 
     if (node.type === 'ac-charger') {
@@ -364,7 +522,7 @@ export function computeCurrents(diagram) {
     }
   }
 
-  return { currents, reasons };
+  return { currents, reasons, voltages };
 }
 
 // --------------------------------------------------------------------------
@@ -373,7 +531,7 @@ export function computeCurrents(diagram) {
 
 export function evaluateDiagram(diagram) {
   const settings = { ...DEFAULT_SETTINGS, ...diagram.settings };
-  const { currents, reasons } = computeCurrents(diagram);
+  const { currents, reasons, voltages } = computeCurrents(diagram);
   const std = STANDARDS[settings.standard] || STANDARDS.abyc;
   const results = new Map();
 
@@ -384,7 +542,7 @@ export function evaluateDiagram(diagram) {
     const kind = wireKind(diagram, wire);
     const auto = currents.get(wire.id) || 0;
     const currentA = wire.currentA != null && wire.currentA !== '' ? Number(wire.currentA) : (auto || 1);
-    const voltage = isAcKind(kind) ? (Number(from.props?.voltage) || 230) : (Number(from.props?.voltage) || Number(to.props?.voltage) || 12.8);
+    const voltage = isAcKind(kind) ? (Number(from.props?.voltage) || 230) : (voltages.get(wire.id) || Number(from.props?.voltage) || Number(to.props?.voltage) || 12.8);
     const continuous = to.props?.continuous !== false && from.props?.continuous !== false;
 
     const sized = sizeRun(diagram, {
@@ -619,7 +777,7 @@ export function runChecks(diagram, sizing) {
     const fromKind = terminalKind(from, wire.from.terminal);
     const toKind = terminalKind(to, wire.to.terminal);
     const opp = { 'dc+': 'dc-', 'dc-': 'dc+', 'pv+': 'pv-', 'pv-': 'pv+', 'ac-l': 'ac-n', 'ac-n': 'ac-l' };
-    if (opp[fromKind] === toKind) {
+    if (opp[fromKind] === toKind && !isSeriesPvLink(from, to, fromKind, toKind)) {
       out.push(finding('short', 'critical', 'Cable links opposite polarities',
         `A cable runs from ${TERMINAL_KINDS[fromKind].label} to ${TERMINAL_KINDS[toKind].label}. That is a short circuit.`,
         { wireIds: [wire.id], nodeIds: [from.id, to.id] }));

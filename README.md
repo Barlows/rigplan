@@ -131,8 +131,10 @@ docs/feature-parity.md   mapping from the reference product to this build
    **supply** and **return** conductors separately, so a load's positive path is
    never mixed with its negative path.
 2. Loads contribute their `drawA`; chargers contribute their output current;
-   inverters contribute `watts / efficiency / inputV`; MPPTs also contribute the
-   reflected PV current.
+   inverters contribute `watts / efficiency / inputV`. PV arrays are analysed
+   separately: panels joined `pv+` to `pv−` form a series string, string current
+   is the lowest panel Isc, parallel strings add at the combiner, and PV voltage
+   drop uses the string Vmp.
 3. `sizeRun()` derives the design current, applies the standard's continuous
    factor, derates the published ampacity, computes round-trip voltage drop and
    picks the first passing size.

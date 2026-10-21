@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { evaluateDiagram, terminalKind } from '../js/core/engine.js';
+import { computeCurrents, evaluateDiagram, terminalKind } from '../js/core/engine.js';
 import { fixForCheck } from '../js/core/fixes.js';
 import { templateCampervan } from '../js/data/templates.js';
 
@@ -115,6 +115,13 @@ test('the PV isolator repair keeps the array circuit on the PV polarity', () => 
     || (w.to.node === mppt.id && w.to.terminal === 'pvpos'));
   assert.equal(mpptWire.to.node, inserted.id);
   assert.equal(mpptWire.to.terminal, 'out');
+
+  const { currents } = computeCurrents(doc);
+  const livePv = doc.wires.filter((wire) => {
+    const from = doc.nodes.find((n) => n.id === wire.from.node);
+    return terminalKind(from, wire.from.terminal).startsWith('pv') && currents.get(wire.id) > 1;
+  });
+  assert.ok(livePv.length >= 3, 'the array should still carry PV current through the isolator');
 });
 
 test('the missing ground repair bonds the DC negative and AC earth', () => {

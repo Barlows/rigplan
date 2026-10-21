@@ -147,7 +147,7 @@ test('bill of materials totals the campervan template', () => {
   const diagram = templateCampervan();
   const result = evaluateDiagram(diagram);
   assert.equal(result.bom.cableTotalM, 88.1);
-  assert.equal(result.bom.total, 5196.73);
+  assert.equal(result.bom.total, 5190.13);
   assert.ok(result.bom.rows.some((r) => r.kind === 'Cable' && r.name.includes('16 mm²')));
   assert.ok(result.bom.rows.some((r) => r.kind === 'Fuse'));
 });
@@ -191,6 +191,58 @@ test('a cable joining opposite polarities is reported as a short', () => {
   });
   const result = evaluateDiagram(diagram);
   assert.ok(result.checks.some((c) => c.id === 'short'));
+});
+
+const solarPanel = (id, extra = {}) => ({
+  id, type: 'solar-panel', label: `Panel ${id}`, x: 0, y: 0, w: 170, h: 100,
+  props: { watts: 200, voc: 22.5, isc: 11.8, voltage: 18, supplyA: 11.1, moduleEfficiency: 21, ...extra },
+});
+const mpptNode = (id, extra = {}) => ({
+  id, type: 'mppt', label: 'MPPT', x: 400, y: 0, w: 165, h: 96,
+  props: { voltage: 12.8, outputA: 30, maxPvVoc: 100, maxPvA: 35, ...extra },
+});
+
+test('two panels joined pv+ to pv- are a valid series string', () => {
+  const diagram = doc();
+  diagram.nodes = [solarPanel('p1'), solarPanel('p2'), mpptNode('mppt')];
+  diagram.wires = [
+    { id: 'series', from: { node: 'p1', terminal: 'pvpos' }, to: { node: 'p2', terminal: 'pvneg' }, lengthM: 0.5 },
+    { id: 'pos', from: { node: 'p2', terminal: 'pvpos' }, to: { node: 'mppt', terminal: 'pvpos' }, lengthM: 2 },
+    { id: 'neg', from: { node: 'mppt', terminal: 'pvneg' }, to: { node: 'p1', terminal: 'pvneg' }, lengthM: 2 },
+  ];
+  const result = evaluateDiagram(diagram);
+  assert.equal(result.checks.some((c) => c.id === 'short'), false, 'series link must not be a short');
+  for (const id of ['series', 'pos', 'neg']) {
+    assert.equal(result.wires.get(id).currentA, 11.8, `${id} carries one string of Isc`);
+    assert.equal(result.wires.get(id).voltage, 36, `${id} is sized at the two-panel string voltage`);
+    assert.equal(result.wires.get(id).size, 2.5);
+  }
+});
+
+test('parallel PV branches carry their own Isc and the trunk carries the sum', () => {
+  const diagram = doc();
+  diagram.nodes = [
+    solarPanel('p1'), solarPanel('p2'),
+    { id: 'bus', type: 'busbar', label: 'PV combiner', x: 250, y: 0, w: 150, h: 120, props: { ratedA: 100 } },
+    mpptNode('mppt'),
+  ];
+  diagram.wires = [
+    { id: 'p1pos', from: { node: 'p1', terminal: 'pvpos' }, to: { node: 'bus', terminal: 'in' }, lengthM: 2 },
+    { id: 'p2pos', from: { node: 'p2', terminal: 'pvpos' }, to: { node: 'bus', terminal: 'o1' }, lengthM: 3 },
+    { id: 'p1neg', from: { node: 'p1', terminal: 'pvneg' }, to: { node: 'bus', terminal: 'o2' }, lengthM: 2 },
+    { id: 'p2neg', from: { node: 'p2', terminal: 'pvneg' }, to: { node: 'bus', terminal: 'o3' }, lengthM: 3 },
+    { id: 'trunkpos', from: { node: 'bus', terminal: 'o1' }, to: { node: 'mppt', terminal: 'pvpos' }, lengthM: 2 },
+    { id: 'trunkneg', from: { node: 'bus', terminal: 'o2' }, to: { node: 'mppt', terminal: 'pvneg' }, lengthM: 2 },
+  ];
+  const result = evaluateDiagram(diagram);
+  for (const id of ['p1pos', 'p2pos', 'p1neg', 'p2neg']) {
+    assert.equal(result.wires.get(id).currentA, 11.8, `${id} carries one panel branch`);
+    assert.equal(result.wires.get(id).voltage, 18);
+  }
+  for (const id of ['trunkpos', 'trunkneg']) {
+    assert.equal(result.wires.get(id).currentA, 23.6, `${id} carries both parallel branches`);
+    assert.equal(result.wires.get(id).voltage, 18);
+  }
 });
 
 test('an unconnected ground point is a note, not a failure', () => {
