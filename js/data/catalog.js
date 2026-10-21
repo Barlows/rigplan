@@ -124,8 +124,8 @@ export const CATALOG = [
     roles: ['charger'], price: 1450,
     defaults: { voltage: 12.8, inputV: 12, watts: 3000, chargeA: 120, efficiency: 0.93, acOutA: 13, hasIsolator: false, hasAcBreaker: false },
     terminals: [
-      { id: 'pos', x: 0.2, y: 1, kind: 'dc+', label: 'BAT+' },
-      { id: 'neg', x: 0.4, y: 1, kind: 'dc-', label: 'BAT−' },
+      { id: 'pos', x: 0.2, y: 1, kind: 'dc+', label: 'DC IN +' },
+      { id: 'neg', x: 0.4, y: 1, kind: 'dc-', label: 'DC IN −' },
       { id: 'acl', x: 0.65, y: 0, kind: 'ac-l', label: 'AC in L' },
       { id: 'acn', x: 0.8, y: 0, kind: 'ac-n', label: 'AC in N' },
       { id: 'outl', x: 0.65, y: 1, kind: 'ac-l', label: 'AC out L' },

@@ -98,6 +98,9 @@ const SYMBOLS = {
   invertercharger: (w, h, node) => rect(12, 14, w - 24, h - 34, 6) +
     `<path d="M ${w / 2 - 22} ${h / 2 - 6} q 5 -9 10 0 t 10 0 t 10 0 t 10 0" fill="none" stroke="${ACCENT}" stroke-width="2"/>` +
     line(w / 2 - 14, h / 2 + 12, w / 2 + 14, h / 2 + 12, INK, 1.4) +
+    text(w * 0.3, h - 24, 'DC IN', 7, MUTED, 'middle', 700) +
+    text(w * 0.72, 24, 'AC IN', 7, MUTED, 'middle', 700) +
+    text(w * 0.8, h - 24, 'AC OUT', 7, MUTED, 'middle', 700) +
     text(w / 2, h - 10, `${node.props?.watts ?? 3000} VA`, 9, INK, 'middle', 600),
 
   fusebox: (w, h, node) => {

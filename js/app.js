@@ -1,9 +1,9 @@
-import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js?v=20261027';
-import { TEMPLATES, templateCampervan } from './data/templates.js?v=20261027';
+import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js?v=20261039';
+import { TEMPLATES, templateCampervan } from './data/templates.js?v=20261039';
 import { createStore, emptyProject } from './core/store.js?v=20261022';
 import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js?v=20261038';
-import { fixForCheck } from './core/fixes.js?v=20261038';
-import { createEditor } from './ui/editor.js?v=20261027';
+import { fixForCheck } from './core/fixes.js?v=20261039';
+import { createEditor } from './ui/editor.js?v=20261039';
 import {
   STANDARDS, TEMP_RATINGS, FUSE_FAMILIES, FUSE_RATINGS,
   formatSize, TERMINAL_KINDS, WIRE_COLORS, metricArea,
@@ -107,6 +107,12 @@ const PROP_LABELS = {
   },
 };
 
+const CONNECTION_HINTS = {
+  'inverter-charger': 'The DC input is the battery bus. The battery and the MPPT BAT OUT can both land here, or join them on a busbar.',
+  mppt: 'PV IN takes the solar string. BAT OUT goes to the battery bus.',
+  inverter: 'DC IN is the battery feed. AC OUT feeds the AC distribution panel.',
+};
+
 const propLabel = (type, key) => PROP_LABELS[type]?.[key] || humanize(key);
 
 function humanize(key) {
@@ -160,6 +166,7 @@ function connectionsSection(doc, node, def) {
               : '<span class="conn-empty">Not wired</span>'}</div>
           </div>`).join('')}
       </div>
+      ${CONNECTION_HINTS[node.type] ? `<p class="hint">${escapeHtml(CONNECTION_HINTS[node.type])}</p>` : ''}
       <p class="hint">Hover a row to highlight that connector on the drawing.</p>
     </div>`;
 }

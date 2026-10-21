@@ -8,6 +8,7 @@ import {
 } from '../js/core/engine.js';
 import { templateCampervan, templateSimple, templateSolar } from '../js/data/templates.js';
 import { recoverOffSheet } from '../js/core/store.js';
+import { CATALOG_BY_ID, makeNode } from '../js/data/catalog.js';
 import { STANDARDS, FUSE_FAMILIES, METRIC_SIZES } from '../js/data/standards.js';
 
 const doc = (settings = {}) => ({
@@ -243,6 +244,39 @@ test('parallel PV branches carry their own Isc and the trunk carries the sum', (
     assert.equal(result.wires.get(id).currentA, 23.6, `${id} carries both parallel branches`);
     assert.equal(result.wires.get(id).voltage, 18);
   }
+});
+
+test('inverter/charger DC input accepts the MPPT output on the battery bus', () => {
+  const def = CATALOG_BY_ID['inverter-charger'];
+  assert.deepEqual(
+    def.terminals.filter((t) => t.id === 'pos' || t.id === 'neg').map((t) => t.label),
+    ['DC IN +', 'DC IN −'],
+  );
+
+  const diagram = doc();
+  diagram.nodes = [
+    makeNode('battery-lifepo4', 100, 200, { id: 'bat', props: { hasBMS: true, supplyA: 100, capacityAh: 100 } }),
+    makeNode('class-t-fuse', 250, 200, { id: 'fuse', props: { ratingA: 300 } }),
+    makeNode('inverter-charger', 400, 200, { id: 'inv', props: { watts: 3000, efficiency: 0.93 } }),
+    makeNode('mppt', 400, 400, { id: 'mppt', props: { outputA: 30 } }),
+    makeNode('solar-panel', 100, 450, { id: 'panel', props: { watts: 200 } }),
+    makeNode('chassis-ground', 100, 350, { id: 'gnd' }),
+  ];
+  diagram.wires = [
+    { id: 'bat-fuse', from: { node: 'bat', terminal: 'pos' }, to: { node: 'fuse', terminal: 'in' }, lengthM: 0.5 },
+    { id: 'fuse-inv', from: { node: 'fuse', terminal: 'out' }, to: { node: 'inv', terminal: 'pos' }, lengthM: 1 },
+    { id: 'bat-invneg', from: { node: 'bat', terminal: 'neg' }, to: { node: 'inv', terminal: 'neg' }, lengthM: 1 },
+    { id: 'mppt-inv', from: { node: 'mppt', terminal: 'batpos' }, to: { node: 'inv', terminal: 'pos' }, lengthM: 0.8 },
+    { id: 'mppt-invneg', from: { node: 'mppt', terminal: 'batneg' }, to: { node: 'inv', terminal: 'neg' }, lengthM: 0.8 },
+    { id: 'pvpos', from: { node: 'panel', terminal: 'pvpos' }, to: { node: 'mppt', terminal: 'pvpos' }, lengthM: 2 },
+    { id: 'pvneg', from: { node: 'panel', terminal: 'pvneg' }, to: { node: 'mppt', terminal: 'pvneg' }, lengthM: 2 },
+    { id: 'bat-gnd', from: { node: 'bat', terminal: 'neg' }, to: { node: 'gnd', terminal: 'gnd' }, lengthM: 0.5 },
+  ];
+  const result = evaluateDiagram(diagram);
+  assert.equal(result.wires.get('mppt-inv').currentA, 30, 'MPPT output feeds the inverter/charger DC input');
+  assert.ok(result.wires.get('fuse-inv').currentA > 250, 'the battery bus also carries the inverter draw');
+  assert.equal(result.checks.some((c) => c.id === 'short'), false);
+  assert.deepEqual(result.checks.filter((c) => c.severity === 'critical'), []);
 });
 
 test('an unconnected ground point is a note, not a failure', () => {
