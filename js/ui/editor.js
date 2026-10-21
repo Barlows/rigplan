@@ -1,6 +1,6 @@
 // Canvas editor: rendering, selection, drag, wiring, pan and zoom.
 
-import { CATALOG_BY_ID } from '../data/catalog.js?v=20261025';
+import { CATALOG_BY_ID } from '../data/catalog.js?v=20261027';
 import { WIRE_COLORS, TERMINAL_KINDS, formatSize } from '../data/standards.js';
 import { renderSymbol } from './symbols.js';
 
@@ -186,16 +186,32 @@ export function createEditor({ svg, store, onSelection, onNotice }) {
       const active = pending && pending.node === node.id && pending.terminal === t.id;
       const hovered = hoverTerminal && hoverTerminal.node === node.id && hoverTerminal.terminal === t.id;
       const r = active ? 6 : hovered ? 6 : 4.5;
-      return `<circle class="terminal ${active ? 'terminal-active' : ''}" data-terminal="${t.id}" data-node="${node.id}"
+      return `${hovered ? `<circle cx="${x}" cy="${y}" r="9" fill="none" stroke="#0e7c86" stroke-width="2" opacity=".9" pointer-events="none"/>` : ''}
+        <circle class="terminal ${active ? 'terminal-active' : ''}" data-terminal="${t.id}" data-node="${node.id}"
         cx="${x}" cy="${y}" r="${r}" fill="${WIRE_COLORS[t.kind] || '#1d2b3a'}" stroke="#ffffff" stroke-width="2">
         <title>${TERMINAL_KINDS[t.kind]?.label || t.kind} — ${t.label}</title></circle>`;
     }).join('');
+    const hoverTerm = hoverTerminal && hoverTerminal.node === node.id
+      ? def.terminals.find((t) => t.id === hoverTerminal.terminal) : null;
+    const tip = hoverTerm ? (() => {
+      const x = node.w * hoverTerm.x;
+      const y = node.h * hoverTerm.y;
+      const value = hoverTerm.label;
+      const width = 14 + value.length * 5.6;
+      const tx = hoverTerm.x > 0.62 ? -(width + 11) : 11;
+      return `<g class="terminal-tip" transform="translate(${x} ${y}) scale(${1 / zoom})" pointer-events="none">
+        <rect x="${tx}" y="-10" width="${width}" height="20" rx="4" fill="#1d2b3a"/>
+        <text x="${tx + width / 2}" y="4" text-anchor="middle" font-size="10" font-weight="600"
+          font-family="IBM Plex Sans, system-ui, sans-serif" fill="#ffffff">${escapeXml(value)}</text>
+      </g>`;
+    })() : '';
     return `
       <g class="node ${isSelected ? 'node-selected' : ''}" data-node="${node.id}" transform="translate(${pos.x} ${pos.y})">
         <rect class="node-hit" x="-2" y="-2" width="${node.w + 4}" height="${node.h + 4}" rx="8" fill="transparent"/>
         <g class="node-art" filter="url(#soft)">${renderSymbol(node, def.symbol)}</g>
         ${isSelected ? `<rect class="selection" x="-5" y="-5" width="${node.w + 10}" height="${node.h + 10}" rx="9" fill="none" stroke="#0e7c86" stroke-width="2" stroke-dasharray="6 4"/>` : ''}
         ${terminals}
+        ${tip}
       </g>`;
   }
 
@@ -258,6 +274,7 @@ export function createEditor({ svg, store, onSelection, onNotice }) {
 
   // -------------------------------------------------------------- selection
   function select(next, additive = false) {
+    hoverTerminal = null;
     if (!next) {
       selection = null;
       selected.clear();
@@ -589,6 +606,14 @@ export function createEditor({ svg, store, onSelection, onNotice }) {
     },
     setSizedWires(next) {
       sizedMap = next || new Map();
+      render();
+    },
+    highlightTerminal(nodeId, terminalId) {
+      const next = nodeId && terminalId ? { node: nodeId, terminal: terminalId } : null;
+      const same = (!next && !hoverTerminal)
+        || (next && hoverTerminal && next.node === hoverTerminal.node && next.terminal === hoverTerminal.terminal);
+      if (same) return;
+      hoverTerminal = next;
       render();
     },
     refresh() { render(); },
