@@ -5,7 +5,7 @@ import {
   STANDARDS, TEMP_RATINGS, FUSE_FAMILIES, FUSE_RATINGS,
   AWG_SIZES, AWG_AREA, METRIC_SIZES, metricArea, formatSize,
 } from './data/standards.js';
-import { sizeRun, pickFuse } from './core/engine.js?v=20261038';
+import { sizeRun, pickFuse } from './core/engine.js?v=20261040';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];

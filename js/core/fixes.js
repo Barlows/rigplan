@@ -4,8 +4,8 @@
 // ordinary store mutations, so they are undoable and are saved with the
 // project just like a manual edit.
 
-import { CATALOG_BY_ID, makeNode } from '../data/catalog.js?v=20261039';
-import { evaluateDiagram, sizeRun, sizeOptions } from './engine.js?v=20261038';
+import { CATALOG_BY_ID, makeNode } from '../data/catalog.js?v=20261040';
+import { evaluateDiagram, sizeRun, sizeOptions } from './engine.js?v=20261040';
 import { FUSE_RATINGS, STANDARDS, metricArea } from '../data/standards.js';
 
 const SHEET_W = 1800;
@@ -302,12 +302,15 @@ const FIXES = {
       run(d) {
         const live = nodeById(d, inv.id);
         if (!live) return null;
-        const amps = (Number(live.props?.watts) || 2000)
+        const inverterA = (Number(live.props?.watts) || 2000)
           / (Number(live.props?.efficiency) || 0.9)
-          / (Number(live.props?.inputV) || 12) * 1.25;
+          / (Number(live.props?.inputV) || 12);
+        const feedA = live.type === 'hybrid-inverter'
+          ? Math.max(inverterA, Number(live.props?.chargeA) || 0)
+          : inverterA;
         const breaker = addPart(d, 'breaker-dc', live.x - 170, live.y + 10, {
           voltage: Number(live.props?.voltage) || 12,
-          ratingA: nextFuseRating(amps),
+          ratingA: nextFuseRating(feedA * 1.25),
         }, 'Inverter DC breaker');
         redirectThrough(d, live.id, 'pos', breaker, 'out', 'in', 0.4);
         return { notice: `Fitted a DC breaker on ${live.label}'s DC feed.`, selectNodeId: breaker.id };
@@ -323,12 +326,15 @@ const FIXES = {
       run(d) {
         const live = nodeById(d, inv.id);
         if (!live) return null;
-        const amps = (Number(live.props?.watts) || 2000)
+        const inverterA = (Number(live.props?.watts) || 2000)
           / (Number(live.props?.efficiency) || 0.9)
-          / (Number(live.props?.inputV) || 12) * 1.25;
+          / (Number(live.props?.inputV) || 12);
+        const feedA = live.type === 'hybrid-inverter'
+          ? Math.max(inverterA, Number(live.props?.chargeA) || 0)
+          : inverterA;
         const node = addPart(d, 'main-switch', live.x - 170, live.y + 10, {
           voltage: Number(live.props?.voltage) || 12,
-          ratedA: Math.max(100, roundUp(amps, 25)),
+          ratedA: Math.max(100, roundUp(feedA * 1.25, 25)),
         }, 'Inverter isolator');
         redirectThrough(d, live.id, 'pos', node, 'out', 'in', 0.4);
         return { notice: `Fitted a DC isolator on ${live.label}.`, selectNodeId: node.id };
@@ -339,7 +345,7 @@ const FIXES = {
   'inverter-ac-protection': (check, doc) => {
     const inv = nodeById(doc, check.nodeIds?.[0]);
     if (!inv) return null;
-    const isCharger = inv.type === 'inverter-charger';
+    const isCharger = inv.type === 'inverter-charger' || inv.type === 'hybrid-inverter';
     const lTerm = isCharger ? 'outl' : 'l';
     const nTerm = isCharger ? 'outn' : 'n';
     if (!hasWire(doc, inv.id, lTerm) || !hasWire(doc, inv.id, nTerm)) return null;
@@ -464,7 +470,7 @@ const FIXES = {
   'no-ground': (check, doc) => {
     const battery = doc.nodes.find((n) => n.type.startsWith('battery'));
     const shore = doc.nodes.find((n) => n.type === 'shore-inlet');
-    const inverter = doc.nodes.find((n) => n.type === 'inverter' || n.type === 'inverter-charger');
+    const inverter = doc.nodes.find((n) => n.type === 'inverter' || n.type === 'inverter-charger' || n.type === 'hybrid-inverter');
     if (!battery && !shore && !inverter) return null;
     return {
       label: 'Add ground',

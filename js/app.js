@@ -1,9 +1,9 @@
-import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js?v=20261039';
-import { TEMPLATES, templateCampervan } from './data/templates.js?v=20261039';
+import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js?v=20261040';
+import { TEMPLATES, templateCampervan } from './data/templates.js?v=20261040';
 import { createStore, emptyProject } from './core/store.js?v=20261022';
-import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js?v=20261038';
-import { fixForCheck } from './core/fixes.js?v=20261039';
-import { createEditor } from './ui/editor.js?v=20261039';
+import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js?v=20261040';
+import { fixForCheck } from './core/fixes.js?v=20261040';
+import { createEditor } from './ui/editor.js?v=20261040';
 import {
   STANDARDS, TEMP_RATINGS, FUSE_FAMILIES, FUSE_RATINGS,
   formatSize, TERMINAL_KINDS, WIRE_COLORS, metricArea,
@@ -105,12 +105,22 @@ const PROP_LABELS = {
     supplyA: 'Imp (max power)',
     moduleEfficiency: 'Module efficiency',
   },
+  'hybrid-inverter': {
+    watts: 'Inverter output',
+    chargeA: 'PV charge current',
+    maxPvVoc: 'Max PV Voc',
+    maxPvA: 'Max PV current',
+    inputV: 'Battery input voltage',
+    acOutA: 'AC output current',
+    efficiency: 'Inverter efficiency',
+  },
 };
 
 const CONNECTION_HINTS = {
   'inverter-charger': 'The DC input is the battery bus. The battery and the MPPT BAT OUT can both land here, or join them on a busbar.',
   mppt: 'PV IN takes the solar string. BAT OUT goes to the battery bus.',
   inverter: 'DC IN is the battery feed. AC OUT feeds the AC distribution panel.',
+  'hybrid-inverter': 'PV IN is the built-in MPPT input. BAT is the battery bus, AC IN is shore or generator, AC OUT is the load panel, and PE is shared.',
 };
 
 const propLabel = (type, key) => PROP_LABELS[type]?.[key] || humanize(key);

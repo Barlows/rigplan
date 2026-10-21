@@ -133,6 +133,26 @@ export const CATALOG = [
       { id: 'pe', x: 0.95, y: 1, kind: 'ac-pe', label: 'PE' },
     ],
   },
+  {
+    id: 'hybrid-inverter', cat: 'Charging', label: 'Hybrid inverter / charger', symbol: 'hybridinverter', w: 200, h: 120,
+    roles: ['charger'], price: 2200,
+    defaults: {
+      voltage: 12.8, inputV: 12, watts: 3000, chargeA: 50,
+      maxPvVoc: 450, maxPvA: 20, efficiency: 0.93, acOutA: 13,
+      hasIsolator: false, hasAcBreaker: false,
+    },
+    terminals: [
+      { id: 'pvpos', x: 0.12, y: 0, kind: 'pv+', label: 'PV IN +' },
+      { id: 'pvneg', x: 0.3, y: 0, kind: 'pv-', label: 'PV IN −' },
+      { id: 'acl', x: 0.55, y: 0, kind: 'ac-l', label: 'AC IN L' },
+      { id: 'acn', x: 0.72, y: 0, kind: 'ac-n', label: 'AC IN N' },
+      { id: 'pos', x: 0.12, y: 1, kind: 'dc+', label: 'BAT +' },
+      { id: 'neg', x: 0.3, y: 1, kind: 'dc-', label: 'BAT −' },
+      { id: 'outl', x: 0.55, y: 1, kind: 'ac-l', label: 'AC OUT L' },
+      { id: 'outn', x: 0.72, y: 1, kind: 'ac-n', label: 'AC OUT N' },
+      { id: 'pe', x: 1, y: 0.5, kind: 'ac-pe', label: 'PE' },
+    ],
+  },
 
   // ----------------------------------------------------------- distribution
   {

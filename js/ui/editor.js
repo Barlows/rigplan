@@ -1,8 +1,8 @@
 // Canvas editor: rendering, selection, drag, wiring, pan and zoom.
 
-import { CATALOG_BY_ID } from '../data/catalog.js?v=20261039';
+import { CATALOG_BY_ID } from '../data/catalog.js?v=20261040';
 import { WIRE_COLORS, TERMINAL_KINDS, formatSize } from '../data/standards.js';
-import { renderSymbol } from './symbols.js?v=20261039';
+import { renderSymbol } from './symbols.js?v=20261040';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const GRID = 10;

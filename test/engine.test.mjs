@@ -279,6 +279,40 @@ test('inverter/charger DC input accepts the MPPT output on the battery bus', () 
   assert.deepEqual(result.checks.filter((c) => c.severity === 'critical'), []);
 });
 
+test('a hybrid inverter accepts a PV array and a battery on one part', () => {
+  const def = CATALOG_BY_ID['hybrid-inverter'];
+  assert.deepEqual(
+    def.terminals.filter((t) => ['pvpos', 'pvneg', 'pos', 'neg'].includes(t.id)).map((t) => t.label),
+    ['PV IN +', 'PV IN −', 'BAT +', 'BAT −'],
+  );
+
+  const diagram = doc();
+  diagram.nodes = [
+    makeNode('battery-lifepo4', 100, 200, { id: 'bat', props: { hasBMS: true, supplyA: 100, capacityAh: 100 } }),
+    makeNode('class-t-fuse', 250, 200, { id: 'fuse', props: { ratingA: 400 } }),
+    makeNode('hybrid-inverter', 400, 200, { id: 'hybrid', props: { watts: 3000, efficiency: 0.93, chargeA: 50 } }),
+    makeNode('solar-panel', 100, 450, { id: 'panel', props: { watts: 200 } }),
+    makeNode('chassis-ground', 100, 350, { id: 'gnd' }),
+  ];
+  diagram.wires = [
+    { id: 'bat-fuse', from: { node: 'bat', terminal: 'pos' }, to: { node: 'fuse', terminal: 'in' }, lengthM: 0.5 },
+    { id: 'fuse-hybrid', from: { node: 'fuse', terminal: 'out' }, to: { node: 'hybrid', terminal: 'pos' }, lengthM: 1 },
+    { id: 'bat-hybridneg', from: { node: 'bat', terminal: 'neg' }, to: { node: 'hybrid', terminal: 'neg' }, lengthM: 1 },
+    { id: 'hybrid-pvpos', from: { node: 'panel', terminal: 'pvpos' }, to: { node: 'hybrid', terminal: 'pvpos' }, lengthM: 2 },
+    { id: 'hybrid-pvneg', from: { node: 'panel', terminal: 'pvneg' }, to: { node: 'hybrid', terminal: 'pvneg' }, lengthM: 2 },
+    { id: 'bat-gnd', from: { node: 'bat', terminal: 'neg' }, to: { node: 'gnd', terminal: 'gnd' }, lengthM: 0.5 },
+  ];
+  const result = evaluateDiagram(diagram);
+  const inverterA = 3000 / 0.93 / 12;
+  assert.ok(Math.abs(result.wires.get('fuse-hybrid').currentA - inverterA) < 0.01, 'battery feed carries the inverter draw');
+  assert.equal(result.wires.get('hybrid-pvpos').currentA, 11.8, 'PV input carries the array current');
+  assert.equal(result.wires.get('hybrid-pvpos').voltage, 18, 'PV input uses the array Vmp');
+  assert.equal(result.checks.some((c) => c.id === 'mppt-unfused'), false, 'the MPPT is internal');
+  assert.ok(result.checks.some((c) => c.id === 'pv-no-isolator' && c.nodeIds.includes('hybrid')));
+  assert.equal(result.checks.some((c) => c.id === 'short'), false);
+  assert.deepEqual(result.checks.filter((c) => c.severity === 'critical'), []);
+});
+
 test('an unconnected ground point is a note, not a failure', () => {
   const result = evaluateDiagram(miniSystem());
   const ground = result.checks.find((c) => c.id === 'ground-unused');

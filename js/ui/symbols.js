@@ -103,6 +103,30 @@ const SYMBOLS = {
     text(w * 0.8, h - 24, 'AC OUT', 7, MUTED, 'middle', 700) +
     text(w / 2, h - 10, `${node.props?.watts ?? 3000} VA`, 9, INK, 'middle', 600),
 
+  hybridinverter: (w, h, node) => {
+    const sunX = w * 0.36;
+    const sunY = h / 2 - 8;
+    const rays = [0, 45, 90, 135, 180, 225, 270, 315].map((angle) => {
+      const rad = (angle * Math.PI) / 180;
+      return line(
+        sunX + Math.cos(rad) * 10, sunY + Math.sin(rad) * 10,
+        sunX + Math.cos(rad) * 14, sunY + Math.sin(rad) * 14,
+        '#e0a800', 1.2,
+      );
+    }).join('');
+    return rect(12, 14, w - 24, h - 34, 6) +
+      `<circle cx="${sunX}" cy="${sunY}" r="6.5" fill="#f6c453"/>` + rays +
+      text(sunX, sunY + 20, 'MPPT', 8, MUTED, 'middle', 700) +
+      `<path d="M ${w * 0.58} ${sunY} q 5 -9 10 0 t 10 0 t 10 0" fill="none" stroke="${ACCENT}" stroke-width="2"/>` +
+      text(w * 0.64, sunY + 20, 'INV', 8, MUTED, 'middle', 700) +
+      text(w * 0.21, 24, 'PV IN', 7, MUTED, 'middle', 700) +
+      text(w * 0.635, 24, 'AC IN', 7, MUTED, 'middle', 700) +
+      text(w * 0.21, h - 24, 'BAT', 7, MUTED, 'middle', 700) +
+      text(w * 0.635, h - 24, 'AC OUT', 7, MUTED, 'middle', 700) +
+      text(w - 14, sunY - 6, 'PE', 7, MUTED, 'end', 700) +
+      text(w / 2, h - 10, `${node.props?.watts ?? 3000} VA`, 9, INK, 'middle', 600);
+  },
+
   fusebox: (w, h, node) => {
     const rows = 3;
     let fuses = '';

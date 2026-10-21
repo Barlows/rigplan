@@ -472,37 +472,51 @@ export function computeCurrents(diagram) {
     const roles = CATALOG_BY_ID[node.type]?.roles || [];
     if (!roles.includes('charger')) continue;
     const props = node.props || {};
-    const isInverter = node.type === 'inverter' || node.type === 'inverter-charger';
+    const isInverter = ['inverter', 'inverter-charger', 'hybrid-inverter'].includes(node.type);
     const watts = Number(props.watts) || 0;
     const eff = Number(props.efficiency) || 0.9;
     const inputV = Number(props.inputV) || 12;
 
     if (isInverter) {
       const amps = watts / eff / inputV;
+      // A hybrid inverter can also charge from its PV input. Size the battery
+      // conductor for the larger of the inverter draw and the charge current
+      // rather than adding them, because power flows one way at a time.
+      const batteryAmps = node.type === 'hybrid-inverter'
+        ? Math.max(amps, Number(props.chargeA) || 0)
+        : amps;
       const path = traceFamily(graph, node.id, 'dc+', (n) => n && isBattery(n) && n.id !== node.id);
-      if (path) for (const wire of path.wires) add(wire, amps, `${node.label} input ${round(amps, 1)} A`);
+      if (path) for (const wire of path.wires) add(wire, batteryAmps, `${node.label} battery ${round(batteryAmps, 1)} A`);
       const ret = traceFamily(graph, node.id, 'dc-', (n) => n && isBattery(n) && n.id !== node.id);
-      if (ret) for (const wire of ret.wires) add(wire, amps, `${node.label} return ${round(amps, 1)} A`);
-      continue;
+      if (ret) for (const wire of ret.wires) add(wire, batteryAmps, `${node.label} return ${round(batteryAmps, 1)} A`);
+      if (node.type !== 'hybrid-inverter') continue;
+    } else {
+      const outputA = Number(props.outputA ?? props.chargeA ?? 0);
+      if (outputA > 0) {
+        const path = traceFamily(graph, node.id, 'dc+', (n) => n && isBattery(n) && n.id !== node.id);
+        if (path) for (const wire of path.wires) add(wire, outputA, `${node.label} output ${round(outputA, 1)} A`);
+        const ret = traceFamily(graph, node.id, 'dc-', (n) => n && isBattery(n) && n.id !== node.id);
+        if (ret) for (const wire of ret.wires) add(wire, outputA, `${node.label} return ${round(outputA, 1)} A`);
+      }
+
+      if (node.type === 'dcdc') {
+        const inputA = Number(props.inputA) || (outputA * (Number(props.voltage) || 12.8)) / (Number(props.inputV) || 12);
+        const path = traceFamily(graph, node.id, 'dc+', (n) => n && n.id !== node.id && (isBattery(n) || n.type === 'alternator' || isSourceNode(n)));
+        if (path && inputA > 0) for (const wire of path.wires) add(wire, inputA, `${node.label} input ${round(inputA, 1)} A`);
+        const ret = traceFamily(graph, node.id, 'dc-', (n) => n && n.id !== node.id && (isBattery(n) || n.type === 'alternator' || isSourceNode(n)));
+        if (ret && inputA > 0) for (const wire of ret.wires) add(wire, inputA, `${node.label} return ${round(inputA, 1)} A`);
+      }
+
+      if (node.type === 'ac-charger') {
+        const acIn = outputA * ((Number(props.voltage) || 12.8) / (230 * (Number(props.powerFactor) || 0.9)));
+        for (const family of ['ac-l', 'ac-n']) {
+          const path = traceFamily(graph, node.id, family, (n) => n && n.id !== node.id && isSourceNode(n));
+          if (path && acIn > 0) for (const wire of path.wires) add(wire, acIn, `${node.label} AC input ${round(acIn, 1)} A`);
+        }
+      }
     }
 
-    const outputA = Number(props.outputA ?? props.chargeA ?? 0);
-    if (outputA > 0) {
-      const path = traceFamily(graph, node.id, 'dc+', (n) => n && isBattery(n) && n.id !== node.id);
-      if (path) for (const wire of path.wires) add(wire, outputA, `${node.label} output ${round(outputA, 1)} A`);
-      const ret = traceFamily(graph, node.id, 'dc-', (n) => n && isBattery(n) && n.id !== node.id);
-      if (ret) for (const wire of ret.wires) add(wire, outputA, `${node.label} return ${round(outputA, 1)} A`);
-    }
-
-    if (node.type === 'dcdc') {
-      const inputA = Number(props.inputA) || (outputA * (Number(props.voltage) || 12.8)) / (Number(props.inputV) || 12);
-      const path = traceFamily(graph, node.id, 'dc+', (n) => n && n.id !== node.id && (isBattery(n) || n.type === 'alternator' || isSourceNode(n)));
-      if (path && inputA > 0) for (const wire of path.wires) add(wire, inputA, `${node.label} input ${round(inputA, 1)} A`);
-      const ret = traceFamily(graph, node.id, 'dc-', (n) => n && n.id !== node.id && (isBattery(n) || n.type === 'alternator' || isSourceNode(n)));
-      if (ret && inputA > 0) for (const wire of ret.wires) add(wire, inputA, `${node.label} return ${round(inputA, 1)} A`);
-    }
-
-    if (node.type === 'mppt') {
+    if (node.type === 'mppt' || node.type === 'hybrid-inverter') {
       const summary = pvArraySummary(graph, node.id);
       if (summary) {
         const key = summary.panels.map((panel) => panel.id).sort().join('|');
@@ -510,14 +524,6 @@ export function computeCurrents(diagram) {
           pvArraysDone.add(key);
           addPvArrayCurrents(summary, node, add, voltages);
         }
-      }
-    }
-
-    if (node.type === 'ac-charger') {
-      const acIn = outputA * ((Number(props.voltage) || 12.8) / (230 * (Number(props.powerFactor) || 0.9)));
-      for (const family of ['ac-l', 'ac-n']) {
-        const path = traceFamily(graph, node.id, family, (n) => n && n.id !== node.id && isSourceNode(n));
-        if (path && acIn > 0) for (const wire of path.wires) add(wire, acIn, `${node.label} AC input ${round(acIn, 1)} A`);
       }
     }
   }
@@ -660,7 +666,7 @@ export function runChecks(diagram, sizing) {
   }
 
   // ---- inverters ----------------------------------------------------------
-  for (const inv of nodes.filter((n) => n.type === 'inverter' || n.type === 'inverter-charger')) {
+  for (const inv of nodes.filter((n) => n.type === 'inverter' || n.type === 'inverter-charger' || n.type === 'hybrid-inverter')) {
     const dcEdges = adjacent(inv.id).filter((e) => {
       const kind = terminalKind(inv, e.end === 'from' ? e.wire.from.terminal : e.wire.to.terminal);
       return kind === 'dc+';
@@ -685,21 +691,23 @@ export function runChecks(diagram, sizing) {
 
   // ---- solar --------------------------------------------------------------
   const panels = nodes.filter((n) => n.type === 'solar-panel');
-  const mppts = nodes.filter((n) => n.type === 'mppt');
-  for (const mppt of mppts) {
-    const outEdges = adjacent(mppt.id).filter((e) => {
-      const kind = terminalKind(mppt, e.end === 'from' ? e.wire.from.terminal : e.wire.to.terminal);
-      return kind === 'dc+';
-    });
-    if (!outEdges.some((e) => isProtectionNode(graph.nodeById.get(e.other)))) {
-      out.push(finding('mppt-unfused', 'warning', 'MPPT output is unprotected',
-        'Fit a fuse on the charger output, sized to the cable and the charger rating.',
-        { nodeIds: [mppt.id] }));
+  const pvChargers = nodes.filter((n) => n.type === 'mppt' || n.type === 'hybrid-inverter');
+  for (const charger of pvChargers) {
+    if (charger.type === 'mppt') {
+      const outEdges = adjacent(charger.id).filter((e) => {
+        const kind = terminalKind(charger, e.end === 'from' ? e.wire.from.terminal : e.wire.to.terminal);
+        return kind === 'dc+';
+      });
+      if (!outEdges.some((e) => isProtectionNode(graph.nodeById.get(e.other)))) {
+        out.push(finding('mppt-unfused', 'warning', 'MPPT output is unprotected',
+          'Fit a fuse on the charger output, sized to the cable and the charger rating.',
+          { nodeIds: [charger.id] }));
+      }
     }
-    if (!adjacent(mppt.id).some((e) => graph.nodeById.get(e.other)?.type === 'main-switch')) {
+    if (!traceFamily(graph, charger.id, 'pv+', (n) => n && n.type === 'main-switch')) {
       out.push(finding('pv-no-isolator', 'warning', 'No PV isolator',
-        'Add a DC isolator between the array and the MPPT so the panels can be isolated for service.',
-        { nodeIds: [mppt.id] }));
+        'Add a DC isolator between the array and the solar charger so the panels can be isolated for service.',
+        { nodeIds: [charger.id] }));
     }
   }
   if (panels.length >= 2) {
