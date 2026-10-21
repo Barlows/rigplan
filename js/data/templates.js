@@ -1,6 +1,6 @@
 // Starter diagrams.
 
-import { makeNode } from './catalog.js';
+import { makeNode } from './catalog.js?v=20261025';
 import { emptyProject } from '../core/store.js';
 import { DEFAULT_SETTINGS } from '../core/engine.js';
 

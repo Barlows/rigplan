@@ -40,7 +40,10 @@ export const CATALOG = [
   {
     id: 'solar-panel', cat: 'Sources', label: 'Solar panel', symbol: 'panel', w: 170, h: 100,
     roles: ['source'], price: 180,
-    defaults: { voltage: 18, voc: 22.5, watts: 200, supplyA: 11.1, technology: 'mono' },
+    defaults: {
+      watts: 200, voc: 22.5, isc: 11.8, voltage: 18, supplyA: 11.1,
+      moduleEfficiency: 21, technology: 'mono',
+    },
     terminals: [
       { id: 'pvpos', x: 0.35, y: 1, kind: 'pv+', label: 'PV+' },
       { id: 'pvneg', x: 0.65, y: 1, kind: 'pv-', label: 'PV−' },
