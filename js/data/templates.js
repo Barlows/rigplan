@@ -1,8 +1,8 @@
 // Starter diagrams.
 
-import { makeNode } from './catalog.js?v=20261043';
-import { emptyProject } from '../core/store.js?v=20261043';
-import { DEFAULT_SETTINGS } from '../core/engine.js?v=20261043';
+import { makeNode } from './catalog.js?v=20261044';
+import { emptyProject } from '../core/store.js?v=20261044';
+import { DEFAULT_SETTINGS } from '../core/engine.js?v=20261044';
 
 let counter = 0;
 const n = (type, x, y, props = {}, label) => {

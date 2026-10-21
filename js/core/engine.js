@@ -7,7 +7,7 @@ import {
   STANDARDS, FUSE_FAMILIES, FUSE_RATINGS, METRIC_SIZES, AWG_SIZES, AWG_AREA,
   TERMINAL_KINDS, resistancePerMetre, metricArea, formatSize,
 } from '../data/standards.js';
-import { CATALOG_BY_ID } from '../data/catalog.js?v=20261043';
+import { CATALOG_BY_ID } from '../data/catalog.js?v=20261044';
 
 export const DEFAULT_SETTINGS = {
   standard: 'abyc',
@@ -224,6 +224,11 @@ function isPvCombiner(node) {
 
 function isProtectionNode(node) {
   return (CATALOG_BY_ID[node.type]?.roles || []).includes('protection');
+}
+
+/** Devices that double as a service isolator: a manual switch or a 2-pole MCCB. */
+function isIsolatorNode(node) {
+  return node?.type === 'main-switch' || node?.type === 'mccb-2p';
 }
 
 /** BFS from a node; stop at the first node matching `stop`. Returns the wire path. */
@@ -682,7 +687,7 @@ export function runChecks(diagram, sizing) {
           { nodeIds: [battery.id] }));
       }
     }
-    if (!traceFamily(graph, battery.id, 'dc+', (n) => n && n.type === 'main-switch')) {
+    if (!traceFamily(graph, battery.id, 'dc+', (n) => isIsolatorNode(n))) {
       out.push(finding('no-isolator', 'warning', 'No battery isolator',
         'Fit a manual isolator on the battery positive so the system can be made dead for service.',
         { nodeIds: [battery.id] }));
@@ -701,7 +706,7 @@ export function runChecks(diagram, sizing) {
         'An inverter can draw hundreds of amps. Protect the DC feed with a fuse or breaker sized to the cable.',
         { nodeIds: [inv.id], wireIds: dcEdges.map((e) => e.wire.id) }));
     }
-    if (!inv.props?.hasIsolator && !traceFamily(graph, inv.id, 'dc+', (n) => n && n.type === 'main-switch')) {
+    if (!inv.props?.hasIsolator && !traceFamily(graph, inv.id, 'dc+', (n) => isIsolatorNode(n))) {
       out.push(finding('inverter-isolator', 'warning', 'Inverter has no DC isolation',
         'Add a DC isolator so the inverter can be serviced without dismantling the battery connection.',
         { nodeIds: [inv.id] }));
@@ -728,7 +733,7 @@ export function runChecks(diagram, sizing) {
           { nodeIds: [charger.id] }));
       }
     }
-    if (!traceFamily(graph, charger.id, 'pv+', (n) => n && (n.type === 'main-switch' || isPvCombiner(n)))) {
+    if (!traceFamily(graph, charger.id, 'pv+', (n) => n && (isIsolatorNode(n) || isPvCombiner(n)))) {
       out.push(finding('pv-no-isolator', 'warning', 'No PV isolator',
         'Add a DC isolator between the array and the solar charger so the panels can be isolated for service.',
         { nodeIds: [charger.id] }));

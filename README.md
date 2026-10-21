@@ -21,14 +21,17 @@ Any static file server works; there is no compile step.
 
 ### Drawing
 
-- 43-component library: batteries, solar panels (including 465 W and 450 W
+- 44-component library: batteries, solar panels (including 465 W and 450 W
   presets), alternators, MPPTs, DC-DC chargers, inverter/chargers, hybrid
   inverter/chargers with a PV MPPT input, PV combiner boxes with string fuses,
-  an SPD and an outgoing DC MCB, fuse boxes, busbars, switches, shunts,
-  AC panels, RCDs, sockets, appliances and grounding.
+  an SPD and a 2-pole outgoing DC MCB, 2-pole MCCBs, fuse boxes, busbars,
+  switches, shunts, AC panels, RCDs, sockets, appliances and grounding.
 - Drag-and-drop placement, multi-select, duplicate, delete, undo/redo.
 - Terminal-to-terminal cable drawing with polarity awareness. A cable between
   opposite polarities is refused as a short; duplicate runs are flagged.
+- Cables are autorouted in orthogonal lanes: each run leaves its terminal
+  square to the component edge, avoids running behind or across components, and
+  takes its own lane so parallel runs do not sit on top of each other.
 - Pan, wheel zoom, fit-to-drawing, 10 px grid (Alt to bypass).
 - A4/A3-style title block with client, project reference, drawing number,
   revision and date.
@@ -49,7 +52,7 @@ Any static file server works; there is no compile step.
 
 ### Safety checks
 
-34 rule types run on every change, grouped by severity:
+37 rule types run on every change, grouped by severity:
 
 - **Critical** — battery without a primary fuse, unprotected inverter feed,
   undersized cable, fuse above cable ampacity, shore power without an RCD, no
@@ -117,12 +120,14 @@ js/core/engine.js        sizing, current tracing, checks, BOM
 js/core/fixes.js         deterministic one-click repairs for check findings
 js/core/store.js         document store, undo/redo, persistence, versions
 js/ui/editor.js          SVG canvas, drag, wiring, pan/zoom, export
-js/ui/symbols.js         original SVG artwork for the 43 components
+js/ui/router.js          orthogonal cable autorouter (obstacles + lanes)
+js/ui/symbols.js         original SVG artwork for the 44 components
 js/data/catalog.js       component definitions, terminals, defaults, prices
 js/data/standards.js     ampacity tables, derating, fuses, wire sizes
 js/data/templates.js     campervan, simple and solar starter diagrams
 test/engine.test.mjs      engine regression tests
 test/fixes.test.mjs       one-click repair regression tests
+test/router.test.mjs      cable autorouter regression tests
 test/serve.mjs           no-cache static dev server
 docs/feature-parity.md   mapping from the reference product to this build
 ```

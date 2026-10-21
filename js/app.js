@@ -1,9 +1,9 @@
-import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js?v=20261043';
-import { TEMPLATES, templateCampervan } from './data/templates.js?v=20261043';
-import { createStore, emptyProject } from './core/store.js?v=20261043';
-import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js?v=20261043';
-import { fixForCheck } from './core/fixes.js?v=20261043';
-import { createEditor } from './ui/editor.js?v=20261043';
+import { CATALOG, CATEGORIES, CATALOG_BY_ID } from './data/catalog.js?v=20261044';
+import { TEMPLATES, templateCampervan } from './data/templates.js?v=20261044';
+import { createStore, emptyProject } from './core/store.js?v=20261044';
+import { evaluateDiagram, DEFAULT_SETTINGS, sizeRun, sizeOptions } from './core/engine.js?v=20261044';
+import { fixForCheck } from './core/fixes.js?v=20261044';
+import { createEditor } from './ui/editor.js?v=20261044';
 import {
   STANDARDS, TEMP_RATINGS, FUSE_FAMILIES, FUSE_RATINGS,
   formatSize, TERMINAL_KINDS, WIRE_COLORS, metricArea,
@@ -125,8 +125,15 @@ const PROP_LABELS = {
     maxPvVoc: 'Max PV Voc',
     stringFuseA: 'String fuse per input',
     outBreakerA: 'Outgoing DC MCB',
+    poles: 'MCB poles',
     hasSpd: 'Surge protection (SPD)',
     spdType: 'SPD type',
+  },
+  'mccb-2p': {
+    ratingA: 'Rated current',
+    poles: 'Poles',
+    curve: 'Trip curve',
+    family: 'Device family',
   },
 };
 
@@ -136,6 +143,7 @@ const CONNECTION_HINTS = {
   inverter: 'DC IN is the battery feed. AC OUT feeds the AC distribution panel.',
   'hybrid-inverter': 'PV IN is the built-in MPPT input. BAT is the battery bus, AC IN is shore or generator, AC OUT is the load panel, and PE is shared.',
   'pv-combiner': 'Each string lands on its own fused input with a surge arrester. OUT + / OUT − is the combined feed to the inverter PV input, and SPD GND bonds to the system earth.',
+  'mccb-2p': 'IN + / IN − come from the battery, OUT + / OUT − feed the inverter. Both poles break together, so it doubles as the inverter DC isolator.',
 };
 
 const propLabel = (type, key) => {

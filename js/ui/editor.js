@@ -1,8 +1,9 @@
 // Canvas editor: rendering, selection, drag, wiring, pan and zoom.
 
-import { CATALOG_BY_ID } from '../data/catalog.js?v=20261043';
+import { CATALOG_BY_ID } from '../data/catalog.js?v=20261044';
 import { WIRE_COLORS, TERMINAL_KINDS, formatSize } from '../data/standards.js';
-import { renderSymbol } from './symbols.js?v=20261043';
+import { renderSymbol } from './symbols.js?v=20261044';
+import { routeWires, terminalNormal } from './router.js?v=20261044';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const GRID = 10;
@@ -82,12 +83,54 @@ export function createEditor({ svg, store, onSelection, onNotice }) {
     const moving = drag?.positions.get(node.id);
     const x = moving ? moving.x : node.x;
     const y = moving ? moving.y : node.y;
-    if (!term) return { x: x + node.w / 2, y: y + node.h / 2, vertical: true };
+    if (!term) return { x: x + node.w / 2, y: y + node.h / 2, vertical: true, nx: 0, ny: 1 };
+    const n = terminalNormal(term);
     return {
       x: x + node.w * term.x,
       y: y + node.h * term.y,
       vertical: term.x === 0.5,
+      nx: n.x,
+      ny: n.y,
     };
+  }
+
+  // Cables are autorouted around components and off each other. The routes are
+  // cached against a cheap geometry signature so panning, hovering and
+  // selecting stay cheap; while a component is being dragged we fall back to
+  // the quick straight route so the cable keeps up.
+  let routeCache = null;
+  let routeSignature = '';
+
+  function geometrySignature(d) {
+    const nodes = (d.nodes || []).map((n) => `${n.id}:${Math.round(n.x)},${Math.round(n.y)}`).join(';');
+    const wires = (d.wires || []).map((w) => `${w.id}:${w.from.node}.${w.from.terminal}-${w.to.node}.${w.to.terminal}`).join(';');
+    return `${nodes}|${wires}`;
+  }
+
+  function ensureRoutes() {
+    const d = doc();
+    if (drag) { routeCache = null; return null; }
+    const sig = geometrySignature(d);
+    if (sig === routeSignature && routeCache) return routeCache;
+    const obstacles = (d.nodes || []).map((n) => ({ x: n.x, y: n.y, w: n.w, h: n.h }));
+    // Keep cables off the title block as well.
+    obstacles.push({ x: 1800 - 372, y: 1100 - 130, w: 358, h: 126 });
+    const bonds = [];
+    for (const wire of d.wires || []) {
+      const from = d.nodes.find((n) => n.id === wire.from.node);
+      const to = d.nodes.find((n) => n.id === wire.to.node);
+      if (!from || !to) continue;
+      const a = terminalPoint(from, wire.from.terminal);
+      const b = terminalPoint(to, wire.to.terminal);
+      bonds.push({
+        id: wire.id,
+        a: { x: a.x, y: a.y, nx: a.nx, ny: a.ny },
+        b: { x: b.x, y: b.y, nx: b.nx, ny: b.ny },
+      });
+    }
+    routeCache = routeWires({ bonds, obstacles, sheet: { w: 1800, h: 1100 } });
+    routeSignature = sig;
+    return routeCache;
   }
 
   function wireGeometry(wire) {
@@ -97,8 +140,26 @@ export function createEditor({ svg, store, onSelection, onNotice }) {
     if (!from || !to) return null;
     const a = terminalPoint(from, wire.from.terminal);
     const b = terminalPoint(to, wire.to.terminal);
-    const points = routePoints(a, b, a.vertical, b.vertical);
+    const routed = ensureRoutes()?.get(wire.id);
+    const points = routed && routed.length >= 2 ? routed : routePoints(a, b, a.vertical, b.vertical);
     return { d: roundedPath(points), points, a, b };
+  }
+
+  /** Midpoint of the longest run, for the size label. */
+  function labelAnchor(points) {
+    let best = 1;
+    let bestLen = -1;
+    for (let i = 1; i < points.length; i++) {
+      const len = Math.abs(points[i].x - points[i - 1].x) + Math.abs(points[i].y - points[i - 1].y);
+      if (len > bestLen) { bestLen = len; best = i; }
+    }
+    const p0 = points[best - 1];
+    const p1 = points[best];
+    return {
+      x: (p0.x + p1.x) / 2,
+      y: (p0.y + p1.y) / 2,
+      horizontal: Math.abs(p1.x - p0.x) >= Math.abs(p1.y - p0.y),
+    };
   }
 
   function worldPoint(evt) {
@@ -221,12 +282,7 @@ export function createEditor({ svg, store, onSelection, onNotice }) {
     const sized = sizedMap.get(wire.id);
     const color = WIRE_COLORS[sized?.kind] || '#1d2b3a';
     const isSelected = selection?.type === 'wire' && selection.id === wire.id;
-    const mid = geo.points[Math.floor(geo.points.length / 2)];
-    const prev = geo.points[Math.floor(geo.points.length / 2) - 1] || geo.points[0];
-    const horizontal = Math.abs(mid.x - prev.x) >= Math.abs(mid.y - prev.y);
-    const sign = sized?.kind?.endsWith('+') || sized?.kind === 'ac-l' ? 1 : -1;
-    const labelX = (mid.x + prev.x) / 2 + (horizontal ? 0 : sign * 11);
-    const labelY = (mid.y + prev.y) / 2 - 8 + (horizontal ? -sign * 9 : 0);
+    const { x: labelX, y: labelY } = labelAnchor(geo.points);
     const sizeText = sized ? formatSize(sized.size, sized.unit) : '—';
     const fuseText = sized?.fuse ? ` · ${sized.fuse.ratingA} A` : '';
     const labelText = `${sizeText}${fuseText}`;
@@ -234,10 +290,10 @@ export function createEditor({ svg, store, onSelection, onNotice }) {
     return `
       <g class="wire ${isSelected ? 'wire-selected' : ''}" data-wire="${wire.id}">
         <path d="${geo.d}" fill="none" stroke="transparent" stroke-width="18" class="wire-hit"/>
-        <path d="${geo.d}" fill="none" stroke="${isSelected ? '#0e7c86' : color}" stroke-width="${isSelected ? 3.4 : 2.2}" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="${geo.d}" fill="none" stroke="${isSelected ? '#0e7c86' : color}" stroke-width="${isSelected ? 4 : 2.8}" stroke-linecap="round" stroke-linejoin="round"/>
         ${sized?.fuseOverCable || !sized?.ampacityPass ? `<path d="${geo.d}" fill="none" stroke="#c2413b" stroke-width="1" stroke-dasharray="2 4"/>` : ''}
-        <rect x="${labelX - width / 2}" y="${labelY - 11}" width="${width}" height="17" rx="3" fill="#ffffff" stroke="${isSelected ? '#0e7c86' : '#dbe3ea'}"/>
-        <text x="${labelX}" y="${labelY + 1}" class="wire-label" fill="${isSelected ? '#0e7c86' : '#526273'}">${escapeXml(labelText)}</text>
+        <rect x="${labelX - width / 2}" y="${labelY - 8.5}" width="${width}" height="17" rx="3" fill="#ffffff" stroke="${isSelected ? '#0e7c86' : '#dbe3ea'}"/>
+        <text x="${labelX}" y="${labelY + 3.5}" class="wire-label" fill="${isSelected ? '#0e7c86' : '#526273'}">${escapeXml(labelText)}</text>
       </g>`;
   }
 

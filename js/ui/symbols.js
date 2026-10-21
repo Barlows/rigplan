@@ -177,13 +177,18 @@ const SYMBOLS = {
       + line(negX, negA, negX, negB, ACCENT, 2)
       + line(busX, plusYs[0], busX, spdTop, ACCENT, 2)
       + sun
-      + line(busX, oy, 152, oy, INK, 1.4)
-      + circle(154, oy, 3, PAPER, INK, 1.4)
-      + line(158, oy - 6, 188, oy + 6, INK, 2.2)
-      + circle(190, oy, 3, PAPER, INK, 1.4)
-      + line(193, oy, w, oy, INK, 1.4)
-      + text(172, oy - 12, 'MCB', 7, MUTED, 'middle', 700)
-      + line(negX, ny, w, ny, INK, 1.4)
+      + line(busX, oy, 150, oy, INK, 1.4)
+      + circle(152, oy, 3, PAPER, INK, 1.4)
+      + line(156, oy - 6, 186, oy + 6, INK, 2.2)
+      + circle(188, oy, 3, PAPER, INK, 1.4)
+      + line(191, oy, w, oy, INK, 1.4)
+      + line(negX, ny, 150, ny, INK, 1.4)
+      + circle(152, ny, 3, PAPER, INK, 1.4)
+      + line(156, ny - 6, 186, ny + 6, INK, 2.2)
+      + circle(188, ny, 3, PAPER, INK, 1.4)
+      + line(191, ny, w, ny, INK, 1.4)
+      + line(170, oy + 7, 170, ny - 7, MUTED, 1.1, '3 3')
+      + text(172, oy - 10, '2P MCB', 7, MUTED, 'middle', 700)
       + rect(busX - 18, spdTop, 36, 20, 3, '#f2f5f8', '#c3ced9', 1.1)
       + text(busX, spdTop + 13, 'SPD', 8, WARM, 'middle', 700)
       + line(busX, spdTop + 20, busX, h - 10, INK, 1.4)
@@ -206,6 +211,20 @@ const SYMBOLS = {
   breaker: (w, h, node) => rect(14, h / 2 - 14, w - 28, 28, 3) +
     line(w / 2 - 12, h / 2 + 6, w / 2 + 8, h / 2 - 6, INK, 2.2) +
     text(w / 2, h - 4, `${node.props?.ratingA ?? 50} A`, 9, INK, 'middle', 700),
+
+  mccb: (w, h, node) => {
+    const yT = Math.round(0.3 * h);
+    const yB = Math.round(0.7 * h);
+    const pole = (y) => line(0, y, 34, y, INK, 1.4)
+      + circle(36, y, 3, PAPER, INK, 1.4)
+      + line(40, y - 1, w - 40, y - 11, INK, 2.4)
+      + circle(w - 36, y, 3, PAPER, INK, 1.4)
+      + line(w - 34, y, w, y, INK, 1.4);
+    return rect(12, 14, w - 24, h - 30, 4)
+      + pole(yT) + pole(yB)
+      + line(w / 2, yT - 10, w / 2, yB - 5, MUTED, 1.1, '4 3')
+      + text(w / 2, h - 8, `${node.props?.ratingA ?? 125} A`, 9, INK, 'middle', 700);
+  },
 
   rcd: (w, h, node) => rect(12, 14, w - 24, h - 34, 4) +
     rect(w / 2 - 12, h / 2 - 8, 24, 12, 2, ACCENT, ACCENT, 1) +

@@ -433,6 +433,38 @@ test('the PV combiner flags a floating SPD and an undersized output breaker', ()
   assert.equal(ids.includes('pv-combiner-voltage'), false, 'the voltage rating is ample');
 });
 
+test('a 2-pole MCCB between the battery and inverter protects and isolates the feed', () => {
+  const def = CATALOG_BY_ID['mccb-2p'];
+  assert.ok(def, 'the 2-pole MCCB is in the catalogue');
+  assert.deepEqual(def.roles, ['protection']);
+  assert.equal(def.defaults.poles, 2);
+  assert.deepEqual(def.terminals.map((t) => t.id), ['inpos', 'inneg', 'outpos', 'outneg']);
+  assert.deepEqual(def.terminals.map((t) => t.kind), ['dc+', 'dc-', 'dc+', 'dc-']);
+  assert.equal(CATALOG_BY_ID['pv-combiner'].defaults.poles, 2, 'the combiner output MCB is 2-pole');
+
+  const diagram = doc();
+  diagram.nodes = [
+    makeNode('battery-lifepo4', 0, 0, { id: 'bat', props: { hasBMS: true, supplyA: 100, capacityAh: 100 } }),
+    makeNode('mccb-2p', 320, 0, { id: 'mccb' }),
+    makeNode('inverter', 640, 0, { id: 'inv', props: { watts: 2000, efficiency: 0.9, inputV: 12 } }),
+    makeNode('chassis-ground', 0, 400, { id: 'gnd' }),
+  ];
+  diagram.wires = [
+    { id: 'w1', from: { node: 'bat', terminal: 'pos' }, to: { node: 'mccb', terminal: 'inpos' }, lengthM: 1 },
+    { id: 'w2', from: { node: 'bat', terminal: 'neg' }, to: { node: 'mccb', terminal: 'inneg' }, lengthM: 1 },
+    { id: 'w3', from: { node: 'mccb', terminal: 'outpos' }, to: { node: 'inv', terminal: 'pos' }, lengthM: 1 },
+    { id: 'w4', from: { node: 'mccb', terminal: 'outneg' }, to: { node: 'inv', terminal: 'neg' }, lengthM: 1 },
+    { id: 'w5', from: { node: 'bat', terminal: 'neg' }, to: { node: 'gnd', terminal: 'gnd' }, lengthM: 0.5 },
+  ];
+  const result = evaluateDiagram(diagram);
+  const ids = result.checks.map((c) => c.id);
+  assert.equal(ids.includes('battery-unfused'), false, 'the MCCB protects the battery feed');
+  assert.equal(ids.includes('inverter-unfused'), false, 'the MCCB protects the inverter feed');
+  assert.equal(ids.includes('no-isolator'), false, 'the MCCB isolates the battery');
+  assert.equal(ids.includes('inverter-isolator'), false, 'the MCCB isolates the inverter');
+  assert.equal(ids.includes('short'), false);
+});
+
 test('an unconnected ground point is a note, not a failure', () => {
   const result = evaluateDiagram(miniSystem());
   const ground = result.checks.find((c) => c.id === 'ground-unused');

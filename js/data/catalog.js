@@ -276,10 +276,21 @@ export const CATALOG = [
     ],
   },
   {
+    id: 'mccb-2p', cat: 'Protection', label: '2-pole MCCB', symbol: 'mccb', w: 150, h: 90,
+    roles: ['protection'], price: 95,
+    defaults: { voltage: 12, ratingA: 125, poles: 2, curve: 'C', family: 'breaker' },
+    terminals: [
+      { id: 'inpos', x: 0, y: 0.3, kind: 'dc+', label: 'IN +' },
+      { id: 'inneg', x: 0, y: 0.7, kind: 'dc-', label: 'IN −' },
+      { id: 'outpos', x: 1, y: 0.3, kind: 'dc+', label: 'OUT +' },
+      { id: 'outneg', x: 1, y: 0.7, kind: 'dc-', label: 'OUT −' },
+    ],
+  },
+  {
     id: 'pv-combiner', cat: 'Protection', label: 'PV combiner box (2 in, 1 out)', symbol: 'pvcombiner', w: 230, h: 160,
     roles: ['protection'], price: 180,
     defaults: {
-      maxPvVoc: 500, stringFuseA: 20, outBreakerA: 32,
+      maxPvVoc: 500, stringFuseA: 20, outBreakerA: 32, poles: 2,
       hasSpd: true, spdType: 'Type 2',
     },
     terminals: [

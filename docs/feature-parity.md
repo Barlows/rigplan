@@ -26,16 +26,17 @@ component database.
 | Snap-to-grid and free positioning | **Built** | 10 px grid; hold Alt to bypass snapping. |
 | Terminal-to-terminal cable drawing | **Built** | Polarity-aware; refuses a cable from a terminal to itself and flags shorts. |
 | Move components; cables follow | **Built** | Cables are recalculated from terminal positions each render. |
+| Orthogonal cable autorouting | **Built** | `js/ui/router.js` lays each run in a lane that clears components and other cables, leaving and entering terminals square to the part. |
 | Pan, zoom, fit to drawing | **Built** | Wheel zoom, space-drag/middle-drag pan, `F` to fit. |
 | Multi-select, duplicate, delete | **Built** | Shift-click, ⌘/Ctrl-D, Delete/Backspace. |
 | Undo / redo | **Built** | 60-step history in `js/core/store.js`. |
 | Inspector for components and cables | **Built** | Label, brand, model, price, electrical properties, notes. |
 | Per-cable length, current override, cable size override, fuse override | **Built** | Manual choices are still validated. |
 | Live cable and fuse sizing as you draw | **Built** | `evaluateDiagram()` runs on every store change. |
-| Automatic safety checks with explanations | **Built** | 34 distinct findings; each has a rule, severity and jump-to item. |
+| Automatic safety checks with explanations | **Built** | 37 distinct findings; each has a rule, severity and jump-to item. |
 | One-click automatic repairs | **Built** | Deterministic fixes insert parts and rewire the circuit; unsupported design decisions stay manual. |
 | Templates / worked examples | **Partial** | 3 original templates vs 41 on Wireframe; same idea, different catalogue. |
-| Branded component catalogue | **Partial** | 43 generic, fully modelled components, including 465 W and 450 W solar panel presets, a hybrid inverter/charger with a PV MPPT input, and a 2-in/1-out PV combiner box with string fuses, an SPD and an outgoing DC MCB. No Victron/Renogy/Blue Sea part numbers or logos. |
+| Branded component catalogue | **Partial** | 44 generic, fully modelled components, including 465 W and 450 W solar panel presets, a hybrid inverter/charger with a PV MPPT input, a 2-in/1-out PV combiner box with string fuses, an SPD and a 2-pole outgoing DC MCB, and a 2-pole MCCB for the battery–inverter feed. No Victron/Renogy/Blue Sea part numbers or logos. |
 | Search the library | **Built** | Filters by name, category and tag. |
 | Quick-add shortcuts | **Built** | Battery, fuse box, MPPT, load. |
 | Title block (client, drawing no., revision, date) | **Built** | Editable in the Project tab and printed on the sheet. |
@@ -154,9 +155,10 @@ content gap rather than a software gap.
 
 ## Summary
 
-**Replicated:** the editor workflow, automatic cable and fuse sizing, 34 safety
-checks, BOM/cable/fuse schedules, SVG/PNG/PDF/JSON export, standards switching,
-named versions, templates, and all ten calculators.
+**Replicated:** the editor workflow, orthogonal cable autorouting, automatic
+cable and fuse sizing, 37 safety checks, BOM/cable/fuse schedules,
+SVG/PNG/PDF/JSON export, standards switching, named versions, templates, and all
+ten calculators.
 
 **Different by design:** local-first storage, no accounts, no billing, no teams,
 no branded part database, no DXF, no hosted sharing.
