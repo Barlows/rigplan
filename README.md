@@ -1,5 +1,7 @@
 # RigPlan
 
+**Live app:** <https://barlows.github.io/rigplan/>
+
 A wiring-diagram planner for campervans, RVs, boats and off-grid electrical
 systems. Draw the system, and every cable, fuse and breaker is sized as you go.
 
