@@ -79,11 +79,13 @@ export function createEditor({ svg, store, onSelection, onNotice }) {
   function terminalPoint(node, terminalId) {
     const def = CATALOG_BY_ID[node.type];
     const term = def?.terminals.find((t) => t.id === terminalId);
-    const pos = drag?.positions.get(node.id) || node;
-    if (!term) return { x: pos.x + pos.w / 2, y: pos.y + pos.h / 2, vertical: true };
+    const moving = drag?.positions.get(node.id);
+    const x = moving ? moving.x : node.x;
+    const y = moving ? moving.y : node.y;
+    if (!term) return { x: x + node.w / 2, y: y + node.h / 2, vertical: true };
     return {
-      x: pos.x + pos.w * term.x,
-      y: pos.y + pos.h * term.y,
+      x: x + node.w * term.x,
+      y: y + node.h * term.y,
       vertical: term.x === 0.5,
     };
   }
