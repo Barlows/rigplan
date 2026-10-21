@@ -322,13 +322,15 @@ export function createEditor({ svg, store, onSelection, onNotice }) {
       if (!node) return;
       const point = worldPoint(evt);
       const ids = selectedNodeIds();
+      const origins = new Map(ids.map((nid) => {
+        const item = doc().nodes.find((n) => n.id === nid);
+        return [nid, { x: item.x, y: item.y }];
+      }));
       drag = {
         start: point,
         moved: false,
-        positions: new Map(ids.map((nid) => {
-          const item = doc().nodes.find((n) => n.id === nid);
-          return [nid, { x: item.x, y: item.y }];
-        })),
+        origins,
+        positions: new Map([...origins].map(([nid, p]) => [nid, { ...p }])),
       };
       svg.setPointerCapture(evt.pointerId);
       return;
@@ -357,7 +359,7 @@ export function createEditor({ svg, store, onSelection, onNotice }) {
       const dx = point.x - drag.start.x;
       const dy = point.y - drag.start.y;
       if (Math.abs(dx) > 2 || Math.abs(dy) > 2) drag.moved = true;
-      for (const [id, origin] of drag.positions) {
+      for (const [id, origin] of drag.origins) {
         const node = doc().nodes.find((n) => n.id === id);
         if (!node) continue;
         let x = origin.x + dx;
