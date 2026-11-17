@@ -95,6 +95,16 @@ export const CATALOG = [
     ],
   },
   {
+    id: 'grid-supply', cat: 'Sources', label: 'Grid supply (service head)', symbol: 'grid', w: 160, h: 90,
+    roles: ['source'], price: 0,
+    defaults: { voltage: 230, supplyA: 100, mainFuseA: 100, earthing: 'TN-C-S' },
+    terminals: [
+      { id: 'l', x: 0.3, y: 1, kind: 'ac-l', label: 'L' },
+      { id: 'n', x: 0.55, y: 1, kind: 'ac-n', label: 'N' },
+      { id: 'pe', x: 0.8, y: 1, kind: 'ac-pe', label: 'PE' },
+    ],
+  },
+  {
     id: 'generator', cat: 'Sources', label: 'Generator', symbol: 'generator', w: 160, h: 90,
     roles: ['source'], price: 900,
     defaults: { voltage: 230, supplyA: 13, watts: 3000 },
@@ -227,6 +237,28 @@ export const CATALOG = [
     ],
   },
   {
+    id: 'consumer-unit', cat: 'Distribution', label: 'Consumer unit (6 way)', symbol: 'consumerunit', w: 280, h: 150,
+    roles: ['distribution'], price: 120,
+    defaults: { voltage: 230, ratedA: 63, mainSwitchA: 63, hasSpd: false },
+    terminals: [
+      { id: 'inl', x: 0.09, y: 0, kind: 'ac-l', label: 'IN L' },
+      { id: 'inn', x: 0.22, y: 0, kind: 'ac-n', label: 'IN N' },
+      { id: 'inpe', x: 0.35, y: 0, kind: 'ac-pe', label: 'PE' },
+      { id: 'o1l', x: 0.08, y: 1, kind: 'ac-l', label: 'L1' },
+      { id: 'o1n', x: 0.155, y: 1, kind: 'ac-n', label: 'N1' },
+      { id: 'o2l', x: 0.235, y: 1, kind: 'ac-l', label: 'L2' },
+      { id: 'o2n', x: 0.31, y: 1, kind: 'ac-n', label: 'N2' },
+      { id: 'o3l', x: 0.39, y: 1, kind: 'ac-l', label: 'L3' },
+      { id: 'o3n', x: 0.465, y: 1, kind: 'ac-n', label: 'N3' },
+      { id: 'o4l', x: 0.545, y: 1, kind: 'ac-l', label: 'L4' },
+      { id: 'o4n', x: 0.62, y: 1, kind: 'ac-n', label: 'N4' },
+      { id: 'o5l', x: 0.70, y: 1, kind: 'ac-l', label: 'L5' },
+      { id: 'o5n', x: 0.775, y: 1, kind: 'ac-n', label: 'N5' },
+      { id: 'o6l', x: 0.855, y: 1, kind: 'ac-l', label: 'L6' },
+      { id: 'o6n', x: 0.93, y: 1, kind: 'ac-n', label: 'N6' },
+    ],
+  },
+  {
     id: 'main-switch', cat: 'Distribution', label: 'Battery isolator switch', symbol: 'switch', w: 130, h: 80,
     roles: ['protection'], price: 55,
     defaults: { voltage: 12, ratedA: 275, dcV: 60, remote: false },
@@ -312,6 +344,16 @@ export const CATALOG = [
       { id: 'gnd', x: 0.6, y: 1, kind: 'gnd', label: 'SPD GND' },
     ],
   },
+  {
+    id: 'ac-spd', cat: 'Protection', label: 'AC surge protector (Type 2)', symbol: 'spd', w: 140, h: 90,
+    roles: ['protection'], price: 55,
+    defaults: { voltage: 230, spdType: 'Type 2', maxDischargeA: 20000 },
+    terminals: [
+      { id: 'l', x: 0.25, y: 0, kind: 'ac-l', label: 'L' },
+      { id: 'n', x: 0.5, y: 0, kind: 'ac-n', label: 'N' },
+      { id: 'pe', x: 0.75, y: 1, kind: 'gnd', label: 'PE' },
+    ],
+  },
 
   // ------------------------------------------------------------------ loads
   {
@@ -347,25 +389,25 @@ export const CATALOG = [
   {
     id: 'induction-hob', cat: 'Loads', label: 'Induction hob', symbol: 'hob', w: 140, h: 90,
     roles: ['load'], price: 320,
-    defaults: { voltage: 230, drawA: 7.8, watts: 1800, continuous: false, ac: true },
+    defaults: { voltage: 230, drawA: 7.8, watts: 1800, continuous: false, ac: true, diversity: 80 },
     terminals: acTriple(),
   },
   {
     id: 'air-fryer', cat: 'Loads', label: 'Air fryer', symbol: 'hob', w: 140, h: 90,
     roles: ['load'], price: 90,
-    defaults: { voltage: 230, drawA: 6.5, watts: 1500, continuous: false, ac: true },
+    defaults: { voltage: 230, drawA: 6.5, watts: 1500, continuous: false, ac: true, diversity: 100 },
     terminals: acTriple(),
   },
   {
     id: 'sockets', cat: 'Loads', label: 'AC sockets', symbol: 'sockets', w: 130, h: 90,
     roles: ['load'], price: 40,
-    defaults: { voltage: 230, drawA: 10, watts: 2300, continuous: false, ac: true },
+    defaults: { voltage: 230, drawA: 10, watts: 2300, continuous: false, ac: true, diversity: 60 },
     terminals: acTriple(),
   },
   {
     id: 'water-heater', cat: 'Loads', label: 'Water heater', symbol: 'heater', w: 130, h: 90,
     roles: ['load'], price: 220,
-    defaults: { voltage: 230, drawA: 3.5, watts: 800, continuous: true, ac: true },
+    defaults: { voltage: 230, drawA: 3.5, watts: 800, continuous: true, ac: true, diversity: 100 },
     terminals: acTriple(),
   },
   {
